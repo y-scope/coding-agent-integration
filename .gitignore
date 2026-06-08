@@ -1,0 +1,16 @@
+# Generated CLP archives from local compression tests.
+clp-s-archives/
+
+# Plugin-local downloaded CLP binaries/artifacts.
+yscope/plugins/clp/.clp-core/
+
+# Installer build/runtime output.
+node_modules/
+dist/
+
+# Local credentials/config.
+.env
+.env.*
+
+# Common local/runtime noise.
+.DS_Store

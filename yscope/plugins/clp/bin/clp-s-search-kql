@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  clp-s-search-kql [options] ARCHIVES_DIR KQL_QUERY
+
+Run a restricted clp-s KQL search and return results on stdout.
+
+Allowed search controls:
+  --tge TS                 Find records with UNIX epoch timestamp >= TS ms.
+  --tle TS                 Find records with UNIX epoch timestamp <= TS ms.
+  -i, --ignore-case        Ignore case distinctions.
+  --archive-id ID          Limit search to one archive ID.
+  --project COLUMN         Project one column. May be repeated.
+  --projection COLUMNS     Project comma-separated columns, e.g. level,message.
+
+Examples:
+  clp-s-search-kql /tmp/archive 'level:error'
+  clp-s-search-kql /tmp/archive 'message.content.name:Bash'
+  clp-s-search-kql --project timestamp --project type --project sessionId /tmp/archive 'message.content.name:Bash'
+
+This search wrapper intentionally does not expose clp-s output handlers,
+reducers, results-cache writes, decompression, or arbitrary clp-s option
+passthrough.
+Semantic search is temporarily disabled. Do not use semantic(...),
+--semantic-top-k, --semantic-threshold, --embedding-batch-size, or
+--semantic-endpoint.
+EOF
+}
+
+tge=""
+tle=""
+archive_id=""
+ignore_case=0
+projections=()
+archives_dir=""
+kql_query=""
+
+resolve_clp_s() {
+  local script_dir plugin_root candidate
+
+  if [[ -n "${CLP_S_BIN:-}" ]]; then
+    if [[ -x "$CLP_S_BIN" ]]; then
+      printf '%s\n' "$CLP_S_BIN"
+      return 0
+    fi
+    echo "error: CLP_S_BIN is set but is not executable: $CLP_S_BIN" >&2
+    return 1
+  fi
+
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  plugin_root="$(cd -- "${script_dir}/.." && pwd -P)"
+
+  candidate="${script_dir}/clp-s"
+  if [[ -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  candidate="${plugin_root}/.clp-core/bin/clp-s"
+  if [[ -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  if command -v clp-s >/dev/null 2>&1; then
+    command -v clp-s
+    return 0
+  fi
+
+  echo "error: clp-s is not available. Run the plugin installer or set CLP_S_BIN." >&2
+  return 127
+}
+
+split_projection_csv() {
+  local value="$1"
+  local item
+  IFS=',' read -ra cols <<< "$value"
+  for item in "${cols[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    if [[ -n "$item" ]]; then
+      projections+=("$item")
+    fi
+  done
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --semantic-top-k|--top-k)
+      echo "error: semantic search is temporarily disabled: $1 is not supported" >&2
+      exit 2
+      ;;
+    --semantic-threshold|--threshold)
+      echo "error: semantic search is temporarily disabled: $1 is not supported" >&2
+      exit 2
+      ;;
+    --embedding-batch-size|--batch-size)
+      echo "error: semantic search is temporarily disabled: $1 is not supported" >&2
+      exit 2
+      ;;
+    --semantic-endpoint)
+      echo "error: semantic search is temporarily disabled: $1 is not supported" >&2
+      exit 2
+      ;;
+    --tge)
+      [[ $# -ge 2 ]] || { echo "error: --tge requires a value" >&2; exit 2; }
+      tge="$2"
+      shift 2
+      ;;
+    --tle)
+      [[ $# -ge 2 ]] || { echo "error: --tle requires a value" >&2; exit 2; }
+      tle="$2"
+      shift 2
+      ;;
+    --archive-id)
+      [[ $# -ge 2 ]] || { echo "error: --archive-id requires a value" >&2; exit 2; }
+      archive_id="$2"
+      shift 2
+      ;;
+    --project)
+      [[ $# -ge 2 ]] || { echo "error: --project requires a value" >&2; exit 2; }
+      projections+=("$2")
+      shift 2
+      ;;
+    --projection)
+      [[ $# -ge 2 ]] || { echo "error: --projection requires a value" >&2; exit 2; }
+      split_projection_csv "$2"
+      shift 2
+      ;;
+    -i|--ignore-case)
+      ignore_case=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      echo "error: arbitrary clp-s option passthrough is not exposed by this wrapper" >&2
+      exit 2
+      ;;
+    -*)
+      echo "error: unsupported option: $1" >&2
+      echo >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [[ -z "$archives_dir" ]]; then
+        archives_dir="$1"
+      elif [[ -z "$kql_query" ]]; then
+        kql_query="$1"
+      else
+        echo "error: unexpected positional argument: $1" >&2
+        exit 2
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$archives_dir" || -z "$kql_query" ]]; then
+  usage >&2
+  exit 2
+fi
+
+if [[ "$kql_query" =~ [Ss][Ee][Mm][Aa][Nn][Tt][Ii][Cc][[:space:]]*\( ]]; then
+  echo "error: semantic KQL is temporarily disabled" >&2
+  echo "query: $kql_query" >&2
+  exit 2
+fi
+
+clp_s_bin="$(resolve_clp_s)" || exit $?
+
+if [[ ! -e "$archives_dir" ]]; then
+  echo "error: archives path does not exist: $archives_dir" >&2
+  exit 1
+fi
+
+search_options=()
+
+if [[ -n "$tge" ]]; then
+  search_options+=(--tge "$tge")
+fi
+if [[ -n "$tle" ]]; then
+  search_options+=(--tle "$tle")
+fi
+if [[ "$ignore_case" -eq 1 ]]; then
+  search_options+=(--ignore-case)
+fi
+if [[ -n "$archive_id" ]]; then
+  search_options+=(--archive-id "$archive_id")
+fi
+
+cmd=("$clp_s_bin" s "${search_options[@]}" "$archives_dir" "$kql_query")
+
+if [[ ${#projections[@]} -gt 0 ]]; then
+  cmd+=(--projection "${projections[@]}")
+fi
+
+printf 'Command:'
+printf ' %q' "${cmd[@]}"
+echo
+unset CLP_SEMANTIC_ENDPOINT CLP_SEMANTIC_BATCH_SIZE CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT
+exec "${cmd[@]}"

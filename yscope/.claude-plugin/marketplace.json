@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "yscope",
+  "description": "YScope plugins for Claude Code.",
+  "owner": {
+    "name": "YScope"
+  },
+  "plugins": [
+    {
+      "name": "clp",
+      "description": "Compress selected Claude Code session JSONL logs with CLP, search them with KQL, and decompress archives.",
+      "author": {
+        "name": "YScope"
+      },
+      "category": "productivity",
+      "source": "./plugins/clp"
+    }
+  ]
+}
