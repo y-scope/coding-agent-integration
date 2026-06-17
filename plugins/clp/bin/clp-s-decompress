@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck disable=SC1091
+source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -28,42 +32,6 @@ print_ordered_chunk_stats=0
 dry_run=0
 archives_dir=""
 output_dir=""
-
-resolve_clp_s() {
-  local script_dir plugin_root candidate
-
-  if [[ -n "${CLP_S_BIN:-}" ]]; then
-    if [[ -x "$CLP_S_BIN" ]]; then
-      printf '%s\n' "$CLP_S_BIN"
-      return 0
-    fi
-    echo "error: CLP_S_BIN is set but is not executable: $CLP_S_BIN" >&2
-    return 1
-  fi
-
-  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-  plugin_root="$(cd -- "${script_dir}/.." && pwd -P)"
-
-  candidate="${script_dir}/clp-s"
-  if [[ -x "$candidate" ]]; then
-    printf '%s\n' "$candidate"
-    return 0
-  fi
-
-  candidate="${plugin_root}/.clp-core/bin/clp-s"
-  if [[ -x "$candidate" ]]; then
-    printf '%s\n' "$candidate"
-    return 0
-  fi
-
-  if command -v clp-s >/dev/null 2>&1; then
-    command -v clp-s
-    return 0
-  fi
-
-  echo "error: clp-s is not available. Run the plugin installer or set CLP_S_BIN." >&2
-  return 127
-}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -130,6 +98,13 @@ if [[ ! -d "$archives_dir" ]]; then
   echo "error: archives directory does not exist: $archives_dir" >&2
   exit 1
 fi
+print_archive_metadata_summary "$archives_dir"
+input_archives_dir="$archives_dir"
+archives_dir="$(resolve_clp_s_archive_dir "$archives_dir")" || {
+  echo "error: could not find a clp-s archive directory under: $input_archives_dir" >&2
+  echo "Pass either the top-level plugin archive directory or its inner clp-s archive directory." >&2
+  exit 1
+}
 
 output_parent="$(dirname -- "$output_dir")"
 if [[ ! -d "$output_parent" ]]; then
@@ -137,12 +112,10 @@ if [[ ! -d "$output_parent" ]]; then
   exit 1
 fi
 
-case "$(realpath -m "$output_dir")" in
-  /|/home|/home/*/.claude|/home/*/.claude/projects)
-    echo "error: refusing broad output directory: $output_dir" >&2
-    exit 2
-    ;;
-esac
+if is_broad_output_dir "$output_dir"; then
+  echo "error: refusing broad output directory: $output_dir" >&2
+  exit 2
+fi
 
 if [[ -n "$target_ordered_chunk_size" && "$ordered" -ne 1 ]]; then
   echo "error: --target-ordered-chunk-size requires --ordered" >&2
@@ -170,7 +143,10 @@ if [[ -n "$archive_id" ]]; then
 fi
 cmd+=("$archives_dir" "$output_dir")
 
-echo "Archives dir: $archives_dir"
+echo "Archives dir: $input_archives_dir"
+if [[ "$archives_dir" != "$input_archives_dir" ]]; then
+  echo "Resolved clp-s archive dir: $archives_dir"
+fi
 echo "Output dir: $output_dir"
 printf 'Command:'
 printf ' %q' "${cmd[@]}"

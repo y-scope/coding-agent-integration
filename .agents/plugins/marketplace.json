@@ -1,0 +1,20 @@
+{
+  "name": "yscope",
+  "interface": {
+    "displayName": "YScope"
+  },
+  "plugins": [
+    {
+      "name": "clp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/clp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

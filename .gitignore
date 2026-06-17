@@ -2,11 +2,7 @@
 clp-s-archives/
 
 # Plugin-local downloaded CLP binaries/artifacts.
-yscope/plugins/clp/.clp-core/
-
-# Installer build/runtime output.
-node_modules/
-dist/
+plugins/clp/.clp-core/
 
 # Local credentials/config.
 .env

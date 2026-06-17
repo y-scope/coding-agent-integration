@@ -1,0 +1,523 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck disable=SC1091
+source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  clp-s-compress-session (--session-file PATH | --selection-file PATH --session-index IDX) [options]
+
+Compress one selected Claude Code or Codex session JSONL file with clp-s
+regular archive directory mode:
+
+  clp-s c ...
+
+Options:
+  --agent AGENT             Session source: auto, claude, or codex.
+                            Default: auto
+  --source-root DIR         Directory that the selected session must be under.
+                            Requires --agent claude or --agent codex.
+  --claude-root DIR         Claude Code session root.
+                            Default: ~/.claude/projects
+  --codex-root DIR          Codex session root.
+                            Default: ${CODEX_HOME:-~/.codex}/sessions
+  --session-file PATH       Compress exactly one selected session JSONL file.
+  --selection-file PATH     TSV manifest from clp-s-list-sessions.
+  --session-index IDX       Row index from --selection-file to compress.
+  --output-dir DIR          clp-s archives directory to create/use.
+                            Overrides --archives-root and saved settings.
+  --archives-root DIR       Parent directory for auto-named archive outputs.
+                            Default order: this option, CLP_S_ARCHIVES_ROOT,
+                            saved config, then ${TMPDIR:-/tmp}/yscope-clp-archives
+  --save-archives-root      Save --archives-root as the future default.
+  --set-archives-root DIR   Save DIR as the future default and exit.
+  --show-archives-root      Print the current archive root setting and exit.
+  --timestamp-key KEY       Pass --timestamp-key KEY to clp-s.
+                            Default: timestamp
+  --compression-level LEVEL Pass --compression-level LEVEL to clp-s.
+  --target-encoded-size N   Pass --target-encoded-size N to clp-s.
+  --print-archive-stats     Pass --print-archive-stats to clp-s.
+  --dry-run                 Print the planned compression operation only.
+  -h, --help                Show this help.
+
+Examples:
+  clp-s-compress-session --selection-file /tmp/clp-s-session-selection.tsv --session-index 1
+  clp-s-compress-session --agent codex --session-file ~/.codex/sessions/.../rollout.jsonl
+  clp-s-compress-session --agent claude --session-file ~/.claude/projects/.../session.jsonl
+EOF
+}
+
+agent="auto"
+claude_root="${CLP_S_CLAUDE_PROJECTS_ROOT:-${HOME:-}/.claude/projects}"
+codex_home="${CODEX_HOME:-${HOME:-}/.codex}"
+codex_root="${CLP_S_CODEX_SESSIONS_ROOT:-${codex_home}/sessions}"
+source_root=""
+output_dir=""
+archives_root=""
+archives_root_source=""
+archives_root_explicit=0
+resolved_archives_root=""
+save_archives_root=0
+set_archives_root=""
+show_archives_root=0
+session_file=""
+selection_file=""
+session_index=""
+timestamp_key="timestamp"
+compression_level=""
+target_encoded_size=""
+print_archive_stats=0
+dry_run=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --agent)
+      [[ $# -ge 2 ]] || { echo "error: --agent requires a value" >&2; exit 2; }
+      case "$2" in
+        auto|claude|codex) agent="$2" ;;
+        *) echo "error: --agent must be one of: auto, claude, codex" >&2; exit 2 ;;
+      esac
+      shift 2
+      ;;
+    --source-root)
+      [[ $# -ge 2 ]] || { echo "error: --source-root requires a value" >&2; exit 2; }
+      source_root="$2"
+      shift 2
+      ;;
+    --claude-root)
+      [[ $# -ge 2 ]] || { echo "error: --claude-root requires a value" >&2; exit 2; }
+      claude_root="$2"
+      shift 2
+      ;;
+    --codex-root)
+      [[ $# -ge 2 ]] || { echo "error: --codex-root requires a value" >&2; exit 2; }
+      codex_root="$2"
+      shift 2
+      ;;
+    --session-file)
+      [[ $# -ge 2 ]] || { echo "error: --session-file requires a value" >&2; exit 2; }
+      session_file="$2"
+      shift 2
+      ;;
+    --selection-file)
+      [[ $# -ge 2 ]] || { echo "error: --selection-file requires a value" >&2; exit 2; }
+      selection_file="$2"
+      shift 2
+      ;;
+    --session-index)
+      [[ $# -ge 2 ]] || { echo "error: --session-index requires a value" >&2; exit 2; }
+      session_index="$2"
+      shift 2
+      ;;
+    --output-dir|--archives-dir)
+      [[ $# -ge 2 ]] || { echo "error: $1 requires a value" >&2; exit 2; }
+      output_dir="$2"
+      shift 2
+      ;;
+    --archives-root)
+      [[ $# -ge 2 ]] || { echo "error: --archives-root requires a value" >&2; exit 2; }
+      archives_root="$2"
+      archives_root_explicit=1
+      shift 2
+      ;;
+    --save-archives-root)
+      save_archives_root=1
+      shift
+      ;;
+    --set-archives-root)
+      [[ $# -ge 2 ]] || { echo "error: --set-archives-root requires a value" >&2; exit 2; }
+      set_archives_root="$2"
+      shift 2
+      ;;
+    --show-archives-root)
+      show_archives_root=1
+      shift
+      ;;
+    --timestamp-key)
+      [[ $# -ge 2 ]] || { echo "error: --timestamp-key requires a value" >&2; exit 2; }
+      timestamp_key="$2"
+      shift 2
+      ;;
+    --compression-level)
+      [[ $# -ge 2 ]] || { echo "error: --compression-level requires a value" >&2; exit 2; }
+      compression_level="$2"
+      shift 2
+      ;;
+    --target-encoded-size)
+      [[ $# -ge 2 ]] || { echo "error: --target-encoded-size requires a value" >&2; exit 2; }
+      target_encoded_size="$2"
+      shift 2
+      ;;
+    --print-archive-stats)
+      print_archive_stats=1
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      echo "error: arbitrary clp-s option passthrough is not exposed by this wrapper" >&2
+      exit 2
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      echo >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+resolve_archives_root() {
+  local configured
+
+  if [[ -n "$archives_root" ]]; then
+    archives_root_source="argument"
+    resolved_archives_root="$(canonicalize_output_path "$archives_root")"
+    return $?
+  fi
+  if [[ -n "${CLP_S_ARCHIVES_ROOT:-}" ]]; then
+    archives_root_source="env"
+    resolved_archives_root="$(canonicalize_output_path "$CLP_S_ARCHIVES_ROOT")"
+    return $?
+  fi
+  if configured="$(read_configured_archives_root 2>/dev/null)"; then
+    archives_root_source="config"
+    resolved_archives_root="$(canonicalize_output_path "$configured")"
+    return $?
+  fi
+
+  archives_root_source="default"
+  resolved_archives_root="$(canonicalize_output_path "${TMPDIR:-/tmp}/yscope-clp-archives")"
+}
+
+configure_archives_root() {
+  local requested="$1"
+  local resolved
+
+  resolved="$(canonicalize_output_path "$requested")" || {
+    echo "error: archive root parent directory does not exist: $requested" >&2
+    exit 1
+  }
+  if is_broad_output_dir "$resolved"; then
+    echo "error: refusing broad archive root: $resolved" >&2
+    exit 2
+  fi
+  mkdir -p "$resolved"
+  write_configured_archives_root "$resolved"
+  echo "Archives root: $resolved"
+  echo "Archives root source: config"
+  echo "Config file: $(clp_archives_root_config_file)"
+}
+
+if [[ -n "$set_archives_root" ]]; then
+  configure_archives_root "$set_archives_root"
+  exit 0
+fi
+
+if [[ "$save_archives_root" -eq 1 && "$archives_root_explicit" -eq 0 ]]; then
+  echo "error: --save-archives-root requires --archives-root DIR" >&2
+  exit 2
+fi
+
+if [[ "$show_archives_root" -eq 1 ]]; then
+  resolve_archives_root || {
+    echo "error: archive root parent directory does not exist" >&2
+    exit 1
+  }
+  echo "Archives root: $resolved_archives_root"
+  echo "Archives root source: $archives_root_source"
+  echo "Config file: $(clp_archives_root_config_file)"
+  exit 0
+fi
+
+if [[ -n "$source_root" && "$agent" == "auto" ]]; then
+  echo "error: --source-root requires --agent claude or --agent codex" >&2
+  exit 2
+fi
+
+if [[ -n "$selection_file" || -n "$session_index" ]]; then
+  if [[ -z "$selection_file" || -z "$session_index" ]]; then
+    echo "error: --selection-file and --session-index must be specified together" >&2
+    exit 2
+  fi
+  if [[ ! -f "$selection_file" ]]; then
+    echo "error: selection file does not exist: $selection_file" >&2
+    exit 1
+  fi
+  if ! [[ "$session_index" =~ ^[0-9]+$ ]] || [[ "$session_index" -eq 0 ]]; then
+    echo "error: --session-index must be a positive integer" >&2
+    exit 2
+  fi
+
+  selected_fields="$(awk -F '\t' -v idx="$session_index" '
+    NR == 1 {
+      for (i = 1; i <= NF; i++) header[$i] = i
+      path_col = header["path"] ? header["path"] : 9
+      agent_col = header["agent"]
+      root_col = header["source_root"]
+      next
+    }
+    $1 == idx {
+      print $path_col "\t" (agent_col ? $agent_col : "") "\t" (root_col ? $root_col : "")
+      found = 1
+      exit
+    }
+    END { if (!found) exit 1 }
+  ' "$selection_file")" \
+    || { echo "error: session index $session_index not found in $selection_file" >&2; exit 1; }
+
+  IFS=$'\t' read -r selected_path selected_agent selected_source_root <<< "$selected_fields"
+  if [[ -n "$session_file" && "$session_file" != "$selected_path" ]]; then
+    echo "error: specify either --session-file or --selection-file/--session-index, not both" >&2
+    exit 2
+  fi
+  session_file="$selected_path"
+  if [[ "$agent" == "auto" && -n "$selected_agent" ]]; then
+    agent="$selected_agent"
+  fi
+  if [[ -z "$source_root" && -n "$selected_source_root" ]]; then
+    source_root="$selected_source_root"
+  fi
+fi
+
+if [[ -z "$session_file" ]]; then
+  echo "error: compression requires one selected session" >&2
+  echo "use --session-file PATH or --selection-file PATH --session-index IDX" >&2
+  exit 2
+fi
+
+if [[ ! -f "$session_file" ]]; then
+  echo "error: selected session file does not exist: $session_file" >&2
+  exit 1
+fi
+if [[ "$session_file" != *.jsonl ]]; then
+  echo "error: selected session file must end with .jsonl: $session_file" >&2
+  exit 1
+fi
+
+session_real="$(realpath "$session_file")"
+
+canonical_root() {
+  local root="$1"
+  if [[ ! -d "$root" ]]; then
+    return 1
+  fi
+  realpath "$root"
+}
+
+root_for_agent() {
+  case "$1" in
+    claude) printf '%s\n' "${source_root:-$claude_root}" ;;
+    codex) printf '%s\n' "${source_root:-$codex_root}" ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_agent() {
+  local root_real
+  if root_real="$(canonical_root "$claude_root" 2>/dev/null)"; then
+    case "$session_real" in
+      "$root_real"/*) printf 'claude\t%s\n' "$root_real"; return 0 ;;
+    esac
+  fi
+  if root_real="$(canonical_root "$codex_root" 2>/dev/null)"; then
+    case "$session_real" in
+      "$root_real"/*) printf 'codex\t%s\n' "$root_real"; return 0 ;;
+    esac
+  fi
+  return 1
+}
+
+if [[ "$agent" == "auto" ]]; then
+  IFS=$'\t' read -r agent source_root < <(detect_agent) || {
+    echo "error: selected session file is not under the Claude or Codex session roots" >&2
+    echo "selected: $session_file" >&2
+    echo "Claude root: $claude_root" >&2
+    echo "Codex root: $codex_root" >&2
+    exit 1
+  }
+else
+  source_root="$(root_for_agent "$agent")"
+fi
+
+if [[ ! -d "$source_root" ]]; then
+  echo "error: source root does not exist or is not a directory: $source_root" >&2
+  exit 1
+fi
+
+source_real="$(realpath "$source_root")"
+case "$session_real" in
+  "$source_real"/*) ;;
+  *)
+    echo "error: selected session file must be under source root: $source_root" >&2
+    echo "selected: $session_file" >&2
+    exit 1
+    ;;
+esac
+
+file_list="$(mktemp "${TMPDIR:-/tmp}/clp-s-files.XXXXXX")"
+trap 'rm -f "$file_list"' EXIT
+
+session_file="$session_real"
+printf '%s\n' "$session_file" > "$file_list"
+selected_session_id="$(basename "$session_file" .jsonl)"
+
+if [[ -z "$output_dir" ]]; then
+  run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  resolve_archives_root || {
+    echo "error: archive root parent directory does not exist" >&2
+    exit 1
+  }
+  if is_broad_output_dir "$resolved_archives_root"; then
+    echo "error: refusing broad archive root: $resolved_archives_root" >&2
+    exit 2
+  fi
+  if [[ "$save_archives_root" -eq 1 ]]; then
+    mkdir -p "$resolved_archives_root"
+    write_configured_archives_root "$resolved_archives_root"
+  fi
+  output_dir="${resolved_archives_root}/${agent}-session-${selected_session_id}-${run_stamp}"
+else
+  if [[ "$save_archives_root" -eq 1 ]]; then
+    echo "error: --save-archives-root cannot be used with --output-dir" >&2
+    exit 2
+  fi
+fi
+
+file_count="$(wc -l < "$file_list" | tr -d '[:space:]')"
+if [[ "$file_count" -eq 0 ]]; then
+  echo "error: no selected session was added to the clp-s file list" >&2
+  exit 1
+fi
+
+total_bytes=0
+while IFS= read -r path; do
+  size="$(wc -c < "$path" | tr -d '[:space:]')"
+  total_bytes=$((total_bytes + size))
+done < "$file_list"
+session_sha256="$(sha256_file "$session_file")"
+
+clp_s_bin="$(resolve_clp_s)" || exit $?
+
+cmd=("$clp_s_bin" c)
+if [[ -n "$timestamp_key" ]]; then
+  cmd+=(--timestamp-key "$timestamp_key")
+fi
+if [[ -n "$compression_level" ]]; then
+  cmd+=(--compression-level "$compression_level")
+fi
+if [[ -n "$target_encoded_size" ]]; then
+  cmd+=(--target-encoded-size "$target_encoded_size")
+fi
+if [[ "$print_archive_stats" -eq 1 ]]; then
+  cmd+=(--print-archive-stats)
+fi
+cmd+=(-f "$file_list" "$output_dir")
+
+echo "Agent: $agent"
+echo "Source root: $source_root"
+if [[ -n "${resolved_archives_root:-}" ]]; then
+  echo "Archives root: $resolved_archives_root"
+  echo "Archives root source: $archives_root_source"
+fi
+echo "Archives dir: $output_dir"
+echo "Selected session: $session_file"
+echo "Input files: $file_count"
+echo "Input bytes: $total_bytes"
+echo "Archive mode: regular directory archive (--single-file-archive disabled)"
+printf 'Command:'
+printf ' %q' "${cmd[@]}"
+echo
+
+if [[ "$dry_run" -eq 1 ]]; then
+  echo "Dry run only; no archive was created."
+  exit 0
+fi
+
+mkdir -p "$output_dir"
+"${cmd[@]}"
+
+archive_bytes="$(directory_file_bytes "$output_dir")"
+compression_ratio="$(awk -v raw="$total_bytes" -v archive="$archive_bytes" 'BEGIN { if (archive > 0) printf "%.2fx", raw / archive; else printf "n/a" }')"
+reduction_bytes=$((total_bytes - archive_bytes))
+reduction_percent="$(awk -v raw="$total_bytes" -v reduction="$reduction_bytes" 'BEGIN { if (raw > 0) printf "%.2f%%", reduction * 100 / raw; else printf "n/a" }')"
+clp_archive_dir="$(resolve_clp_s_archive_dir "$output_dir" 2>/dev/null || true)"
+
+metadata_file="$(clp_archive_metadata_file "$output_dir")"
+command_json="$(printf '%s\n' "${cmd[@]}" | jq -R . | jq -s .)"
+jq -n \
+  --arg schemaVersion "1" \
+  --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg plugin "yscope-clp" \
+  --arg agent "$agent" \
+  --arg sourceRoot "$source_root" \
+  --arg archiveRoot "${resolved_archives_root:-}" \
+  --arg archiveRootSource "${archives_root_source:-output-dir}" \
+  --arg archiveDir "$output_dir" \
+  --arg clpArchiveDir "$clp_archive_dir" \
+  --arg timestampKey "$timestamp_key" \
+  --arg selectionFile "$selection_file" \
+  --arg sessionIndex "$session_index" \
+  --arg sessionFile "$session_file" \
+  --arg sessionId "$selected_session_id" \
+  --arg sessionSha256 "$session_sha256" \
+  --argjson inputBytes "$total_bytes" \
+  --argjson archiveBytes "$archive_bytes" \
+  --argjson reductionBytes "$reduction_bytes" \
+  --arg compressionRatio "$compression_ratio" \
+  --arg reductionPercent "$reduction_percent" \
+  --argjson command "$command_json" \
+  '{
+    schemaVersion: ($schemaVersion | tonumber),
+    createdAt: $createdAt,
+    plugin: $plugin,
+    agent: $agent,
+    sourceRoot: $sourceRoot,
+    archiveRoot: (if $archiveRoot == "" then null else $archiveRoot end),
+    archiveRootSource: $archiveRootSource,
+    archiveDir: $archiveDir,
+    clpArchiveDir: (if $clpArchiveDir == "" then null else $clpArchiveDir end),
+    timestampKey: $timestampKey,
+    selection: {
+      file: (if $selectionFile == "" then null else $selectionFile end),
+      index: (if $sessionIndex == "" then null else ($sessionIndex | tonumber) end)
+    },
+    session: {
+      file: $sessionFile,
+      id: $sessionId,
+      sha256: $sessionSha256,
+      bytes: $inputBytes
+    },
+    compression: {
+      rawBytes: $inputBytes,
+      archiveBytes: $archiveBytes,
+      ratio: $compressionRatio,
+      reductionBytes: $reductionBytes,
+      reductionPercent: $reductionPercent
+    },
+    command: $command
+  }' > "$metadata_file"
+
+echo "Raw input bytes: $total_bytes"
+echo "Archive bytes: $archive_bytes"
+echo "Compression ratio: $compression_ratio"
+echo "File size reduction: $reduction_bytes bytes ($reduction_percent)"
+if [[ -n "$clp_archive_dir" && "$clp_archive_dir" != "$output_dir" ]]; then
+  echo "Resolved clp-s archive dir: $clp_archive_dir"
+fi
+echo "Archive metadata: $metadata_file"
+echo "Archive entries:"
+while IFS= read -r -d '' entry; do
+  entry_type="$(file_type_letter "$entry")"
+  entry_size="$(file_size_bytes "$entry" 2>/dev/null || printf '0')"
+  printf '%s\t%s\t%s bytes\n' "$entry" "$entry_type" "$entry_size"
+done < <(find_immediate_children "$output_dir") | LC_ALL=C sort

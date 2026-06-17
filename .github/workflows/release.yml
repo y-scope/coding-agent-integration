@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build marketplace archive
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building marketplace.tar.gz for version ${VERSION}"
+
+      - name: Read plugin metadata
+        id: meta
+        run: |
+          PLUGIN_NAME=$(jq -r .name plugins/clp/.claude-plugin/plugin.json)
+          PLUGIN_VERSION=$(jq -r .version plugins/clp/.claude-plugin/plugin.json)
+          echo "plugin_name=${PLUGIN_NAME}" >> "$GITHUB_OUTPUT"
+          echo "plugin_version=${PLUGIN_VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ "${PLUGIN_VERSION}" != "${VERSION}" ]]; then
+            echo "error: tag version (${VERSION}) does not match plugin version (${PLUGIN_VERSION})" >&2
+            exit 1
+          fi
+
+      - name: Validate plugin
+        run: |
+          claude plugin validate .
+          claude plugin validate ./plugins/clp
+          scripts/validate-codex-plugin.sh ./plugins/clp
+
+      - name: Build marketplace.tar.gz
+        run: |
+          tar -czf marketplace.tar.gz .claude-plugin .agents plugins
+
+      - name: Compute SHA-256
+        id: sha
+        run: |
+          SHA=$(sha256sum marketplace.tar.gz | awk '{print $1}')
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "marketplace.tar.gz SHA-256: ${SHA}"
+
+      - name: Write plugin-release.json
+        run: |
+          cat > plugin-release.json <<EOF
+          {
+            "tag": "${GITHUB_REF_NAME}",
+            "plugin": "${PLUGIN_NAME}",
+            "version": "${{ steps.meta.plugin_version }}",
+            "marketplace": {
+              "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/marketplace.tar.gz",
+              "sha256": "${{ steps.sha.sha256 }}"
+            }
+          }
+          EOF
+          cat plugin-release.json
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            marketplace.tar.gz
+            plugin-release.json

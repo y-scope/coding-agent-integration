@@ -1,0 +1,18 @@
+{
+  "name": "yscope",
+  "description": "YScope coding-agent plugins for CLP log archive compression, search, and decompression.",
+  "owner": {
+    "name": "YScope"
+  },
+  "plugins": [
+    {
+      "name": "clp",
+      "description": "Compress selected Claude Code or Codex session JSONL logs with CLP, search them with KQL, and decompress archives.",
+      "author": {
+        "name": "YScope"
+      },
+      "category": "productivity",
+      "source": "./plugins/clp"
+    }
+  ]
+}

@@ -1,0 +1,328 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck disable=SC1091
+source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  clp-s-list-sessions [options]
+
+List Claude Code and/or Codex session JSONL files and write a stable
+selection manifest for later compression.
+
+Options:
+  --agent AGENT           Session source to scan: all, claude, or codex.
+                          Default: all
+  --source-root DIR       Root directory for the selected single agent.
+                          Requires --agent claude or --agent codex.
+  --claude-root DIR       Claude Code session root.
+                          Default: ~/.claude/projects
+  --codex-root DIR        Codex session root.
+                          Default: ${CODEX_HOME:-~/.codex}/sessions
+  --limit N               Number of recent sessions to show. Default: 5
+  --all                   Include every matching session in the manifest/table.
+  --include-subagents     Include Claude subagent JSONL files.
+  --manifest PATH         Write selection manifest to PATH.
+  --project-filter TEXT   Only include paths/cwd/project labels containing TEXT.
+  -h, --help              Show this help.
+
+Output:
+  The table's IDX column is stable for the printed Selection manifest. Compress
+  one selected row with:
+
+    clp-s-compress-session --selection-file <manifest> --session-index <IDX>
+EOF
+}
+
+agent="all"
+agent_explicit=0
+claude_root="${CLP_S_CLAUDE_PROJECTS_ROOT:-${HOME:-}/.claude/projects}"
+codex_home="${CODEX_HOME:-${HOME:-}/.codex}"
+codex_root="${CLP_S_CODEX_SESSIONS_ROOT:-${codex_home}/sessions}"
+limit=5
+include_all=0
+include_subagents=0
+manifest=""
+project_filter=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --agent)
+      [[ $# -ge 2 ]] || { echo "error: --agent requires a value" >&2; exit 2; }
+      case "$2" in
+        all|claude|codex) agent="$2" ;;
+        *) echo "error: --agent must be one of: all, claude, codex" >&2; exit 2 ;;
+      esac
+      agent_explicit=1
+      shift 2
+      ;;
+    --source-root)
+      [[ $# -ge 2 ]] || { echo "error: --source-root requires a value" >&2; exit 2; }
+      if [[ "$agent_explicit" -eq 0 || "$agent" == "all" ]]; then
+        echo "error: --source-root requires --agent claude or --agent codex" >&2
+        exit 2
+      fi
+      if [[ "$agent" == "codex" ]]; then
+        codex_root="$2"
+      else
+        claude_root="$2"
+      fi
+      shift 2
+      ;;
+    --claude-root)
+      [[ $# -ge 2 ]] || { echo "error: --claude-root requires a value" >&2; exit 2; }
+      claude_root="$2"
+      shift 2
+      ;;
+    --codex-root)
+      [[ $# -ge 2 ]] || { echo "error: --codex-root requires a value" >&2; exit 2; }
+      codex_root="$2"
+      shift 2
+      ;;
+    --limit)
+      [[ $# -ge 2 ]] || { echo "error: --limit requires a value" >&2; exit 2; }
+      limit="$2"
+      shift 2
+      ;;
+    --all)
+      include_all=1
+      shift
+      ;;
+    --include-subagents)
+      include_subagents=1
+      shift
+      ;;
+    --manifest)
+      [[ $# -ge 2 ]] || { echo "error: --manifest requires a value" >&2; exit 2; }
+      manifest="$2"
+      shift 2
+      ;;
+    --project-filter)
+      [[ $# -ge 2 ]] || { echo "error: --project-filter requires a value" >&2; exit 2; }
+      project_filter="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      echo "error: arbitrary passthrough is not exposed by this wrapper" >&2
+      exit 2
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      echo >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if ! [[ "$limit" =~ ^[0-9]+$ ]] || [[ "$limit" -eq 0 ]]; then
+  echo "error: --limit must be a positive integer" >&2
+  exit 2
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "error: jq is required to summarize session metadata" >&2
+  exit 127
+fi
+
+if [[ -z "$manifest" ]]; then
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  manifest="${TMPDIR:-/tmp}/clp-s-session-selection-${stamp}.$$.tsv"
+fi
+
+tmp_candidates="$(mktemp "${TMPDIR:-/tmp}/clp-s-session-candidates.XXXXXX")"
+trap 'rm -f "$tmp_candidates"' EXIT
+
+add_candidates() {
+  local source_agent="$1"
+  local root="$2"
+  local find_args=()
+
+  if [[ ! -d "$root" ]]; then
+    if [[ "$agent" == "$source_agent" ]]; then
+      echo "error: ${source_agent} source root does not exist or is not a directory: $root" >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  find_args=("$root" -type f -name '*.jsonl')
+  if [[ "$source_agent" == "claude" && "$include_subagents" -eq 0 ]]; then
+    find_args+=(! -path '*/subagents/*')
+  fi
+
+  while IFS= read -r -d '' path; do
+    mtime="$(file_mtime_epoch "$path")" || continue
+    size="$(file_size_bytes "$path")" || continue
+    printf '%s\t%s\t%s\t%s\n' "$mtime" "$size" "$source_agent" "$path"
+  done < <(find "${find_args[@]}" -print0 2>/dev/null)
+}
+
+case "$agent" in
+  all)
+    add_candidates claude "$claude_root" >> "$tmp_candidates"
+    add_candidates codex "$codex_root" >> "$tmp_candidates"
+    ;;
+  claude)
+    add_candidates claude "$claude_root" >> "$tmp_candidates"
+    ;;
+  codex)
+    add_candidates codex "$codex_root" >> "$tmp_candidates"
+    ;;
+esac
+
+LC_ALL=C sort -t $'\t' -k1,1nr -o "$tmp_candidates" "$tmp_candidates"
+
+mkdir -p "$(dirname "$manifest")"
+printf 'index\tmodified_epoch\tmodified_local\tsize_bytes\tagent\tkind\tsession_id\tsession_name\tproject\tcwd\tpath\tsource_root\n' > "$manifest"
+
+format_bytes() {
+  local bytes="$1"
+  if (( bytes >= 1073741824 )); then
+    awk -v b="$bytes" 'BEGIN { printf "%.1fG", b / 1073741824 }'
+  elif (( bytes >= 1048576 )); then
+    awk -v b="$bytes" 'BEGIN { printf "%.1fM", b / 1048576 }'
+  elif (( bytes >= 1024 )); then
+    awk -v b="$bytes" 'BEGIN { printf "%.1fK", b / 1024 }'
+  else
+    printf '%sB' "$bytes"
+  fi
+}
+
+first_json_value() {
+  local file="$1"
+  local filter="$2"
+  head -n 200 "$file" \
+    | jq -r "$filter // empty" 2>/dev/null \
+    | head -n 1 || true
+}
+
+modified_time() {
+  local epoch="$1"
+  date -d "@$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
+    || date -r "$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
+    || printf '%s' "$epoch"
+}
+
+display_root() {
+  local source_agent="$1"
+  if [[ "$source_agent" == "codex" ]]; then
+    printf '%s' "$codex_root"
+  else
+    printf '%s' "$claude_root"
+  fi
+}
+
+session_metadata() {
+  local source_agent="$1"
+  local root="$2"
+  local path="$3"
+  local rel project kind session_id session_name cwd
+
+  rel="${path#"$root"/}"
+  project="${rel%%/*}"
+  kind="main"
+  if [[ "$source_agent" == "claude" && "$path" == */subagents/* ]]; then
+    kind="subagent"
+  fi
+
+  session_id="$(basename "$path" .jsonl)"
+  if [[ "$source_agent" == "codex" ]]; then
+    kind="$(first_json_value "$path" 'select(.type == "session_meta") | .payload.source')"
+    if [[ -z "$kind" ]]; then
+      kind="codex"
+    fi
+    cwd="$(first_json_value "$path" 'select(.payload.cwd? != null and .payload.cwd != "") | .payload.cwd')"
+    if [[ -z "$cwd" ]]; then
+      cwd="$project"
+    fi
+    project="$(basename "$(dirname "$cwd")")/$(basename "$cwd")"
+    session_name="$(basename "$cwd")"
+  else
+    cwd="$(first_json_value "$path" 'select(.cwd? != null and .cwd != "") | .cwd')"
+    if [[ -z "$cwd" ]]; then
+      cwd="$project"
+    fi
+    session_name="$(first_json_value "$path" 'select(.customTitle? != null and .customTitle != "") | .customTitle')"
+    if [[ -z "$session_name" ]]; then
+      session_name="$(first_json_value "$path" 'select(.slug? != null and .slug != "") | .slug')"
+    fi
+    if [[ -z "$session_name" ]]; then
+      session_name="$(basename "$cwd")"
+    fi
+  fi
+
+  if [[ -z "$session_name" ]]; then
+    session_name="$session_id"
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\n' "$kind" "$session_id" "$session_name" "$project" "$cwd"
+}
+
+printed=0
+matched_total=0
+printf 'Selection manifest: %s\n' "$manifest"
+printf 'Agent: %s\n' "$agent"
+printf 'Claude root: %s\n' "$claude_root"
+printf 'Codex root: %s\n' "$codex_root"
+if [[ "$include_subagents" -eq 0 ]]; then
+  printf 'Claude subagents: excluded (use --include-subagents to include)\n'
+else
+  printf 'Claude subagents: included\n'
+fi
+printf '\n'
+printf '%-4s  %-6s  %-19s  %-12s  %-8s  %-10s  %-28s  %-36s  %-42s  %s\n' \
+  "IDX" "AGENT" "MODIFIED" "RAW_BYTES" "SIZE" "KIND" "SESSION_NAME" "SESSION" "PROJECT/CWD" "PATH"
+
+while IFS=$'\t' read -r mtime size source_agent path; do
+  source_root="$(display_root "$source_agent")"
+  IFS=$'\t' read -r kind session_id session_name project cwd < <(session_metadata "$source_agent" "$source_root" "$path")
+
+  if [[ -n "$project_filter" ]]; then
+    haystack="${source_agent} ${session_name} ${project} ${cwd} ${path}"
+    if [[ "$haystack" != *"$project_filter"* ]]; then
+      continue
+    fi
+  fi
+
+  matched_total=$((matched_total + 1))
+  if [[ "$include_all" -eq 0 && "$printed" -ge "$limit" ]]; then
+    continue
+  fi
+
+  printed=$((printed + 1))
+  epoch="${mtime%%.*}"
+  modified_local="$(modified_time "$epoch")"
+  size_human="$(format_bytes "$size")"
+  display_cwd="$cwd"
+  if [[ ${#display_cwd} -gt 42 ]]; then
+    display_cwd="...${display_cwd: -39}"
+  fi
+  display_session_name="$session_name"
+  if [[ ${#display_session_name} -gt 28 ]]; then
+    display_session_name="...${display_session_name: -25}"
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$printed" "$epoch" "$modified_local" "$size" "$source_agent" "$kind" "$session_id" "$session_name" "$project" "$cwd" "$path" "$source_root" \
+    >> "$manifest"
+
+  printf '%-4s  %-6s  %-19s  %-12s  %-8s  %-10s  %-28s  %-36s  %-42s  %s\n' \
+    "$printed" "$source_agent" "$modified_local" "$size" "$size_human" "$kind" "$display_session_name" "$session_id" "$display_cwd" "$path"
+done < "$tmp_candidates"
+
+printf '\n'
+printf 'Matched sessions: %s\n' "$matched_total"
+printf 'Listed sessions: %s\n' "$printed"
+printf 'Selection manifest: %s\n' "$manifest"
+
+if [[ "$matched_total" -gt "$printed" ]]; then
+  printf 'More sessions are available. Re-run with --limit N, --all, --agent AGENT, or --project-filter TEXT.\n'
+fi

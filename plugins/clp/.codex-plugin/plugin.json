@@ -1,0 +1,36 @@
+{
+  "name": "clp",
+  "version": "0.1.11",
+  "description": "Compress, search, and decompress Claude Code and Codex session log archives with CLP.",
+  "author": {
+    "name": "YScope"
+  },
+  "keywords": [
+    "yscope",
+    "clp",
+    "clp-s",
+    "logs",
+    "jsonl",
+    "compression",
+    "claude-code",
+    "codex"
+  ],
+  "skills": "./skills-codex/",
+  "interface": {
+    "displayName": "CLP",
+    "shortDescription": "Compress and search Claude Code and Codex session logs with CLP.",
+    "longDescription": "Use CLP to compress selected Claude Code or Codex JSONL session logs, search regular CLP archive directories with KQL, and decompress local archive directories.",
+    "developerName": "YScope",
+    "category": "Productivity",
+    "capabilities": [
+      "Search",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Search my coding-agent session logs with CLP.",
+      "Compress my latest Codex or Claude session log.",
+      "Decompress a CLP archive directory."
+    ],
+    "brandColor": "#1888FA"
+  }
+}

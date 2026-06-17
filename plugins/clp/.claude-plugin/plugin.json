@@ -1,0 +1,20 @@
+{
+  "name": "clp",
+  "displayName": "CLP",
+  "version": "0.1.11",
+  "description": "Compress, search, and decompress Claude Code and Codex session log archives with CLP.",
+  "skills": "./skills-claude/",
+  "author": {
+    "name": "YScope"
+  },
+  "keywords": [
+    "yscope",
+    "clp",
+    "clp-s",
+    "logs",
+    "jsonl",
+    "compression",
+    "claude-code",
+    "codex"
+  ]
+}
