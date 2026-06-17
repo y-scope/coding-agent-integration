@@ -123,29 +123,10 @@ Default endpoint: `https://embedding.yscope.ai/v1/similarity`. Override with
 This repo is the source of truth for the plugin payload. Wrappers, skills,
 plugin manifests, and marketplace manifests are all open for contribution.
 
-- **Adding a wrapper** — place a script in `plugins/clp/bin/`, follow the
-  existing restricted-passthrough pattern (explicit flag allowlist, no `--`
-  passthrough, validate paths, unset dangerous env vars, source
-  `bin/lib/clp-common.sh` for shared utilities). Add the wrapper to
-  `plugins/clp/README.md` and the relevant `SKILL.md`.
-- **Adding a skill** — create a new directory under
-  `plugins/clp/skills-claude/` or `plugins/clp/skills-codex/` with a
-  `SKILL.md` that has YAML frontmatter (`name`, `description`). For new
-  use-cases (e.g. vLLM debugging), create a top-level directory like
-  `plugins/clp/skills-claude/vllm-debugging/` rather than adding to an
-  existing skill. Reference only the existing wrappers; never call `clp-s`
-  directly.
-- **Updating plugin metadata** — bump the `version` field in both
-  `plugins/clp/.claude-plugin/plugin.json` and
-  `plugins/clp/.codex-plugin/plugin.json` (they must match). Update
-  `plugins/clp/README.md` and the skill files to reflect new behavior.
-
-Before opening a PR, run:
-
-```bash
-claude plugin validate ./plugins/clp
-scripts/validate-codex-plugin.sh ./plugins/clp
-```
+For the full contributor guide — local dev loop (install → edit → ask the
+agent → reload), Claude Code vs Codex reload asymmetry, where to put a
+change (wrapper vs skill), and the pre-merge sanity checklist — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Releases
 
