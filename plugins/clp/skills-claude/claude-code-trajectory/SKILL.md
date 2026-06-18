@@ -2,6 +2,7 @@
 name: claude-code-trajectory
 description: Analyze Claude Code session logs — list, compress, search, and decompress trajectories.
 allowed-tools:
+  - "Agent"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql:*)"
@@ -42,15 +43,44 @@ skill instead.
 4. Report compression stats: raw input bytes, archive bytes, compression
    ratio, file size reduction.
 
-5. Search the printed archive directory:
+5. **Spawn a subagent to run all searches.** Use the Agent tool with model
+   `haiku` (fall back to `sonnet`). The subagent runs searches, processes raw
+   JSON, and returns only a compact report — keeping the main context clean.
 
-   ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
-     /tmp/session-archive \
-     'message.content.name:Bash'
+   Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
+
+   ```
+   Analyze this Claude Code CLP session archive: ARCHIVE
+
+   Search wrapper: PLUGIN_BIN/clp-s-search-kql
+   Goal: GOAL
+
+   Efficiency rules (follow strictly):
+   - Use compound KQL instead of multiple queries: field1:A AND field2:B
+   - Count with: clp-s-search-kql ARCHIVE 'KQL' | grep -c '^{'
+   - Fetch only needed fields: --project timestamp --project fieldName
+   - Zoom into time windows: --tge EPOCH_MS --tle EPOCH_MS
+   - Use semantic("query") when field names are uncertain
+
+   Semantic endpoint (check localhost first):
+     if curl -sf http://localhost:8080/health >/dev/null 2>&1; then use http://localhost:8080
+     else use http://tor-1.similarity.yscope.ai
+
+   Suggested starting queries:
+   - Tool call breakdown: run one query per tool name using message.content.name:TOOL | grep -c '^{'
+   - Failures: toolUseResult.success:false OR toolUseResult.stderr:* OR level:error
+   - Long turns: subtype:turn_duration AND durationMs >= 30000
+   - Compaction: subtype:compact_boundary
+
+   Return ONLY (no raw JSON, no header lines):
+   1. Archive path
+   2. Queries run (KQL string only, one per line)
+   3. Key findings (≤10 bullets, concrete numbers and facts)
+   4. 2–3 follow-up queries worth running
    ```
 
-6. (Optional) Decompress for raw inspection:
+6. Present the subagent's compact report to the user. Offer to drill deeper
+   with a follow-up subagent or decompress for raw inspection:
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress" \
@@ -59,7 +89,7 @@ skill instead.
    ```
 
 If the user provides an archive path directly, skip listing/compression
-and search that archive.
+and go straight to step 5.
 
 ## Query Starters
 
