@@ -215,7 +215,7 @@ if [[ -n "$embedding_batch_size" ]]; then
   search_options+=(--embedding-batch-size "$embedding_batch_size")
 fi
 
-cmd=("$clp_s_bin" s "${search_options[@]}" "$archives_dir" "$kql_query")
+cmd=("$clp_s_bin" s ${search_options[@]+"${search_options[@]}"} "$archives_dir" "$kql_query")
 
 if [[ ${#projections[@]} -gt 0 ]]; then
   cmd+=(--projection "${projections[@]}")
