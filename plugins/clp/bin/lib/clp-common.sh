@@ -288,9 +288,9 @@ require_secure_url() {
   local url="$1"
   case "$url" in
     https://*) return 0 ;;
-    http://localhost/*|http://localhost:*/*) return 0 ;;
-    http://127.0.0.1/*|http://127.0.0.1:*/*) return 0 ;;
-    http://\[::1\]/*|http://\[::1\]:*/*) return 0 ;;
+    http://localhost|http://localhost/*|http://localhost:*|http://localhost:*/*) return 0 ;;
+    http://127.0.0.1|http://127.0.0.1/*|http://127.0.0.1:*|http://127.0.0.1:*/*) return 0 ;;
+    http://\[::1\]|http://\[::1\]/*|http://\[::1\]:*|http://\[::1\]:*/*) return 0 ;;
     http://*.yscope.ai|http://*.yscope.ai/*) return 0 ;;
   esac
   echo "error: refusing non-HTTPS semantic endpoint URL: $url" >&2
