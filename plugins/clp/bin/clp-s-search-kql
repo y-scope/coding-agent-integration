@@ -180,6 +180,15 @@ if [[ "$semantic_active" -eq 1 ]]; then
   if [[ -z "$semantic_endpoint" ]]; then
     semantic_endpoint="${CLP_SEMANTIC_ENDPOINT:-${CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT:-$DEFAULT_SEMANTIC_ENDPOINT}}"
   fi
+  if [[ -z "$semantic_endpoint" ]]; then
+    # Auto-detect: prefer localhost, fall back to remote yscope endpoint
+    if curl -sf --connect-timeout 2 http://localhost:8080/health >/dev/null 2>&1; then
+      semantic_endpoint="http://localhost:8080/v1/similarity"
+    else
+      semantic_endpoint="http://tor-1.similarity.yscope.ai/v1/similarity"
+    fi
+    echo "Auto-selected semantic endpoint: $semantic_endpoint" >&2
+  fi
   require_secure_url "$semantic_endpoint" || exit 2
   check_semantic_endpoint "$semantic_endpoint" || {
     echo "error: semantic endpoint is unavailable: $semantic_endpoint" >&2

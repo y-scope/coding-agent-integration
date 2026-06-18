@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # consumed by sourced wrappers
-DEFAULT_SEMANTIC_ENDPOINT="https://embedding.yscope.ai/v1/similarity"
+DEFAULT_SEMANTIC_ENDPOINT=""
 
 resolve_clp_s() {
   local script_dir plugin_root candidate
