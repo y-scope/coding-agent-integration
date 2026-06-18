@@ -35,7 +35,28 @@ logtype is semantically similar to the query, even when exact keywords differ.
 The wrapper health-checks the embedding service before running a semantic
 search; if the service is unavailable, the search fails with a clear error.
 
-Examples:
+### Endpoints
+
+Prefer the local embedding server when it is running; fall back to the remote
+endpoint:
+
+| Endpoint | When to use |
+| --- | --- |
+| `http://localhost:8080` | Local server — lower latency, preferred |
+| `http://tor-1.similarity.yscope.ai` | Remote fallback |
+
+Check localhost first, then fall back:
+
+```bash
+if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+  SEMANTIC_ENDPOINT=http://localhost:8080
+else
+  SEMANTIC_ENDPOINT=http://tor-1.similarity.yscope.ai
+fi
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
+  --semantic-endpoint "$SEMANTIC_ENDPOINT" \
+  ARCHIVE 'semantic("query")'
+```
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
@@ -60,3 +81,32 @@ Examples:
 
 Combine `semantic(...)` with regular KQL using `AND`, e.g.
 `'semantic("errors") AND level:error'`.
+
+## Efficiency Patterns
+
+CLP searches the compressed archive without decompressing unmatched records.
+Prefer KQL predicates over fetching all records and post-filtering.
+
+**Count matches without fetching full records:**
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'KQL' | grep -c '^{'
+```
+
+**Compound KQL to avoid multiple round-trips:**
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'field1:value AND field2 >= 1000'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'name:Edit OR name:Write OR name:MultiEdit'
+```
+
+**Fetch only needed fields with `--project`:**
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
+  --project timestamp --project durationMs \
+  ARCHIVE 'subtype:turn_duration'
+```
+
+**Zoom into a time window with `--tge`/`--tle` (epoch milliseconds):**
+```bash
+# Convert: python3 -c "from datetime import datetime; print(int(datetime(2026,6,17,8,23,57).timestamp()*1000))"
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --tge T1 --tle T2 ARCHIVE 'KQL'
+```
