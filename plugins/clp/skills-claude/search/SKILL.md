@@ -28,6 +28,31 @@ commands/options.
 For session-log workflows (list → compress → search), use the
 `claude-code-trajectory` skill instead of this one.
 
+## KQL Syntax
+
+| Concept | Correct | Wrong |
+| --- | --- | --- |
+| String match | `field:value` | |
+| Wildcard | `field:*value*` | |
+| Numeric compare | `durationMs >= 30000` | |
+| Boolean | `A AND B`, `A OR B`, `NOT A` | |
+| Phrase | `"multi word phrase"` | |
+| Time range | `--tge EPOCH_MS --tle EPOCH_MS` **flags** | ~~`timestamp >= "2026-06-17"`~~ in KQL |
+| Array field path | `message.content.type:tool_use` | ~~`message.content[].type:tool_use`~~ |
+
+**Time filtering is always flags, never KQL.** CLP-S does not support timestamp
+comparisons inside KQL. Use `--tge` / `--tle` with Unix epoch milliseconds:
+
+```bash
+# Convert ISO timestamp to epoch ms:
+python3 -c "from datetime import datetime, timezone; print(int(datetime(2026,6,17,8,23,57,tzinfo=timezone.utc).timestamp()*1000))"
+# Then pass as flags:
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --tge 1750150637000 --tle 1750150639000 ARCHIVE '*'
+```
+
+**Array fields use dot notation without index brackets.** Records are stored
+with each array item flattened; use `field.subfield:value`, never `field[].subfield:value`.
+
 ## Semantic Search
 
 Use `semantic("natural language query")` in KQL to find log events whose

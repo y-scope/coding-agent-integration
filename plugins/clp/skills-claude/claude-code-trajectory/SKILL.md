@@ -59,8 +59,13 @@ skill instead.
    - Use compound KQL instead of multiple queries: field1:A AND field2:B
    - Count with: clp-s-search-kql ARCHIVE 'KQL' | grep -c '^{'
    - Fetch only needed fields: --project timestamp --project fieldName
-   - Zoom into time windows: --tge EPOCH_MS --tle EPOCH_MS
+   - Zoom into time windows: --tge EPOCH_MS --tle EPOCH_MS (NOT timestamp KQL)
    - Use semantic("query") when field names are uncertain
+
+   KQL syntax rules (do not violate):
+   - Time ranges: ONLY via --tge/--tle flags with epoch ms — NEVER as KQL predicates
+   - Array fields: dot notation only — message.content.type:X NOT message.content[].type:X
+   - Convert timestamps: python3 -c "from datetime import datetime,timezone; print(int(datetime(Y,M,D,h,m,s,tzinfo=timezone.utc).timestamp()*1000))"
 
    Semantic endpoint (check localhost first):
      if curl -sf http://localhost:8080/health >/dev/null 2>&1; then use http://localhost:8080
