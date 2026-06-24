@@ -2,7 +2,24 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # consumed by sourced wrappers
-DEFAULT_SEMANTIC_ENDPOINT=""
+# Live remote semantic-cache endpoint used as the auto-detect fallback when no
+# local embedding server is running on localhost:8080. A local server is
+# preferred so token data stays on the machine (privacy); this remote endpoint
+# is only used when no local server is available.
+DEFAULT_SEMANTIC_ENDPOINT="https://ca-central-2-semantic-cache.yscope.ai"
+# Default local embedded-semantic-cache directory (auto-enabled by the search
+# wrapper under the plugin config dir). Override per-invocation with
+# --semantic-cache-dir or the CLP_SEMANTIC_CACHE_DIR environment variable; set
+# either to "none" to disable the local cache and use remote-only /v1/similarity.
+DEFAULT_SEMANTIC_CACHE_SUBDIR="semantic-cache"
+# Cold-tier entry capacity for the auto-enabled local cache. Matches clp-s's
+# own default (10 M entries, ~4 GB cold file on disk). Override with
+# --semantic-cache-cold-capacity or CLP_SEMANTIC_CACHE_COLD_CAPACITY.
+DEFAULT_SEMANTIC_CACHE_COLD_CAPACITY="10000000"
+
+default_semantic_cache_dir() {
+  printf '%s/%s\n' "$(clp_config_dir)" "$DEFAULT_SEMANTIC_CACHE_SUBDIR"
+}
 
 resolve_clp_s() {
   local script_dir plugin_root candidate

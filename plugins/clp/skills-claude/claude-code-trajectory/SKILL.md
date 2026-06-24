@@ -67,9 +67,9 @@ skill instead.
    - Array fields: dot notation only — message.content.type:X NOT message.content[].type:X
    - Convert timestamps: python3 -c "from datetime import datetime,timezone; print(int(datetime(Y,M,D,h,m,s,tzinfo=timezone.utc).timestamp()*1000))"
 
-   Semantic endpoint (check localhost first):
-     if curl -sf http://localhost:8080/health >/dev/null 2>&1; then use http://localhost:8080
-     else use http://tor-1.similarity.yscope.ai
+   Semantic search: use semantic("query") — the wrapper auto-selects a working
+   endpoint and shares a local cache across sessions, so no endpoint flags are
+   needed.
 
    Suggested starting queries:
    - Tool call breakdown: run one query per tool name using message.content.name:TOOL | grep -c '^{'
@@ -167,16 +167,6 @@ or Python.
 
 **Use semantic search when field names are uncertain or queries are exploratory:**
 ```bash
-# Check localhost first, fall back to remote
-if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
-  SEMANTIC_ENDPOINT=http://localhost:8080
-else
-  SEMANTIC_ENDPOINT=http://tor-1.similarity.yscope.ai
-fi
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
-  --semantic-endpoint "$SEMANTIC_ENDPOINT" \
-  ARCHIVE 'semantic("task not found errors")'
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
-  --semantic-endpoint "$SEMANTIC_ENDPOINT" \
-  ARCHIVE 'semantic("build failures") AND message.content.name:Bash'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'semantic("task not found errors")'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'semantic("build failures") AND message.content.name:Bash'
 ```

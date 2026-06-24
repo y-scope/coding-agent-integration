@@ -149,10 +149,21 @@ in KQL and combine with regular KQL using `AND`, e.g.
 The wrapper health-checks the embedding service before running a semantic
 search; if the service is unavailable, the search fails with a clear error.
 
-Default endpoint: `https://embedding.yscope.ai/v1/similarity`. Override with
-`--semantic-endpoint URL` or set `CLP_SEMANTIC_ENDPOINT`. Other semantic flags:
-`--semantic-top-k K` (default 5), `--semantic-threshold T` (default 0.3,
-range 0.0-1.0), and `--embedding-batch-size N` (default auto).
+Endpoint: auto-detected — a local embedding server on `http://localhost:8080`
+is preferred (so token data stays on the machine), otherwise the remote
+`https://ca-central-2-semantic-cache.yscope.ai` is used. Override with
+`--semantic-endpoint URL` or set `CLP_SEMANTIC_ENDPOINT`.
+Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T`
+(default 0.3, range 0.0-1.0), `--embedding-batch-size N` (default auto),
+`--semantic-cache-dir DIR`, and `--semantic-cache-cold-capacity N`.
+
+A local embedded semantic cache is auto-enabled under the plugin config dir
+(`~/.config/yscope-clp-plugin/semantic-cache`, cold tier of 10 000 000 entries
+/ ~4 GB, matching the clp-s default) so repeated semantic queries score
+in-process (~sub-ms) instead of round-tripping to the endpoint. The cache is
+shared across all sessions and archives. Disable with `--semantic-cache-dir
+none` or `CLP_SEMANTIC_CACHE_DIR=none`; resize with
+`--semantic-cache-cold-capacity N` or `CLP_SEMANTIC_CACHE_COLD_CAPACITY`.
 
 ## Decompress
 
