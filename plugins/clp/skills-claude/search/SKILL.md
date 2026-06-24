@@ -50,6 +50,10 @@ across sessions. Combine with regular KQL using `AND`.
 
 ## Tips
 
+- Project only the columns you need to limit data returned: when you know which
+  fields matter, pass `--project COLUMN` (repeatable), e.g.
+  `--project timestamp --project level`. Omit it only when you need the full
+  record.
 - Count matches without fetching full records:
   `"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'KQL' | grep -c '^{'
 - Prefer one compound KQL query over several: `'field1:value AND field2 >= 1000'`

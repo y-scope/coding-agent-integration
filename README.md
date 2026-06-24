@@ -111,7 +111,9 @@ a clear error.
 
 Endpoint: auto-detected — a local embedding server on `http://localhost:8080`
 is preferred (so token data stays on the machine), otherwise the remote
-`https://ca-central-2-semantic-cache.yscope.ai` is used. Override with
+endpoints are tried in order — `https://ca-central-1-semantic-cache.yscope.ai`
+then `https://ca-central-2-semantic-cache.yscope.ai` — and the first that
+passes the health check is used. Override with
 `--semantic-endpoint URL` or set `CLP_SEMANTIC_ENDPOINT`.
 Other semantic flags: `--semantic-top-k K`, `--semantic-threshold T`,
 `--embedding-batch-size N`, `--semantic-cache-dir DIR`,

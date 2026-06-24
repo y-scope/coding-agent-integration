@@ -52,7 +52,9 @@ skill instead.
    Efficiency rules (follow strictly):
    - Use compound KQL instead of multiple queries: field1:A AND field2:B
    - Count with: clp-s-search-kql ARCHIVE 'KQL' | grep -c '^{'
-   - Fetch only needed fields: --project timestamp --project fieldName
+   - Project aggressively — fetch only the fields you need, not full records: pass
+     `--project` for each required column (e.g. `--project timestamp --project payload.name`).
+     Only omit --project when you genuinely need the whole record.
    - Zoom into time windows: --tge EPOCH_MS --tle EPOCH_MS (NOT timestamp KQL)
    - Use semantic("query") when field names are uncertain
 
@@ -145,7 +147,8 @@ or Python.
 ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'payload.success:false AND payload.stderr:*'
 ```
 
-**Reduce payload — fetch only needed fields with `--project`:**
+**Reduce payload — project only the fields you need, by default:** full records are
+large; fetch only the columns your analysis uses.
 ```bash
 ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql \
   --project timestamp --project payload.name \

@@ -2,11 +2,15 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # consumed by sourced wrappers
-# Live remote semantic-cache endpoint used as the auto-detect fallback when no
-# local embedding server is running on localhost:8080. A local server is
-# preferred so token data stays on the machine (privacy); this remote endpoint
-# is only used when no local server is available.
-DEFAULT_SEMANTIC_ENDPOINT="https://ca-central-2-semantic-cache.yscope.ai"
+# Ordered list of remote semantic-cache endpoints used as auto-detect
+# fallbacks when no local embedding server is running on localhost:8080. A
+# local server is preferred so token data stays on the machine (privacy);
+# these remote endpoints are tried in order and the first that passes the
+# health check is used. ca-central-1 is tried first, ca-central-2 as fallback.
+DEFAULT_SEMANTIC_ENDPOINTS=(
+  "https://ca-central-1-semantic-cache.yscope.ai"
+  "https://ca-central-2-semantic-cache.yscope.ai"
+)
 # Default local embedded-semantic-cache directory (auto-enabled by the search
 # wrapper under the plugin config dir). Override per-invocation with
 # --semantic-cache-dir or the CLP_SEMANTIC_CACHE_DIR environment variable; set

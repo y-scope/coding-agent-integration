@@ -43,8 +43,10 @@ passthrough.
 Semantic search uses semantic("query") in KQL and requires a running embedding
 service. The wrapper health-checks the endpoint before search. With no
 --semantic-endpoint and no CLP_SEMANTIC_ENDPOINT, it auto-detects: a local
-embedding server on http://localhost:8080 is preferred, otherwise it falls back
-to DEFAULT_SEMANTIC_ENDPOINT (https://ca-central-2-semantic-cache.yscope.ai).
+embedding server on http://localhost:8080 is preferred, otherwise it tries the
+remote endpoints in order (https://ca-central-1-semantic-cache.yscope.ai then
+https://ca-central-2-semantic-cache.yscope.ai) and uses the first that is
+healthy.
 
 A local embedded semantic cache is auto-enabled under the plugin config dir
 (~/.config/yscope-clp-plugin/semantic-cache) so repeated semantic queries hit
@@ -206,12 +208,24 @@ if [[ "$semantic_active" -eq 1 ]]; then
   fi
   if [[ -z "$semantic_endpoint" ]]; then
     # Auto-detect: prefer a local embedding server so token data stays on
-    # the machine (privacy); fall back to the remote semantic-cache endpoint
-    # (DEFAULT_SEMANTIC_ENDPOINT) only when no local server is running.
+    # the machine (privacy); otherwise try the remote semantic-cache endpoints
+    # in order (DEFAULT_SEMANTIC_ENDPOINTS) and use the first that is healthy.
     if curl -sf --connect-timeout 2 http://localhost:8080/health >/dev/null 2>&1; then
       semantic_endpoint="http://localhost:8080"
     else
-      semantic_endpoint="$DEFAULT_SEMANTIC_ENDPOINT"
+      for candidate in "${DEFAULT_SEMANTIC_ENDPOINTS[@]}"; do
+        if check_semantic_endpoint "$candidate" >/dev/null 2>&1; then
+          semantic_endpoint="$candidate"
+          break
+        fi
+      done
+      if [[ -z "$semantic_endpoint" ]]; then
+        echo "error: no semantic endpoint is reachable." >&2
+        echo "  Tried local http://localhost:8080 and remote (in order):" >&2
+        printf '    - %s\n' "${DEFAULT_SEMANTIC_ENDPOINTS[@]}" >&2
+        echo "  Start a local embedding server or pass --semantic-endpoint URL." >&2
+        exit 1
+      fi
     fi
     echo "Auto-selected semantic endpoint: $semantic_endpoint" >&2
   fi
