@@ -1,0 +1,557 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck disable=SC1091
+source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  clp-s-compress-folder --folder PATH [options]
+
+Compress log files from an arbitrary folder into a searchable CLP archive
+directory:
+
+  clp-s c --remove-path-prefix FOLDER -f FILE_LIST OUTPUT_DIR
+
+Options:
+  --folder PATH              Directory containing log files (required).
+  --extensions EXT,EXT,...   Comma-separated extension filter.
+                             Default: log,jsonl,json,txt,ndjson,out,err
+                             Use '*' to include every regular file.
+  --no-recursive             Search only the top level of --folder.
+  --timestamp-key KEY        Pass --timestamp-key KEY to clp-s.
+                             No default; only set this if your logs have a
+                             known timestamp field.
+  --compression-level LEVEL  Pass --compression-level LEVEL to clp-s.
+  --target-encoded-size N    Pass --target-encoded-size N to clp-s.
+  --output-dir DIR           Top-level archive directory. Overrides
+                             --archives-root and saved settings.
+  --archives-root DIR        Parent directory for auto-named archive outputs.
+                             Default order: this option, CLP_S_ARCHIVES_ROOT,
+                             saved config, then ${TMPDIR:-/tmp}/yscope-clp-archives
+  --save-archives-root       Save --archives-root as the future default.
+  --set-archives-root DIR    Save DIR as the future default and exit.
+  --show-archives-root       Print the current archive root setting and exit.
+  --print-archive-stats      Pass --print-archive-stats to clp-s.
+  --structurize              Pre-process files through structurize.py to
+                             convert unstructured text logs into structured
+                             JSONL before compression. Automatically sets
+                             --timestamp-key timestamp.
+  --dry-run                  Print the planned compression operation only.
+  -h, --help                 Show this help.
+
+Examples:
+  clp-s-compress-folder --folder /var/log/myapp
+  clp-s-compress-folder --folder ./logs --extensions log,txt
+  clp-s-compress-folder --folder ./logs --extensions '*' --dry-run
+  clp-s-compress-folder --folder /var/log/myapp --timestamp-key ts
+  clp-s-compress-folder --show-archives-root
+  clp-s-compress-folder --set-archives-root ~/clp-archives
+EOF
+}
+
+DEFAULT_EXTENSIONS="log,jsonl,json,txt,ndjson,out,err"
+
+folder=""
+extensions="$DEFAULT_EXTENSIONS"
+recursive=1
+timestamp_key=""
+compression_level=""
+target_encoded_size=""
+output_dir=""
+archives_root=""
+archives_root_source=""
+archives_root_explicit=0
+resolved_archives_root=""
+save_archives_root=0
+set_archives_root=""
+show_archives_root=0
+print_archive_stats=0
+dry_run=0
+structurize=0
+structurize_tmpdir=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --folder)
+      [[ $# -ge 2 ]] || { echo "error: --folder requires a value" >&2; exit 2; }
+      folder="$2"
+      shift 2
+      ;;
+    --extensions)
+      [[ $# -ge 2 ]] || { echo "error: --extensions requires a value" >&2; exit 2; }
+      extensions="$2"
+      shift 2
+      ;;
+    --no-recursive)
+      recursive=0
+      shift
+      ;;
+    --timestamp-key)
+      [[ $# -ge 2 ]] || { echo "error: --timestamp-key requires a value" >&2; exit 2; }
+      timestamp_key="$2"
+      shift 2
+      ;;
+    --compression-level)
+      [[ $# -ge 2 ]] || { echo "error: --compression-level requires a value" >&2; exit 2; }
+      compression_level="$2"
+      shift 2
+      ;;
+    --target-encoded-size)
+      [[ $# -ge 2 ]] || { echo "error: --target-encoded-size requires a value" >&2; exit 2; }
+      target_encoded_size="$2"
+      shift 2
+      ;;
+    --output-dir|--archives-dir)
+      [[ $# -ge 2 ]] || { echo "error: $1 requires a value" >&2; exit 2; }
+      output_dir="$2"
+      shift 2
+      ;;
+    --archives-root)
+      [[ $# -ge 2 ]] || { echo "error: --archives-root requires a value" >&2; exit 2; }
+      archives_root="$2"
+      archives_root_explicit=1
+      shift 2
+      ;;
+    --save-archives-root)
+      save_archives_root=1
+      shift
+      ;;
+    --set-archives-root)
+      [[ $# -ge 2 ]] || { echo "error: --set-archives-root requires a value" >&2; exit 2; }
+      set_archives_root="$2"
+      shift 2
+      ;;
+    --show-archives-root)
+      show_archives_root=1
+      shift
+      ;;
+    --print-archive-stats)
+      print_archive_stats=1
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --structurize)
+      structurize=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      echo "error: arbitrary clp-s option passthrough is not exposed by this wrapper" >&2
+      exit 2
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      echo >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+resolve_archives_root() {
+  local configured
+
+  if [[ -n "$archives_root" ]]; then
+    archives_root_source="argument"
+    resolved_archives_root="$(canonicalize_output_path "$archives_root")"
+    return $?
+  fi
+  if [[ -n "${CLP_S_ARCHIVES_ROOT:-}" ]]; then
+    archives_root_source="env"
+    resolved_archives_root="$(canonicalize_output_path "$CLP_S_ARCHIVES_ROOT")"
+    return $?
+  fi
+  if configured="$(read_configured_archives_root 2>/dev/null)"; then
+    archives_root_source="config"
+    resolved_archives_root="$(canonicalize_output_path "$configured")"
+    return $?
+  fi
+
+  archives_root_source="default"
+  resolved_archives_root="$(canonicalize_output_path "${TMPDIR:-/tmp}/yscope-clp-archives")"
+}
+
+configure_archives_root() {
+  local requested="$1"
+  local resolved
+
+  resolved="$(canonicalize_output_path "$requested")" || {
+    echo "error: archive root parent directory does not exist: $requested" >&2
+    exit 1
+  }
+  if is_broad_output_dir "$resolved"; then
+    echo "error: refusing broad archive root: $resolved" >&2
+    exit 2
+  fi
+  mkdir -p "$resolved"
+  write_configured_archives_root "$resolved"
+  echo "Archives root: $resolved"
+  echo "Archives root source: config"
+  echo "Config file: $(clp_archives_root_config_file)"
+}
+
+if [[ -n "$set_archives_root" ]]; then
+  configure_archives_root "$set_archives_root"
+  exit 0
+fi
+
+if [[ "$save_archives_root" -eq 1 && "$archives_root_explicit" -eq 0 ]]; then
+  echo "error: --save-archives-root requires --archives-root DIR" >&2
+  exit 2
+fi
+
+if [[ "$show_archives_root" -eq 1 ]]; then
+  resolve_archives_root || {
+    echo "error: archive root parent directory does not exist" >&2
+    exit 1
+  }
+  echo "Archives root: $resolved_archives_root"
+  echo "Archives root source: $archives_root_source"
+  echo "Config file: $(clp_archives_root_config_file)"
+  exit 0
+fi
+
+# --- Validate required arguments ---
+
+if [[ -z "$folder" ]]; then
+  echo "error: --folder PATH is required" >&2
+  echo >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ ! -d "$folder" ]]; then
+  echo "error: --folder is not a directory: $folder" >&2
+  exit 1
+fi
+if [[ ! -r "$folder" ]]; then
+  echo "error: --folder is not readable: $folder" >&2
+  exit 1
+fi
+
+folder_real="$(realpath "$folder")"
+folder_name="$(basename "$folder_real")"
+
+# --- Validate extensions ---
+
+all_files=0
+if [[ "$extensions" == "*" ]]; then
+  all_files=1
+else
+  # Validate each extension is alphanumeric (no wildcards, paths, or dots)
+  IFS=',' read -ra ext_array <<< "$extensions"
+  for ext in "${ext_array[@]}"; do
+    if [[ -z "$ext" ]]; then
+      echo "error: empty extension in --extensions list" >&2
+      exit 2
+    fi
+    if [[ "$ext" =~ [^a-zA-Z0-9_] ]]; then
+      echo "error: invalid extension (use only alphanumeric/underscore): $ext" >&2
+      exit 2
+    fi
+  done
+fi
+
+# --- Resolve output directory ---
+
+if [[ -n "$output_dir" && "$save_archives_root" -eq 1 ]]; then
+  echo "error: --save-archives-root cannot be used with --output-dir" >&2
+  exit 2
+fi
+
+if [[ -n "$output_dir" ]]; then
+  output_dir="$(canonicalize_output_path "$output_dir")" || {
+    echo "error: output directory parent does not exist: $output_dir" >&2
+    exit 1
+  }
+  if is_broad_output_dir "$output_dir"; then
+    echo "error: refusing broad output directory: $output_dir" >&2
+    exit 2
+  fi
+else
+  run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  resolve_archives_root || {
+    echo "error: archive root parent directory does not exist" >&2
+    exit 1
+  }
+  if is_broad_output_dir "$resolved_archives_root"; then
+    echo "error: refusing broad archive root: $resolved_archives_root" >&2
+    exit 2
+  fi
+  if [[ "$save_archives_root" -eq 1 ]]; then
+    mkdir -p "$resolved_archives_root"
+    write_configured_archives_root "$resolved_archives_root"
+  fi
+  output_dir="${resolved_archives_root}/folder-${folder_name}-${run_stamp}"
+fi
+
+# --- Discover files ---
+
+file_list="$(mktemp "${TMPDIR:-/tmp}/clp-s-files.XXXXXX")"
+trap 'rm -f "$file_list"; [[ -n "${structurize_tmpdir:-}" ]] && rm -rf "${structurize_tmpdir}"' EXIT
+
+if [[ "$all_files" -eq 1 ]]; then
+  if [[ "$recursive" -eq 1 ]]; then
+    find "$folder_real" -type f -print0 > "$file_list"
+  else
+    find "$folder_real" -maxdepth 1 -type f -print0 > "$file_list"
+  fi
+else
+  # Build find extension predicates (case-insensitive)
+  find_args=("$folder_real")
+  if [[ "$recursive" -eq 0 ]]; then
+    find_args+=(-maxdepth 1)
+  fi
+  find_args+=(-type f \()
+  first=1
+  for ext in "${ext_array[@]}"; do
+    if [[ "$first" -eq 1 ]]; then
+      find_args+=(-iname "*.${ext}")
+      first=0
+    else
+      find_args+=(-o -iname "*.${ext}")
+    fi
+  done
+  find_args+=(\))
+  # shellcheck disable=SC2086
+  find "${find_args[@]}" -print0 > "$file_list"
+fi
+
+file_count="$(tr '\0' '\n' < "$file_list" | grep -c . || true)"
+if [[ "$file_count" -eq 0 ]]; then
+  echo "error: no log files matched in $folder_real" >&2
+  if [[ "$all_files" -eq 1 ]]; then
+    echo "  (searched all files, recursive=$recursive)" >&2
+  else
+    echo "  (extensions: $extensions, recursive=$recursive)" >&2
+  fi
+  exit 1
+fi
+
+# --- Structurize unstructured logs ---
+
+if [[ "$structurize" -eq 1 ]]; then
+  structurize_script="${CLP_PLUGIN_BIN_DIR}/structurize.py"
+  if [[ ! -f "$structurize_script" ]]; then
+    echo "error: --structurize requires structurize.py but it was not found: $structurize_script" >&2
+    exit 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "error: --structurize requires python3 but it is not installed" >&2
+    exit 1
+  fi
+
+  structurize_tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/clp-s-structurize.XXXXXX")"
+  structurize_ok=0
+  structurize_skip=0
+  new_file_list="$(mktemp "${TMPDIR:-/tmp}/clp-s-files.XXXXXX")"
+  original_folder_real="$folder_real"
+
+  while IFS= read -r -d '' src_path; do
+    src_name="$(basename "$src_path")"
+    dst_path="${structurize_tmpdir}/${src_name}.json"
+    if python3 "$structurize_script" "$src_path" "$dst_path" >/dev/null 2>&1; then
+      if [[ -s "$dst_path" ]]; then
+        printf '%s\0' "$dst_path" >> "$new_file_list"
+        structurize_ok=$((structurize_ok + 1))
+      else
+        echo "warning: structurize produced empty output for $src_name, skipping" >&2
+        structurize_skip=$((structurize_skip + 1))
+      fi
+    else
+      echo "warning: structurize failed for $src_name, skipping" >&2
+      structurize_skip=$((structurize_skip + 1))
+    fi
+  done < "$file_list"
+
+  if [[ "$structurize_ok" -eq 0 ]]; then
+    echo "error: structurize did not produce any output files" >&2
+    rm -f "$new_file_list"
+    exit 1
+  fi
+
+  if [[ "$structurize_skip" -gt 0 ]]; then
+    echo "warning: structurize skipped $structurize_skip file(s); proceeding with $structurize_ok structured file(s)" >&2
+  fi
+
+  # Replace file list with structurize output
+  rm -f "$file_list"
+  file_list="$new_file_list"
+
+  # Point remove-path-prefix at the structurize temp dir so archive paths
+  # show just the filename (e.g. "app.log.json") instead of a deep tmp path
+  folder_real="$structurize_tmpdir"
+
+  # Recompute file count from the structurized list
+  file_count="$structurize_ok"
+
+  # Auto-set timestamp key for structured JSONL output
+  if [[ -z "$timestamp_key" ]]; then
+    timestamp_key="timestamp"
+  fi
+
+  echo "Structurize: converted $structurize_ok file(s) to structured JSONL"
+  if [[ "$structurize_skip" -gt 0 ]]; then
+    echo "Structurize skipped: $structurize_skip file(s)"
+  fi
+fi
+
+# Convert null-delimited file list to newline-delimited for wc/calculation
+# and compute total bytes
+total_bytes=0
+while IFS= read -r -d '' path; do
+  size="$(wc -c < "$path" | tr -d '[:space:]')"
+  total_bytes=$((total_bytes + size))
+done < "$file_list"
+
+# --- Build clp-s command ---
+
+clp_s_bin="$(resolve_clp_s)" || exit $?
+
+cmd=("$clp_s_bin" c)
+if [[ -n "$timestamp_key" ]]; then
+  cmd+=(--timestamp-key "$timestamp_key")
+fi
+if [[ -n "$compression_level" ]]; then
+  cmd+=(--compression-level "$compression_level")
+fi
+if [[ -n "$target_encoded_size" ]]; then
+  cmd+=(--target-encoded-size "$target_encoded_size")
+fi
+if [[ "$print_archive_stats" -eq 1 ]]; then
+  cmd+=(--print-archive-stats)
+fi
+cmd+=(--remove-path-prefix "$folder_real")
+cmd+=(-f "$file_list" "$output_dir")
+
+# --- Plan / dry-run output ---
+
+echo "Folder: $folder_real"
+echo "Extensions: $extensions"
+echo "Recursive: $([ "$recursive" -eq 1 ] && echo 'yes' || echo 'no')"
+echo "Input files: $file_count"
+echo "Input bytes: $total_bytes"
+if [[ -n "${resolved_archives_root:-}" ]]; then
+  echo "Archives root: $resolved_archives_root"
+  echo "Archives root source: $archives_root_source"
+fi
+echo "Archives dir: $output_dir"
+echo "Timestamp key: ${timestamp_key:-none}"
+echo "Structurize: $([ "$structurize" -eq 1 ] && echo 'yes' || echo 'no')"
+echo "Archive mode: regular directory archive (--single-file-archive disabled)"
+printf 'Command:'
+printf ' %q' "${cmd[@]}"
+echo
+
+if [[ "$dry_run" -eq 1 ]]; then
+  echo "Dry run only; no archive was created."
+  exit 0
+fi
+
+# --- Run compression ---
+
+mkdir -p "$output_dir"
+"${cmd[@]}"
+
+# --- Compute stats and write metadata ---
+
+archive_bytes="$(directory_file_bytes "$output_dir")"
+compression_ratio="$(awk -v raw="$total_bytes" -v archive="$archive_bytes" 'BEGIN { if (archive > 0) printf "%.2fx", raw / archive; else printf "n/a" }')"
+reduction_bytes=$((total_bytes - archive_bytes))
+reduction_percent="$(awk -v raw="$total_bytes" -v reduction="$reduction_bytes" 'BEGIN { if (raw > 0) printf "%.2f%%", reduction * 100 / raw; else printf "n/a" }')"
+clp_archive_dir="$(resolve_clp_s_archive_dir "$output_dir" 2>/dev/null || true)"
+
+# Build extensions JSON array
+if [[ "$all_files" -eq 1 ]]; then
+  extensions_json='"*"'
+else
+  extensions_json="$(printf '%s\n' "${ext_array[@]}" | jq -R . | jq -s .)"
+fi
+
+# Preserve the original source path for metadata when structurize is used,
+# since folder_real has been repointed at the structurize temp directory.
+if [[ "$structurize" -eq 1 ]]; then
+  metadata_source_path="$original_folder_real"
+else
+  metadata_source_path="$folder_real"
+fi
+
+metadata_file="$(clp_archive_metadata_file "$output_dir")"
+command_json="$(printf '%s\n' "${cmd[@]}" | jq -R . | jq -s .)"
+jq -n \
+  --arg schemaVersion "1" \
+  --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg plugin "yscope-clp" \
+  --arg sourceType "folder" \
+  --arg sourcePath "$metadata_source_path" \
+  --arg sourceName "$folder_name" \
+  --argjson sourceRecursive "$recursive" \
+  --argjson sourceExtensions "$extensions_json" \
+  --argjson sourceFileCount "$file_count" \
+  --arg archiveRoot "${resolved_archives_root:-}" \
+  --arg archiveRootSource "${archives_root_source:-output-dir}" \
+  --arg archiveDir "$output_dir" \
+  --arg clpArchiveDir "$clp_archive_dir" \
+  --arg timestampKey "${timestamp_key:-}" \
+  --argjson inputBytes "$total_bytes" \
+  --argjson archiveBytes "$archive_bytes" \
+  --argjson reductionBytes "$reduction_bytes" \
+  --arg compressionRatio "$compression_ratio" \
+  --arg reductionPercent "$reduction_percent" \
+  --argjson command "$command_json" \
+  --argjson structurizeFlag "$structurize" \
+  '{
+    schemaVersion: ($schemaVersion | tonumber),
+    createdAt: $createdAt,
+    plugin: $plugin,
+    source: {
+      type: $sourceType,
+      path: $sourcePath,
+      name: $sourceName,
+      recursive: $sourceRecursive,
+      extensions: $sourceExtensions,
+      fileCount: $sourceFileCount
+    },
+    archiveRoot: (if $archiveRoot == "" then null else $archiveRoot end),
+    archiveRootSource: $archiveRootSource,
+    archiveDir: $archiveDir,
+    clpArchiveDir: (if $clpArchiveDir == "" then null else $clpArchiveDir end),
+    timestampKey: (if $timestampKey == "" then null else $timestampKey end),
+    structurize: ($structurizeFlag == 1),
+    compression: {
+      rawBytes: $inputBytes,
+      archiveBytes: $archiveBytes,
+      ratio: $compressionRatio,
+      reductionBytes: $reductionBytes,
+      reductionPercent: $reductionPercent
+    },
+    command: $command
+  }' > "$metadata_file"
+
+echo "Raw input bytes: $total_bytes"
+echo "Archive bytes: $archive_bytes"
+echo "Compression ratio: $compression_ratio"
+echo "File size reduction: $reduction_bytes bytes ($reduction_percent)"
+echo "Input files: $file_count"
+if [[ "$structurize" -eq 1 ]]; then
+  echo "Structurize: yes (converted to structured JSONL)"
+fi
+if [[ -n "$clp_archive_dir" && "$clp_archive_dir" != "$output_dir" ]]; then
+  echo "Resolved clp-s archive dir: $clp_archive_dir"
+fi
+echo "Archive metadata: $metadata_file"
+echo "Archive entries:"
+while IFS= read -r -d '' entry; do
+  entry_type="$(file_type_letter "$entry")"
+  entry_size="$(file_size_bytes "$entry" 2>/dev/null || printf '0')"
+  printf '%s\t%s\t%s bytes\n' "$entry" "$entry_type" "$entry_size"
+done < <(find_immediate_children "$output_dir") | LC_ALL=C sort
