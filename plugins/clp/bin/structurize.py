@@ -1,5 +1,7 @@
 import json
 import re
+import os
+import datetime
 
 def convert_vllm_log_to_json(input_filepath, output_filepath):
     # Regex to match the outer wrapper log format
@@ -23,8 +25,40 @@ def convert_vllm_log_to_json(input_filepath, output_filepath):
         r')(?P<inner_message>.*)$'
     )
 
+    # Regex to match RAW vLLM engine logs that have NO outer wrapper (e.g. logs
+    # captured straight from `vllm serve` in CI, without an sflow-style wrapper).
+    # Matches, with an optional leading ISO timestamp (GitHub Actions line prefix)
+    # and/or an optional "(Component pid=N)" prefix:
+    #   INFO 06-30 03:55:00 [importing.py:81] Triton not installed ...
+    #   (APIServer pid=20533) INFO 06-30 04:12:03 [launcher.py:46] Route: /v1/...
+    #   2026-06-30T03:55:12.7099980Z INFO 06-30 03:55:00 [importing.py:81] ...
+    raw_vllm_pattern = re.compile(
+        r'^(?:(?P<lead_ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)\s+)?'
+        r'(?P<component>\([A-Za-z_][A-Za-z0-9_]*(?:\s+pid=\d+)?\)\s+)?'
+        r'(?P<raw_level>INFO|WARNING|ERROR|DEBUG|CRITICAL)\s+'
+        r'(?P<raw_ts>\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+'
+        r'(?P<raw_logger>\[[^\]]+\])(?:\s+(?P<raw_message>.*))?$'
+    )
+
     structured_logs = []
     seen_timestamps = set()
+
+    # Raw vLLM engine timestamps have no year ("06-15 03:52:34"), which CLP
+    # cannot parse. Infer a year: prefer a leading ISO timestamp on the line,
+    # then a YYYY-MM-DD date in the filename, else the current year. The
+    # resulting timestamp is normalized to "YYYY-MM-DD HH:MM:SS,mmm".
+    fn_year_match = re.search(r'(\d{4})-\d{2}-\d{2}', os.path.basename(input_filepath))
+    fallback_year = (fn_year_match.group(1) if fn_year_match
+                     else str(datetime.datetime.now().year))
+
+    def _normalize_raw_ts(raw_ts, lead_ts):
+        year = lead_ts[:4] if lead_ts else fallback_year
+        ts = f"{year}-{raw_ts}"  # raw_ts == "MM-DD HH:MM:SS" or "MM-DD HH:MM:SS.frac"
+        if '.' in ts:
+            ts = ts.replace('.', ',', 1)  # -> "YYYY-MM-DD HH:MM:SS,frac"
+        else:
+            ts = ts + ',000'
+        return ts
 
     with open(input_filepath, 'r', encoding='utf-8') as f:
         for line in f:
@@ -57,9 +91,23 @@ def convert_vllm_log_to_json(input_filepath, output_filepath):
 
                 structured_logs.append(log_entry)
             else:
-                # Handle multi-line strings (like large JSON dumps) by appending to the previous message
-                if structured_logs:
-                    structured_logs[-1]['message'] += '\n' + line
+                raw_match = raw_vllm_pattern.match(line)
+                if raw_match:
+                    component = (raw_match.group('component') or '').strip()
+                    message = raw_match.group('raw_message') or ''
+                    if component:
+                        message = f"{component} {message}".strip()
+                    structured_logs.append({
+                        'timestamp': _normalize_raw_ts(
+                            raw_match.group('raw_ts'), raw_match.group('lead_ts')),
+                        'logger': raw_match.group('raw_logger').strip('[]'),
+                        'level': raw_match.group('raw_level'),
+                        'message': message,
+                    })
+                else:
+                    # Handle multi-line strings (like large JSON dumps) by appending to the previous message
+                    if structured_logs:
+                        structured_logs[-1]['message'] += '\n' + line
 
     # Write out as JSON Lines (JSONL)
     with open(output_filepath, 'w', encoding='utf-8') as out_f:
