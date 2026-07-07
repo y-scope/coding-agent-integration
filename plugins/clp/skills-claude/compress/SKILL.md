@@ -9,6 +9,10 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session:*)", "Bas
 Use only the plugin wrappers. Do not call bare `clp-s` or expose arbitrary CLP
 commands/options.
 
+**See also:** the `experimental` skill for clpp compression (`--experimental`
+`--parsing-specification`, decomposed queries / log shapes), and the `dev` skill
+for pointing the wrapper at a locally-built `clp-s`.
+
 ## Rules
 
 - Compress exactly one selected session JSONL file.

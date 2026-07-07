@@ -29,12 +29,20 @@ Allowed search controls:
   --semantic-cache-cold-capacity N
                            Cold-tier entry capacity of the local cache
                            (default 10000000, ~4 GB on disk).
+  --experimental          Enable clp-s experimental (clpp) features. Required
+                           for shape()/decompose() KQL functions.
+  --clp-s-bin PATH        Use this clp-s binary for this invocation only.
+                           Overrides the CLP_S_BIN env var and the installed
+                           plugin binary; useful for pointing at a local build.
 
 Examples:
   clp-s-search-kql /tmp/archive 'level:error'
   clp-s-search-kql /tmp/archive 'message.content.name:Bash'
   clp-s-search-kql /tmp/archive 'semantic("slow database queries")'
   clp-s-search-kql --project timestamp --project type --project sessionId /tmp/archive 'message.content.name:Bash'
+  clp-s-search-kql --experimental /tmp/archive 'shape(message): "*error*"'
+  clp-s-search-kql --experimental --project 'shape(message)' /tmp/archive '*'
+  clp-s-search-kql --experimental --project 'decompose(message)' /tmp/archive '*'
 
 This search wrapper intentionally does not expose clp-s output handlers,
 reducers, results-cache writes, decompression, or arbitrary clp-s option
@@ -69,6 +77,8 @@ embedding_batch_size=""
 semantic_cache_dir=""
 semantic_cache_cold_capacity=""
 semantic_active=0
+experimental=0
+clp_s_bin_override=""
 
 split_projection_csv() {
   local value="$1"
@@ -148,6 +158,15 @@ while [[ $# -gt 0 ]]; do
       ignore_case=1
       shift
       ;;
+    --experimental)
+      experimental=1
+      shift
+      ;;
+    --clp-s-bin)
+      [[ $# -ge 2 ]] || { echo "error: --clp-s-bin requires a value" >&2; exit 2; }
+      clp_s_bin_override="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -185,6 +204,12 @@ if [[ "$kql_query" =~ [Ss][Ee][Mm][Aa][Nn][Tt][Ii][Cc][[:space:]]*\( ]]; then
   semantic_active=1
 fi
 
+# Per-invocation binary override composes with the CLP_S_BIN env var already
+# honored by resolve_clp_s; the flag wins for this invocation only.
+if [[ -n "$clp_s_bin_override" ]]; then
+  export CLP_S_BIN="$clp_s_bin_override"
+fi
+
 clp_s_bin="$(resolve_clp_s)" || exit $?
 
 if [[ ! -e "$archives_dir" ]]; then
@@ -193,11 +218,20 @@ if [[ ! -e "$archives_dir" ]]; then
 fi
 print_archive_metadata_summary "$archives_dir"
 input_archives_dir="$archives_dir"
-archives_dir="$(resolve_clp_s_archive_dir "$archives_dir")" || {
-  echo "error: could not find a clp-s archive directory under: $input_archives_dir" >&2
-  echo "Pass either the top-level plugin archive directory or its inner clp-s archive directory." >&2
-  exit 1
-}
+if [[ "$experimental" -eq 1 ]]; then
+  # clp-s --experimental expects the archives directory (the parent containing
+  # one or more archive subdirs) rather than a single archive directory, so if
+  # the caller passed an inner archive dir, step up to its parent.
+  if looks_like_clp_s_archive_dir "$archives_dir"; then
+    archives_dir="$(dirname -- "$archives_dir")"
+  fi
+else
+  archives_dir="$(resolve_clp_s_archive_dir "$archives_dir")" || {
+    echo "error: could not find a clp-s archive directory under: $input_archives_dir" >&2
+    echo "Pass either the top-level plugin archive directory or its inner clp-s archive directory." >&2
+    exit 1
+  }
+fi
 if [[ "$archives_dir" != "$input_archives_dir" ]]; then
   echo "Resolved clp-s archive dir: $archives_dir"
 fi
@@ -253,6 +287,9 @@ fi
 
 search_options=()
 
+if [[ "$experimental" -eq 1 ]]; then
+  search_options+=(--experimental)
+fi
 if [[ -n "$tge" ]]; then
   search_options+=(--tge "$tge")
 fi

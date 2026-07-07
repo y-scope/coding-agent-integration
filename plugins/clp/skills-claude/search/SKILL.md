@@ -8,6 +8,10 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql:*)"]
 
 Use only the plugin wrapper. Do not call bare `clp-s`.
 
+**See also:** the `experimental` skill for clpp search (`--experimental` with the
+`shape()`/`decompose()` KQL functions and decomposed-query projections), and the
+`dev` skill for pointing the wrapper at a locally-built `clp-s`.
+
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVES_DIR 'KQL_QUERY'
 ```

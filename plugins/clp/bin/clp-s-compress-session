@@ -40,6 +40,14 @@ Options:
   --compression-level LEVEL Pass --compression-level LEVEL to clp-s.
   --target-encoded-size N   Pass --target-encoded-size N to clp-s.
   --print-archive-stats     Pass --print-archive-stats to clp-s.
+  --experimental            Enable clp-s experimental (clpp) features. Requires
+                            --parsing-specification.
+  --parsing-specification PATH
+                            Path to a log-surgeon parsing spec. Implies
+                            --experimental. Required for clpp ingestion.
+  --clp-s-bin PATH          Use this clp-s binary for this invocation only.
+                            Overrides the CLP_S_BIN env var and the installed
+                            plugin binary; useful for pointing at a local build.
   --dry-run                 Print the planned compression operation only.
   -h, --help                Show this help.
 
@@ -47,6 +55,9 @@ Examples:
   clp-s-compress-session --selection-file /tmp/clp-s-session-selection.tsv --session-index 1
   clp-s-compress-session --agent codex --session-file ~/.codex/sessions/.../rollout.jsonl
   clp-s-compress-session --agent claude --session-file ~/.claude/projects/.../session.jsonl
+  clp-s-compress-session --session-file ~/.claude/projects/.../session.jsonl \
+    --experimental --parsing-specification /path/to/spec.txt \
+    --clp-s-bin ./build/core/clp-s
 EOF
 }
 
@@ -71,6 +82,9 @@ compression_level=""
 target_encoded_size=""
 print_archive_stats=0
 dry_run=0
+experimental=0
+parsing_specification=""
+clp_s_bin_override=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -154,6 +168,23 @@ while [[ $# -gt 0 ]]; do
     --print-archive-stats)
       print_archive_stats=1
       shift
+      ;;
+    --experimental)
+      experimental=1
+      shift
+      ;;
+    --parsing-specification)
+      [[ $# -ge 2 ]] || { echo "error: $1 requires a value" >&2; exit 2; }
+      parsing_specification="$2"
+      # A parsing spec is only meaningful under experimental mode; imply it so
+      # the user only needs to pass --parsing-specification.
+      experimental=1
+      shift 2
+      ;;
+    --clp-s-bin)
+      [[ $# -ge 2 ]] || { echo "error: --clp-s-bin requires a value" >&2; exit 2; }
+      clp_s_bin_override="$2"
+      shift 2
       ;;
     --dry-run)
       dry_run=1
@@ -406,9 +437,26 @@ while IFS= read -r path; do
 done < "$file_list"
 session_sha256="$(sha256_file "$session_file")"
 
+if [[ "$experimental" -eq 1 && -z "$parsing_specification" ]]; then
+  echo "error: --experimental compression requires --parsing-specification PATH" >&2
+  exit 2
+fi
+
+# Per-invocation binary override composes with the CLP_S_BIN env var already
+# honored by resolve_clp_s; the flag wins for this invocation only.
+if [[ -n "$clp_s_bin_override" ]]; then
+  export CLP_S_BIN="$clp_s_bin_override"
+fi
+
 clp_s_bin="$(resolve_clp_s)" || exit $?
 
 cmd=("$clp_s_bin" c)
+if [[ -n "$parsing_specification" ]]; then
+  cmd+=(--parsing-specification "$parsing_specification")
+fi
+if [[ "$experimental" -eq 1 ]]; then
+  cmd+=(--experimental)
+fi
 if [[ -n "$timestamp_key" ]]; then
   cmd+=(--timestamp-key "$timestamp_key")
 fi
