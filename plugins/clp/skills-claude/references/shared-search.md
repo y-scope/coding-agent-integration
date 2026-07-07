@@ -62,8 +62,8 @@ across sessions. Combine with regular KQL using `AND`.
 ## Tips
 
 - Project only the columns you need to limit data returned: when you know which
-  fields matter, pass `--project COLUMN` (repeatable), e.g.
-  `--project timestamp --project level`. Omit it only when you need the full
+  fields matter, pass `--projection COLUMNS` (comma-separated; repeatable), e.g.
+  `--projection timestamp,level`. Omit it only when you need the full
   record.
 - Count matches without fetching full records:
   `"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'KQL' | grep -c '^{`

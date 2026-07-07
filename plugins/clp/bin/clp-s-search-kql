@@ -17,8 +17,8 @@ Allowed search controls:
   --tle TS                 Find records with UNIX epoch timestamp <= TS ms.
   -i, --ignore-case        Ignore case distinctions.
   --archive-id ID          Limit search to one archive ID.
-  --project COLUMN         Project one column. May be repeated.
   --projection COLUMNS     Project comma-separated columns, e.g. level,message.
+                           May be repeated.
   --semantic-endpoint URL  Embedding service URL for semantic search.
   --semantic-top-k K       Return up to K nearest logtypes (default 5).
   --semantic-threshold T   Minimum similarity floor 0.0-1.0 (default 0.3).
@@ -39,10 +39,10 @@ Examples:
   clp-s-search-kql /tmp/archive 'level:error'
   clp-s-search-kql /tmp/archive 'message.content.name:Bash'
   clp-s-search-kql /tmp/archive 'semantic("slow database queries")'
-  clp-s-search-kql --project timestamp --project type --project sessionId /tmp/archive 'message.content.name:Bash'
+  clp-s-search-kql --projection timestamp,type,sessionId /tmp/archive 'message.content.name:Bash'
   clp-s-search-kql --experimental /tmp/archive 'shape(message): "*error*"'
-  clp-s-search-kql --experimental --project 'shape(message)' /tmp/archive '*'
-  clp-s-search-kql --experimental --project 'decompose(message)' /tmp/archive '*'
+  clp-s-search-kql --experimental --projection 'shape(message)' /tmp/archive '*'
+  clp-s-search-kql --experimental --projection 'decompose(message)' /tmp/archive '*'
 
 This search wrapper intentionally does not expose clp-s output handlers,
 reducers, results-cache writes, decompression, or arbitrary clp-s option
@@ -142,11 +142,6 @@ while [[ $# -gt 0 ]]; do
     --archive-id)
       [[ $# -ge 2 ]] || { echo "error: --archive-id requires a value" >&2; exit 2; }
       archive_id="$2"
-      shift 2
-      ;;
-    --project)
-      [[ $# -ge 2 ]] || { echo "error: --project requires a value" >&2; exit 2; }
-      projections+=("$2")
       shift 2
       ;;
     --projection)

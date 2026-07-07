@@ -23,7 +23,7 @@ search a clpp archive. Otherwise use the stable `search` skill.
   the `--experimental` flag, `--clp-s-bin` note.
 - `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/shared-search.md` — the common
   KQL syntax and tips (wildcards, time-range flags, array dot-notation, semantic
-  search, `--project`, counting with `grep -c '^{`).
+  search, `--projection`, counting with `grep -c '^{`).
 
 ## Search
 
@@ -39,9 +39,9 @@ Project the shape string or the decomposed view of a column:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental \
-  --project 'shape(message)' /tmp/archive '*'
+  --projection 'shape(message)' /tmp/archive '*'
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental \
-  --project 'decompose(message)' /tmp/archive '*'
+  --projection 'decompose(message)' /tmp/archive '*'
 ```
 
 Combine experimental filters with stable KQL and time-range flags:

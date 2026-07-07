@@ -30,7 +30,7 @@ The full KQL syntax and tips live in:
 
 That covers: the KQL table, the wildcard-substring rule (literals match whole
 values; substrings need explicit `*`), the time-range-flag gotcha, array
-dot-notation, semantic search, `--project`, and counting with `grep -c '^{`.
+dot-notation, semantic search, `--projection`, and counting with `grep -c '^{`.
 
 ## Quick start
 

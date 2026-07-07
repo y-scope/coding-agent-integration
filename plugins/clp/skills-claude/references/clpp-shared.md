@@ -73,14 +73,14 @@ Project the shape string of a column:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental \
-  --project 'shape(message)' /tmp/archive '*'
+  --projection 'shape(message)' /tmp/archive '*'
 ```
 
 Project the decomposed view of a column (shape + extracted leaf values):
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental \
-  --project 'decompose(message)' /tmp/archive '*'
+  --projection 'decompose(message)' /tmp/archive '*'
 ```
 
 Count matches without fetching full records:

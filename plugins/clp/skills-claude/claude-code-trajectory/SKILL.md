@@ -59,8 +59,9 @@ skill instead.
    - Use compound KQL instead of multiple queries: field1:A AND field2:B
    - Count with: clp-s-search-kql ARCHIVE 'KQL' | grep -c '^{'
    - Project aggressively — fetch only the fields you need, not full records: pass
-     `--project` for each required column (e.g. `--project timestamp --project durationMs`).
-     Only omit --project when you genuinely need the whole record.
+     `--projection COLUMNS` (comma-separated) for the required columns (e.g.
+     `--projection timestamp,durationMs`).
+     Only omit --projection when you genuinely need the whole record.
    - Zoom into time windows: --tge EPOCH_MS --tle EPOCH_MS (NOT timestamp KQL)
    - Use semantic("query") when field names are uncertain
 
@@ -158,7 +159,7 @@ or Python.
 large; fetch only the columns your analysis uses.
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
-  --project timestamp --project durationMs \
+  --projection timestamp,durationMs \
   ARCHIVE 'subtype:turn_duration'
 ```
 
