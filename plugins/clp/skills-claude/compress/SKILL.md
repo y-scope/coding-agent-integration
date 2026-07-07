@@ -1,83 +1,45 @@
 ---
 name: compress
-description: Compress one selected session JSONL file into a searchable CLP archive directory.
+description: Compress one selected session JSONL file into a searchable CLP archive directory (stable, non-experimental clp-s). Use clpp-compress for clp+/clpp/clp-s --experimental compression with a parsing spec.
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions:*)"]
 ---
 
 # Compress
 
+Compress one selected session JSONL file into a searchable CLP archive using the
+**stable** (non-experimental) clp-s path.
+
 Use only the plugin wrappers. Do not call bare `clp-s` or expose arbitrary CLP
 commands/options.
 
-**See also:** the `experimental` skill for clpp compression (`--experimental`
-`--parsing-specification`, decomposed queries / log shapes), and the `dev` skill
-for pointing the wrapper at a locally-built `clp-s`.
+**When to use this skill:** plain (non-experimental) compression. If the user
+mentions clp+, clpp, or clp-s experimental — or wants a parsing spec, log shapes,
+or decomposed queries — use the `clpp-compress` skill instead.
 
-## Rules
+**See also:** `clpp-compress` for the experimental path, and `dev` for pointing
+the wrapper at a locally-built `clp-s`.
 
-- Compress exactly one selected session JSONL file.
-- Do not compress full Claude/Codex trees.
-- Do not pass `--single-file-archive`; search uses regular archive directories.
-- Always use `--timestamp-key timestamp`.
-- Session roots: Claude `~/.claude/projects`, Codex `${CODEX_HOME:-~/.codex}/sessions`.
-- Default archive root: `${TMPDIR:-/tmp}/yscope-clp-archives`.
-- Ask about archive location only if the user wants persistent storage or a change.
+## Read the shared reference
 
-## Workflow
+The full compress workflow and rules live in:
 
-1. List sessions, newest first:
+`${CLAUDE_PLUGIN_ROOT}/skills-claude/references/shared-compress.md`
 
-   ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions"
-   ```
+That covers: list sessions → choose an `IDX` → compress → report stats, the
+session-root and archive-root defaults, stable compress options, and the
+useful commands (`--show-archives-root`, `--set-archives-root`, `--dry-run`).
 
-   Use `--agent claude` or `--agent codex` if the user asks for one agent.
-
-2. Present choices with these columns: `IDX`, `AGENT`, modified timestamp,
-   raw bytes, human size, session name, project/cwd, session ID.
-
-3. After the user chooses an `IDX`, compress using the printed manifest:
-
-   ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" \
-     --selection-file /tmp/clp-s-session-selection-...tsv \
-     --session-index <IDX> \
-     --timestamp-key timestamp
-   ```
-
-4. After compression, always report:
-
-   - `Raw input bytes`
-   - `Archive bytes`
-   - `Compression ratio`
-   - `File size reduction`
-   - `Archives dir`
-   - `Selected session`
-   - `Archive metadata`
-
-Use the printed top-level `Archives dir` for search/decompress. Wrappers resolve
-the inner `clp-s` archive directory automatically.
-
-## Useful Commands
-
-Show archive root:
+## Quick start
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" --show-archives-root
-```
-
-Set persistent archive root:
-
-```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" --set-archives-root ~/clp-s-archives
-```
-
-Dry run:
-
-```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions"
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" \
-  --selection-file /tmp/clp-s-session-selection.tsv \
-  --session-index 1 \
-  --timestamp-key timestamp \
-  --dry-run
+  --selection-file /tmp/clp-s-session-selection-...tsv \
+  --session-index <IDX> \
+  --timestamp-key timestamp
 ```
+
+After compression, report: raw input bytes, archive bytes, compression ratio,
+file size reduction, archives dir, selected session, archive metadata. Use the
+printed top-level `Archives dir` for search/decompress — wrappers resolve the
+inner `clp-s` archive directory automatically.

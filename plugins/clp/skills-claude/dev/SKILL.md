@@ -12,11 +12,11 @@ Developer workflow for two related tasks:
 1. **Build/test/lint/format a local CLP source tree** (e.g. the `clp` / `clp_s` /
    `clpp` C++ code, plus Rust components).
 2. **Point the plugin wrappers at a locally-built `clp-s` binary** so compress/
-   search/experimental run against the local build instead of the installed
-   plugin binary — primarily for testing in-flight clpp-branch work.
+   search/clpp-compress/clpp-search run against the local build instead of the
+   installed plugin binary — primarily for testing in-flight clpp-branch work.
 
 This skill is for CLP contributors. For end-user compress/search, use the
-`compress`, `search`, and `experimental` skills instead.
+`compress`, `search`, `clpp-compress`, and `clpp-search` skills instead.
 
 ## Point the wrappers at a local binary
 
