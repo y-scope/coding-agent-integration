@@ -41,9 +41,13 @@ Notes:
   session-appropriate spec when compressing sessions.
 - All stable compress options (see `shared-compress.md`) still apply. The
   wrapper records the full experimental command in the archive metadata JSON.
-- Use `--clp-s-bin PATH` (or `CLP_S_BIN`) to point at a local build that may be
-  ahead of the installed binary — needed for `shape()`/`decompose()` projections
-  until the bundled core binary is republished from the merged clpp tree.
+- On the **installed** core binary, `shape()` as a **filter** works, but
+  `shape()`/`decompose()` **projections** are silently dropped — the output has
+  no `message.shape` / `message.decompose` field (just the other projected
+  columns, or `{}`). To get decomposed/shape *projection* output, point at a
+  local clpp build with `--clp-s-bin PATH` (or `CLP_S_BIN`) until the bundled
+  binary is republished from the merged clpp tree. Do this only when projection
+  output is actually required — it is not the default workflow.
 
 After compression, report the same stats as the stable `compress` skill (raw
 input bytes, archive bytes, compression ratio, file size reduction, archives dir,
