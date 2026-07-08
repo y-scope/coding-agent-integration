@@ -22,6 +22,13 @@ Rules:
   conversion, search, or arbitrary `clp-s` passthrough.
 - Report the printed `Output dir`.
 
+clpp (clp+ / `--experimental`) archives are decompressed the same way: the
+wrapper auto-detects them (by their `parsing_specification` / `parent_rule_shapes`
+marker files) and passes `--experimental` for you — no extra flags needed. clpp
+archives require `--experimental` to open, so this auto-detection is required;
+pass `--no-experimental` only to force stable mode. See `clpp-shared.md` for
+clpp background.
+
 Examples:
 
 ```bash

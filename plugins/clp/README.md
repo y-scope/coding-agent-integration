@@ -129,7 +129,7 @@ timestamp key, SHA-256, compression stats, command, and resolved inner archive.
 ```
 
 Allowed controls: `--tge`, `--tle`, `--ignore-case`, `--archive-id`,
-`--project`, `--projection`, `--semantic-endpoint`, `--semantic-top-k`,
+`--projection`, `--semantic-endpoint`, `--semantic-top-k`,
 `--semantic-threshold`, `--embedding-batch-size`.
 
 Use single quotes around KQL in shell commands. Numeric comparisons use infix
