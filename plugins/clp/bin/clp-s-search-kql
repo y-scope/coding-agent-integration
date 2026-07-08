@@ -213,20 +213,16 @@ if [[ ! -e "$archives_dir" ]]; then
 fi
 print_archive_metadata_summary "$archives_dir"
 input_archives_dir="$archives_dir"
-if [[ "$experimental" -eq 1 ]]; then
-  # clp-s --experimental expects the archives directory (the parent containing
-  # one or more archive subdirs) rather than a single archive directory, so if
-  # the caller passed an inner archive dir, step up to its parent.
-  if looks_like_clp_s_archive_dir "$archives_dir"; then
-    archives_dir="$(dirname -- "$archives_dir")"
-  fi
-else
-  archives_dir="$(resolve_clp_s_archive_dir "$archives_dir")" || {
-    echo "error: could not find a clp-s archive directory under: $input_archives_dir" >&2
-    echo "Pass either the top-level plugin archive directory or its inner clp-s archive directory." >&2
-    exit 1
-  }
-fi
+# Both stable and --experimental (clpp) paths pass the inner clp-s archive directory
+# to clp-s. clpp archives require --experimental to open, and the binary recognizes a
+# self-contained inner archive dir via is_multi_file_archive, so resolving to the
+# inner dir (rather than stepping up to the parent) avoids colliding with the
+# .yscope-clp-archive.json sidecar the compress wrapper writes next to it.
+archives_dir="$(resolve_clp_s_archive_dir "$archives_dir")" || {
+  echo "error: could not find a clp-s archive directory under: $input_archives_dir" >&2
+  echo "Pass either the top-level plugin archive directory or its inner clp-s archive directory." >&2
+  exit 1
+}
 if [[ "$archives_dir" != "$input_archives_dir" ]]; then
   echo "Resolved clp-s archive dir: $archives_dir"
 fi

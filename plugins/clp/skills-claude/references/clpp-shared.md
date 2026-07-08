@@ -41,13 +41,6 @@ Notes:
   session-appropriate spec when compressing sessions.
 - All stable compress options (see `shared-compress.md`) still apply. The
   wrapper records the full experimental command in the archive metadata JSON.
-- On the **installed** core binary, `shape()` as a **filter** works, but
-  `shape()`/`decompose()` **projections** are silently dropped — the output has
-  no `message.shape` / `message.decompose` field (just the other projected
-  columns, or `{}`). To get decomposed/shape *projection* output, point at a
-  local clpp build with `--clp-s-bin PATH` (or `CLP_S_BIN`) until the bundled
-  binary is republished from the merged clpp tree. Do this only when projection
-  output is actually required — it is not the default workflow.
 
 After compression, report the same stats as the stable `compress` skill (raw
 input bytes, archive bytes, compression ratio, file size reduction, archives dir,
@@ -102,6 +95,21 @@ Projected `shape()` and `decompose()` results nest under the column name:
 logtype template (static text + `%var%` placeholders); the leaf arrays are the
 variable values bound to each placeholder for that row.
 
+## Decompress (clpp)
+
+clpp archives require `--experimental` to open, but you do **not** pass it
+yourself: the `clp-s-decompress` wrapper auto-detects clpp archives (by their
+`parsing_specification` / `parent_rule_shapes` marker files) and adds
+`--experimental` for you. So clpp archives are decompressed exactly like stable
+archives:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress" /tmp/archive /tmp/archive-decompressed
+```
+
+Pass `--no-experimental` only if you need to force stable mode on an archive the
+wrapper misidentifies. See the `decompress` skill.
+
 ## Tips
 
 - Combine experimental filters with stable KQL and time-range flags:
@@ -109,8 +117,6 @@ variable values bound to each placeholder for that row.
   windows. Time ranges are flags, never KQL (same gotcha as `shared-search.md`).
 - Use `--clp-s-bin PATH` (or the `CLP_S_BIN` env var) to run against a local
   clpp-branch build that may be ahead of the installed binary.
-- clpp archives require `--experimental` to open. The `clp-s-decompress` wrapper
-  does not currently pass it, so decompressing a clpp archive is not yet
-  supported via the wrapper — decompress stable archives with the `decompress`
-  skill, and handle clpp decompression via a local build until the upstream
-  path is fixed.
+- clpp archives require `--experimental` to open; the search and decompress
+  wrappers handle this for you (search via `--experimental`, decompress via
+  auto-detection).

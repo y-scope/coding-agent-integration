@@ -23,7 +23,7 @@ compress with a parsing spec. Otherwise use the stable `compress` skill.
 
 - `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/clpp-shared.md` — the clpp
   additions (the `--experimental` / `--parsing-specification` pairing, spec-matching
-  rules, `--clp-s-bin` note, decompress caveat).
+  rules, `--clp-s-bin` note, clpp decompression).
 - `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/shared-compress.md` — the common
   compress workflow: list sessions, choose an `IDX`, compress, report stats.
 
