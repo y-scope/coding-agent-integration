@@ -295,9 +295,18 @@ if [[ -n "$archive_id" ]]; then
 fi
 if [[ "$semantic_active" -eq 1 ]]; then
   search_options+=(--semantic-endpoint "$semantic_endpoint")
+  # Only pass the local-cache flags when this clp-s binary supports them.
+  # Older builds (e.g. clp-core 0.12.1) lack --semantic-cache-dir and abort
+  # with "Unknown OUTPUT_HANDLER: <archive>" when it is passed, which breaks
+  # semantic search entirely. Probe the binary's --help and fall back to
+  # remote-only /v1/similarity (no local cache) when the flag is unsupported.
   if [[ "$semantic_cache_dir" != "none" ]]; then
-    search_options+=(--semantic-cache-dir "$semantic_cache_dir")
-    search_options+=(--semantic-cache-cold-capacity "$semantic_cache_cold_capacity")
+    if grep -q -- '--semantic-cache-dir' <("$clp_s_bin" s --help 2>&1); then
+      search_options+=(--semantic-cache-dir "$semantic_cache_dir")
+      search_options+=(--semantic-cache-cold-capacity "$semantic_cache_cold_capacity")
+    else
+      echo "warning: clp-s does not support --semantic-cache-dir; using remote-only semantic search (no local cache)" >&2
+    fi
   fi
 fi
 if [[ -n "$semantic_top_k" ]]; then

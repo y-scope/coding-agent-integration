@@ -405,10 +405,20 @@ if [[ "$structurize" -eq 1 ]]; then
   fi
 fi
 
-# Convert null-delimited file list to newline-delimited for wc/calculation
-# and compute total bytes
+# clp-s -f expects a NEWLINE-delimited file list. The list above is
+# null-delimited (built with `find -print0` / `printf '%s\0'` to survive
+# filenames containing spaces). Convert it to newline-delimited here so
+# clp-s ingests EVERY file — otherwise it reads only the first null-terminated
+# entry and silently drops the rest of the folder. (Log filenames do not
+# contain newlines, so this conversion is safe.)
+nl_file_list="$(mktemp "${TMPDIR:-/tmp}/clp-s-files.XXXXXX")"
+tr '\0' '\n' < "$file_list" > "$nl_file_list"
+rm -f "$file_list"
+file_list="$nl_file_list"
+
+# Compute total bytes
 total_bytes=0
-while IFS= read -r -d '' path; do
+while IFS= read -r path; do
   size="$(wc -c < "$path" | tr -d '[:space:]')"
   total_bytes=$((total_bytes + size))
 done < "$file_list"
