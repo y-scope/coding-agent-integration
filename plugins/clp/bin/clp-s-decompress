@@ -18,7 +18,17 @@ Allowed controls:
   --target-ordered-chunk-size SIZE   Chunk ordered output files by size.
   --print-ordered-chunk-stats        Print ordered chunk statistics.
   --dry-run                          Print the planned decompression only.
+  --experimental                     Force clp-s experimental (clpp) mode. clpp
+                                     archives require it; auto-detected by default.
+  --no-experimental                  Force stable mode even for a clpp archive.
+  --clp-s-bin PATH                   Use this clp-s binary for this invocation only.
+                                     Overrides the CLP_S_BIN env var and the installed
+                                     plugin binary; useful for pointing at a local build.
   -h, --help                         Show this help.
+
+clpp (clp+ / --experimental) archives are decompressed the same way as stable
+archives: the wrapper auto-detects them (by the presence of a parsing_specification
+or parent_rule_shapes file in the archive) and passes --experimental for you.
 
 This wrapper intentionally does not expose network/S3 auth, MongoDB metadata
 output, or arbitrary clp-s option passthrough.
@@ -30,6 +40,10 @@ ordered=0
 target_ordered_chunk_size=""
 print_ordered_chunk_stats=0
 dry_run=0
+# experimental: 1 = force on, 0 = auto (detect clpp archives), -1 = force off
+experimental=0
+experimental_auto=1
+clp_s_bin_override=""
 archives_dir=""
 output_dir=""
 
@@ -56,6 +70,21 @@ while [[ $# -gt 0 ]]; do
     --dry-run)
       dry_run=1
       shift
+      ;;
+    --experimental)
+      experimental=1
+      experimental_auto=0
+      shift
+      ;;
+    --no-experimental)
+      experimental=-1
+      experimental_auto=0
+      shift
+      ;;
+    --clp-s-bin)
+      [[ $# -ge 2 ]] || { echo "error: --clp-s-bin requires a value" >&2; exit 2; }
+      clp_s_bin_override="$2"
+      shift 2
       ;;
     --auth|--mongodb-uri|--mongodb-collection)
       echo "error: unsupported decompression option: $1" >&2
@@ -106,6 +135,17 @@ archives_dir="$(resolve_clp_s_archive_dir "$archives_dir")" || {
   exit 1
 }
 
+# Auto-detect clpp (experimental) archives by their clpp-only marker files and
+# enable --experimental unless the caller forced stable mode (--no-experimental).
+# clpp archives require --experimental to decompress.
+if [[ "$experimental_auto" -eq 1 ]]; then
+  if [[ -f "$archives_dir/parsing_specification" || -f "$archives_dir/parent_rule_shapes" ]]
+  then
+    experimental=1
+    echo "Auto-detected clpp (experimental) archive; enabling --experimental." >&2
+  fi
+fi
+
 output_parent="$(dirname -- "$output_dir")"
 if [[ ! -d "$output_parent" ]]; then
   echo "error: output parent directory does not exist: $output_parent" >&2
@@ -126,9 +166,17 @@ if [[ "$print_ordered_chunk_stats" -eq 1 && "$ordered" -ne 1 ]]; then
   exit 2
 fi
 
+# Per-invocation binary override composes with the CLP_S_BIN env var already
+# honored by resolve_clp_s; the flag wins for this invocation only.
+if [[ -n "$clp_s_bin_override" ]]; then
+  export CLP_S_BIN="$clp_s_bin_override"
+fi
 clp_s_bin="$(resolve_clp_s)" || exit $?
 
 cmd=("$clp_s_bin" x)
+if [[ "$experimental" -eq 1 ]]; then
+  cmd+=(--experimental)
+fi
 if [[ "$ordered" -eq 1 ]]; then
   cmd+=(--ordered)
 fi
