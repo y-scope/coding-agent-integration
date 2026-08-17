@@ -10,3 +10,4 @@ plugins/clp/.clp-core/
 
 # Common local/runtime noise.
 .DS_Store
+plugins/clp/bin/clp-s
