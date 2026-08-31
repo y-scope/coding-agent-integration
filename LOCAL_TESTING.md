@@ -123,6 +123,62 @@ CLP_S_BIN="$(command -v clp-s)" \
 Claude and Codex share this wrapper directory. Agent-specific tuning lives in
 `plugins/clp/skills-claude/` and `plugins/clp/skills-codex/`.
 
+## Folder + Logtype Smoke Test
+
+Covers `clp-s-compress-folder --structurize` and the `logtype-insights` flow.
+Point `LOG_DIR` at any folder of plain-text logs.
+
+```bash
+LOG_DIR=/path/to/logs
+FOLDER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/yscope-clp-folder-smoke.XXXXXX")"
+
+./plugins/clp/bin/clp-s-compress-folder \
+  --folder "$LOG_DIR" \
+  --structurize \
+  --archives-root "$FOLDER_DIR"
+```
+
+Expected output includes `Structurize: converted N file(s)`, the compression
+stats, `Archives dir`, and `Archive metadata`.
+
+Discover the schema and dump the logtype dictionary from the printed
+`Archives dir`:
+
+```bash
+ARCHIVE="$(ls -d "$FOLDER_DIR"/folder-*)"
+
+# One full record reveals the field names (structurize yields
+# timestamp/logger/level/message):
+./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" '*' 2>/dev/null | grep '^{' | head -1
+
+# The wrapper prints metadata header lines to stdout, so filter with grep '^{'
+# before jq:
+./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" 'stats.logtypes' 2>/dev/null \
+  | grep '^{' > /tmp/smoke-logtypes.ndjson
+jq -s 'length' /tmp/smoke-logtypes.ndjson
+```
+
+Exercise the classification cache. The first `diff` reports `NEW`; once a
+classification is stored the same input reports `UPTODATE`, and an archive that
+has grown reports `GROWTH` with only the newly-added templates listed:
+
+```bash
+CLP_LOGTYPE_CACHE_DIR=/tmp/smoke-lt-cache \
+  ./plugins/clp/bin/logtype-cache count --logtypes-file /tmp/smoke-logtypes.ndjson
+CLP_LOGTYPE_CACHE_DIR=/tmp/smoke-lt-cache \
+  ./plugins/clp/bin/logtype-cache diff --logtypes-file /tmp/smoke-logtypes.ndjson | head -1
+```
+
+Note that the message field is a CLP-string: `message:term` returns 0 by
+design. Match message content by projecting the field and grepping it, and use
+the scalar fields for KQL:
+
+```bash
+./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" 'level:WARNING' 2>/dev/null | grep -c '^{'
+./plugins/clp/bin/clp-s-search-kql --projection message "$ARCHIVE" '*' 2>/dev/null \
+  | grep '^{' | jq -r '.message' | grep -c 'SomeStaticText'
+```
+
 ## Manual Local Marketplace Install
 
 These commands modify local Claude/Codex plugin configuration but do not

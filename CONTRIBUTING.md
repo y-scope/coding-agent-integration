@@ -24,11 +24,15 @@ plugins/clp/.codex-plugin/plugin.json
     release workflow runs `scripts/validate-codex-plugin.sh` which
     enforces this.
 plugins/clp/bin/
-    Restricted-passthrough bash wrappers (clp-s-*) and shared lib/clp-common.sh.
+    Restricted-passthrough bash wrappers (clp-s-*) and shared lib/clp-common.sh,
+    plus local helpers that are not clp-s passthroughs (structurize.py,
+    logtype-cache).
 plugins/clp/skills-claude/
-    Claude Code skills: compress, search, decompress, claude-code-trajectory.
+    Claude Code skills: compress, compress-folder, search, logtype-insights,
+    decompress, claude-code-trajectory.
 plugins/clp/skills-codex/
-    Codex skills: compress, search, decompress, codex-trajectory.
+    Codex skills: compress, compress-folder, search, logtype-insights,
+    decompress, codex-trajectory.
 
 scripts/validate-codex-plugin.sh
     Validates the Codex manifest and SKILL.md frontmatter.
