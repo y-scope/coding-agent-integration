@@ -22,6 +22,8 @@ Install or have available:
 - `bash`
 - `jq`
 - `shellcheck`
+- `python3` — required by `clp-s-compress-folder --structurize`, which runs
+  each input file through `bin/structurize.py`.
 - `clp-s` on `PATH` for wrapper compression/search. If `clp-s` is not on
   `PATH`, set `CLP_S_BIN=/path/to/clp-s` to point the wrappers at a
   specific binary.
@@ -50,6 +52,7 @@ done
 shellcheck \
   plugins/clp/bin/clp-s-list-sessions \
   plugins/clp/bin/clp-s-compress-session \
+  plugins/clp/bin/clp-s-compress-folder \
   plugins/clp/bin/clp-s-search-kql \
   plugins/clp/bin/clp-s-decompress \
   plugins/clp/bin/lib/clp-common.sh
@@ -145,7 +148,8 @@ Discover the schema and dump the logtype dictionary from the printed
 `Archives dir`:
 
 ```bash
-ARCHIVE="$(ls -d "$FOLDER_DIR"/folder-*)"
+# Newest archive dir, so re-running the smoke test does not break the glob:
+ARCHIVE="$(ls -dt "$FOLDER_DIR"/folder-* | head -1)"
 
 # One full record reveals the field names (structurize yields
 # timestamp/logger/level/message):
@@ -158,15 +162,28 @@ ARCHIVE="$(ls -d "$FOLDER_DIR"/folder-*)"
 jq -s 'length' /tmp/smoke-logtypes.ndjson
 ```
 
-Exercise the classification cache. The first `diff` reports `NEW`; once a
-classification is stored the same input reports `UPTODATE`, and an archive that
-has grown reports `GROWTH` with only the newly-added templates listed:
+Exercise the classification cache. On a fresh cache dir `diff` reports `NEW`
+and lists every template. Storing a classification under that key flips the
+same input to `UPTODATE`; an archive that has since grown reports `GROWTH` and
+lists only the newly-added templates:
 
 ```bash
-CLP_LOGTYPE_CACHE_DIR=/tmp/smoke-lt-cache \
-  ./plugins/clp/bin/logtype-cache count --logtypes-file /tmp/smoke-logtypes.ndjson
-CLP_LOGTYPE_CACHE_DIR=/tmp/smoke-lt-cache \
-  ./plugins/clp/bin/logtype-cache diff --logtypes-file /tmp/smoke-logtypes.ndjson | head -1
+export CLP_LOGTYPE_CACHE_DIR=/tmp/smoke-lt-cache
+LC=./plugins/clp/bin/logtype-cache
+
+"$LC" count --logtypes-file /tmp/smoke-logtypes.ndjson
+"$LC" diff  --logtypes-file /tmp/smoke-logtypes.ndjson | head -1   # -> NEW
+
+# Store a minimal classification for this template set, then re-probe.
+KEY="$("$LC" key --logtypes-file /tmp/smoke-logtypes.ndjson)"
+jq -s '{schema:{message:"message"},
+        taxonomy:[{category:"other",description:"smoke"}],
+        templates:[.[]|{logtype:.logtype,category:"other"}],
+        query_plan:[{label:"All",kql:"*",method:"count"}]}' \
+  /tmp/smoke-logtypes.ndjson | "$LC" put-merged --key "$KEY"
+
+"$LC" diff --logtypes-file /tmp/smoke-logtypes.ndjson | head -1   # -> UPTODATE
+"$LC" list
 ```
 
 Note that the message field is a CLP-string: `message:term` returns 0 by

@@ -358,7 +358,12 @@ if [[ "$structurize" -eq 1 ]]; then
 
   while IFS= read -r -d '' src_path; do
     src_name="$(basename "$src_path")"
-    dst_path="${structurize_tmpdir}/${src_name}.json"
+    # Mirror the source tree under the temp dir. Using only the basename would
+    # collapse same-named files from different subdirectories (recursion is the
+    # default), silently dropping all but one and duplicating it in the archive.
+    rel_path="${src_path#"${original_folder_real}"/}"
+    dst_path="${structurize_tmpdir}/${rel_path}.json"
+    mkdir -p "$(dirname -- "$dst_path")"
     if python3 "$structurize_script" "$src_path" "$dst_path" >/dev/null 2>&1; then
       if [[ -s "$dst_path" ]]; then
         printf '%s\0' "$dst_path" >> "$new_file_list"

@@ -29,7 +29,8 @@ plugins/clp/bin/
     logtype-cache).
 plugins/clp/skills-claude/
     Claude Code skills: compress, compress-folder, search, logtype-insights,
-    decompress, claude-code-trajectory.
+    decompress, claude-code-trajectory, clpp-compress, clpp-search, dev,
+    plus references/ (shared snippets included by the skills).
 plugins/clp/skills-codex/
     Codex skills: compress, compress-folder, search, logtype-insights,
     decompress, codex-trajectory.

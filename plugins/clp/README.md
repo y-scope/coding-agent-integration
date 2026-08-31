@@ -151,10 +151,26 @@ Defaults:
 - extensions: `log,jsonl,json,txt,ndjson,out,err` (override with `--extensions`,
   or use `--extensions '*'` to include every regular file).
 - recursive: yes (use `--no-recursive` for top-level only).
+- structurize: off (pass `--structurize` for unstructured text logs — see below).
 - timestamp key: none (pass `--timestamp-key KEY` if your logs have a known
   timestamp field; required for time-range search).
-- archive root: `${TMPDIR:-/tmp}/yscope-clp-archives`. Ask only when the user
-  wants persistent storage or a different root.
+- archive root: `${TMPDIR:-/tmp}/yscope-clp-archives` (override per-run with
+  `--archives-root DIR`). Ask only when the user wants persistent storage or a
+  different root.
+
+### Unstructured text logs
+
+Plain-text logs (interleaved timestamp, logger, level, message) have no field
+structure for `clp-s` to index. `--structurize` runs each file through
+`bin/structurize.py` first, producing JSONL with `timestamp/logger/level/message`
+and setting `--timestamp-key timestamp` automatically:
+
+```bash
+./plugins/clp/bin/clp-s-compress-folder --folder /var/log/vllm --structurize
+```
+
+Files that cannot be parsed are skipped with a warning. Do not use it on logs
+that are already JSON/JSONL/NDJSON.
 
 After compression, report:
 
@@ -226,6 +242,12 @@ shared across all sessions and archives. Disable with `--semantic-cache-dir
 none` or `CLP_SEMANTIC_CACHE_DIR=none`; resize with
 `--semantic-cache-cold-capacity N` or `CLP_SEMANTIC_CACHE_COLD_CAPACITY`.
 
+The local cache requires a `clp-s` that supports `--semantic-cache-dir`. Older
+builds (e.g. clp-core 0.12.1) do not, and abort with `Unknown OUTPUT_HANDLER`
+if the flag is passed. The wrapper probes `clp-s s --help` and, when the flag
+is unsupported, prints a warning and falls back to remote-only scoring — the
+search still works, without the local cache.
+
 ## Decompress
 
 ```bash
@@ -241,7 +263,10 @@ dictionary** — the complete vocabulary of distinct message templates, with
 variables replaced by `<*>`:
 
 ```bash
-./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.logtypes' > /tmp/logtypes.ndjson
+# The wrapper prints archive-metadata header lines to stdout, so filter to JSON
+# records with grep '^{' before jq — jq errors on the header otherwise.
+./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.logtypes' 2>/dev/null \
+  | grep '^{' > /tmp/logtypes.ndjson
 jq -s 'length' /tmp/logtypes.ndjson
 ```
 
@@ -292,7 +317,9 @@ unioned; `grown_from` records the lineage), so a growing archive only ever
 costs the classification of its newly-added templates.
 
 Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with
-`--cache-dir` or `$CLP_LOGTYPE_CACHE_DIR`.
+`$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands
+that read or write the cache (`diff`, `get`, `put`, `put-merged`, `list`,
+`show`). `count` and `key` only hash the input file and do not accept it.
 
 ## Query Starters
 

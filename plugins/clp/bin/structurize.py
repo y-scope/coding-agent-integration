@@ -1,6 +1,7 @@
 import json
 import re
 import os
+import sys
 import datetime
 
 def convert_vllm_log_to_json(input_filepath, output_filepath):
@@ -41,7 +42,7 @@ def convert_vllm_log_to_json(input_filepath, output_filepath):
     )
 
     structured_logs = []
-    seen_timestamps = set()
+    preamble = []
 
     # Raw vLLM engine timestamps have no year ("06-15 03:52:34"), which CLP
     # cannot parse. Infer a year: prefer a leading ISO timestamp on the line,
@@ -70,13 +71,6 @@ def convert_vllm_log_to_json(input_filepath, output_filepath):
             if outer_match:
                 log_entry = outer_match.groupdict()
                 raw_message = log_entry.pop('message')
-                timestamp = log_entry['timestamp']
-
-                # Optional: If you want to completely skip new lines that have the exact
-                # same wrapper timestamp as a previous line, uncomment the following block:
-                # if timestamp in seen_timestamps:
-                #     continue
-                # seen_timestamps.add(timestamp)
 
                 # Check for duplicate internal timestamps inside the message
                 inner_match = inner_timestamp_pattern.match(raw_message)
@@ -108,6 +102,22 @@ def convert_vllm_log_to_json(input_filepath, output_filepath):
                     # Handle multi-line strings (like large JSON dumps) by appending to the previous message
                     if structured_logs:
                         structured_logs[-1]['message'] += '\n' + line
+                    else:
+                        # Preamble before the first parseable entry (e.g. the
+                        # shell command that launched the run). There is no
+                        # previous record to attach it to, so emit it as its own
+                        # entry rather than dropping it — silently losing input
+                        # lines during compression is worse than a null level.
+                        preamble.append(line)
+
+    if preamble:
+        structured_logs.insert(0, {
+            'timestamp': (structured_logs[0]['timestamp'] if structured_logs
+                          else f"{fallback_year}-01-01 00:00:00,000"),
+            'logger': 'preamble',
+            'level': 'INFO',
+            'message': '\n'.join(preamble),
+        })
 
     # Write out as JSON Lines (JSONL)
     with open(output_filepath, 'w', encoding='utf-8') as out_f:
@@ -121,14 +131,9 @@ def convert_vllm_log_to_json(input_filepath, output_filepath):
     print(f"Successfully processed {len(structured_logs)} structured log entries.")
 
 if __name__ == "__main__":
-    # Replace these filenames with your actual paths
-    INPUT_LOG_FILE = 'vllm-log.txt'
-    OUTPUT_JSON_FILE = 'vllm-structured-log.json'
-    # take the input and output file paths from command line arguments if provided
-    import sys
-    if len(sys.argv) > 1:
-        INPUT_LOG_FILE = sys.argv[1]
-    if len(sys.argv) > 2:
-        OUTPUT_JSON_FILE = sys.argv[2]
-    # usage: python structurize.py input_log.txt output_log.json
-    convert_vllm_log_to_json(INPUT_LOG_FILE, OUTPUT_JSON_FILE)
+    # usage: python3 structurize.py INPUT_LOG OUTPUT_JSONL
+    if len(sys.argv) != 3:
+        print(f"usage: {os.path.basename(sys.argv[0])} INPUT_LOG OUTPUT_JSONL",
+              file=sys.stderr)
+        sys.exit(2)
+    convert_vllm_log_to_json(sys.argv[1], sys.argv[2])

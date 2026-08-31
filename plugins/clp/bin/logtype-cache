@@ -163,11 +163,26 @@ def atomic_write(cache_dir, key, obj):
         raise
 
 
+def dict_list(obj, field):
+    """Return obj[field] as a list of dicts; [] for any malformed shape.
+
+    Cache entries and stdin classifications are model-generated JSON, so a field
+    can arrive as a scalar or null. Coercing here keeps one bad entry from
+    breaking `diff` for every other archive in the cache.
+    """
+    if not isinstance(obj, dict):
+        return []
+    value = obj.get(field)
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, dict)]
+
+
 def entry_template_set(obj):
     return {
         t["logtype"]
-        for t in obj.get("templates", [])
-        if isinstance(t, dict) and isinstance(t.get("logtype"), str)
+        for t in dict_list(obj, "templates")
+        if isinstance(t.get("logtype"), str)
     }
 
 
@@ -184,6 +199,13 @@ def find_best_base(cache_dir, current_templates):
             continue
         obj = load_entry(cache_dir, name[:-5])
         if not obj:
+            continue
+        if not isinstance(obj, dict) or not isinstance(obj.get("templates"), list):
+            print(
+                f"warning: skipping malformed cache entry {name} "
+                f"(templates is not a JSON array)",
+                file=sys.stderr,
+            )
             continue
         tset = entry_template_set(obj)
         if tset and tset <= current_templates and len(tset) > len(best_set):
@@ -266,6 +288,10 @@ def cmd_put(args):
     if not isinstance(obj, dict):
         print("error: classification JSON must be a JSON object", file=sys.stderr)
         return 2
+    for field in ("templates", "taxonomy", "query_plan"):
+        if field in obj and not isinstance(obj[field], list):
+            print(f"error: '{field}' must be a JSON array", file=sys.stderr)
+            return 2
     atomic_store(args.cache_dir, args.key, obj)
     return 0
 
@@ -280,6 +306,10 @@ def cmd_put_merged(args):
     if not isinstance(new, dict):
         print("error: classification JSON must be a JSON object", file=sys.stderr)
         return 2
+    for field in ("templates", "taxonomy", "query_plan"):
+        if field in new and not isinstance(new[field], list):
+            print(f"error: '{field}' must be a JSON array", file=sys.stderr)
+            return 2
 
     base = None
     if args.base_key:
@@ -290,31 +320,31 @@ def cmd_put_merged(args):
     if base:
         # Merge templates by logtype (base first, new overrides/extends).
         merged = {}
-        for t in base.get("templates", []):
-            if isinstance(t, dict) and isinstance(t.get("logtype"), str):
+        for t in dict_list(base, "templates"):
+            if isinstance(t.get("logtype"), str):
                 merged[t["logtype"]] = t
-        for t in new.get("templates", []):
-            if isinstance(t, dict) and isinstance(t.get("logtype"), str):
+        for t in dict_list(new, "templates"):
+            if isinstance(t.get("logtype"), str):
                 merged[t["logtype"]] = t
         new["templates"] = list(merged.values())
 
         # Merge taxonomy by category (base first, new categories appended).
         cats = {}
-        for c in base.get("taxonomy", []):
-            if isinstance(c, dict) and c.get("category") is not None:
+        for c in dict_list(base, "taxonomy"):
+            if c.get("category") is not None:
                 cats[c["category"]] = c
-        for c in new.get("taxonomy", []):
-            if isinstance(c, dict) and c.get("category") is not None:
+        for c in dict_list(new, "taxonomy"):
+            if c.get("category") is not None:
                 cats.setdefault(c["category"], c)
         new["taxonomy"] = list(cats.values())
 
         # Merge query_plan by label (base first; new-only labels appended).
         labels = {}
-        for q in base.get("query_plan", []):
-            if isinstance(q, dict) and q.get("label") is not None:
+        for q in dict_list(base, "query_plan"):
+            if q.get("label") is not None:
                 labels[q["label"]] = q
-        for q in new.get("query_plan", []):
-            if isinstance(q, dict) and q.get("label") is not None:
+        for q in dict_list(new, "query_plan"):
+            if q.get("label") is not None:
                 labels.setdefault(q["label"], q)
         new["query_plan"] = list(labels.values())
 
@@ -338,10 +368,15 @@ def cmd_list(args):
         obj = load_entry(args.cache_dir, name[:-5])
         if not obj:
             continue
+        if not isinstance(obj, dict):
+            # Valid JSON but not an object (e.g. a bare list). Surface it as BAD
+            # rather than crashing, so the user can see which file to remove.
+            rows.append((name[:-5], "BAD", "?", "-"))
+            continue
         templates = obj.get("templates", [])
         classified_at = obj.get("classified_at", "?")
         grown_from = obj.get("grown_from", "-")
-        rows.append((name[:-5], len(templates) if isinstance(templates, list) else "?", classified_at, grown_from))
+        rows.append((name[:-5], len(templates) if isinstance(templates, list) else "BAD", classified_at, grown_from))
     if not rows:
         print(f"(no cached classifications in {args.cache_dir})", file=sys.stderr)
         return 0

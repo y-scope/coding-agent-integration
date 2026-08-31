@@ -55,7 +55,7 @@ rather than every record:
   match — so counts are exact and zero queries return zero by surprise.
 - A natural unit for "top repeated messages": frequency per template.
 
-The blind variants (`*-insights`, `*-kql`) run a fixed battery of hardcoded
+The blind variants run a fixed battery of hardcoded
 queries; on an unfamiliar archive many return nothing. This skill runs **1 dump
 + schema discovery + a handful of targeted queries**, each grounded in a real
 template.
@@ -188,7 +188,10 @@ commands together in one call.
    HEADER="$(head -1 /tmp/lt-diff.out)"
    MODE="$(printf '%s' "$HEADER" | cut -f1)"
    APP_KEY="$(printf '%s' "$HEADER" | cut -f2)"
-   grep '^{' /tmp/lt-diff.out > /tmp/logtypes-to-classify.ndjson   # empty unless GROWTH/NEW
+   BASE_KEY="$(printf '%s' "$HEADER" | cut -f3)"   # only set when MODE=GROWTH
+   # `|| true` because grep exits 1 when there is nothing to classify, which is
+   # the normal UPTODATE (cache-hit) case — not an error.
+   grep '^{' /tmp/lt-diff.out > /tmp/logtypes-to-classify.ndjson || true
    ```
 
    - **UPTODATE:** the archive's template set is unchanged since the cached
@@ -302,8 +305,14 @@ commands together in one call.
    new templates are merged into the base entry (templates/taxonomy/query_plan
    unioned, `grown_from` recorded); for NEW it is stored fresh:
    ```bash
-   jq -e '.taxonomy and .templates and .query_plan' /tmp/logtype-new-class.json || exit 1
+   # Validate shape before storing: the fields must be ARRAYS. A bare
+   # `.templates` test passes for a scalar, which would poison the cache entry.
+   jq -e '(.taxonomy|type=="array") and (.templates|type=="array") and (.query_plan|type=="array")' \
+     /tmp/logtype-new-class.json >/dev/null || exit 1
    if [[ "$MODE" == "GROWTH" ]]; then
+     # Guard: an empty BASE_KEY would silently store a fresh entry containing
+     # ONLY the new templates, discarding every cached classification.
+     [[ -n "$BASE_KEY" ]] || { echo "error: GROWTH with empty BASE_KEY" >&2; exit 1; }
      "$CACHE" put-merged --base-key "$BASE_KEY" --key "$APP_KEY" < /tmp/logtype-new-class.json
    else
      "$CACHE" put-merged --key "$APP_KEY" < /tmp/logtype-new-class.json

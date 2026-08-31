@@ -137,7 +137,10 @@ commands together in one call.
    HEADER="$(head -1 /tmp/lt-diff.out)"
    MODE="$(printf '%s' "$HEADER" | cut -f1)"
    APP_KEY="$(printf '%s' "$HEADER" | cut -f2)"
-   grep '^{' /tmp/lt-diff.out > /tmp/logtypes-to-classify.ndjson   # empty unless GROWTH/NEW
+   BASE_KEY="$(printf '%s' "$HEADER" | cut -f3)"   # only set when MODE=GROWTH
+   # `|| true` because grep exits 1 when there is nothing to classify, which is
+   # the normal UPTODATE (cache-hit) case — not an error.
+   grep '^{' /tmp/lt-diff.out > /tmp/logtypes-to-classify.ndjson || true
    ```
 
    - **UPTODATE:** reuse the cached classification (verify its `schema` matches
@@ -182,8 +185,14 @@ commands together in one call.
    Write the result as valid JSON to `/tmp/logtype-new-class.json` with this shape,
    then validate and store (merge into the base for GROWTH, fresh for NEW):
    ```bash
-   jq -e '.taxonomy and .templates and .query_plan' /tmp/logtype-new-class.json || exit 1
+   # Validate shape before storing: the fields must be ARRAYS. A bare
+   # `.templates` test passes for a scalar, which would poison the cache entry.
+   jq -e '(.taxonomy|type=="array") and (.templates|type=="array") and (.query_plan|type=="array")' \
+     /tmp/logtype-new-class.json >/dev/null || exit 1
    if [[ "$MODE" == "GROWTH" ]]; then
+     # Guard: an empty BASE_KEY would silently store a fresh entry containing
+     # ONLY the new templates, discarding every cached classification.
+     [[ -n "$BASE_KEY" ]] || { echo "error: GROWTH with empty BASE_KEY" >&2; exit 1; }
      "$CACHE" put-merged --base-key "$BASE_KEY" --key "$APP_KEY" < /tmp/logtype-new-class.json
    else
      "$CACHE" put-merged --key "$APP_KEY" < /tmp/logtype-new-class.json
