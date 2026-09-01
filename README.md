@@ -36,11 +36,14 @@ plugins/clp/.claude-plugin/plugin.json
 plugins/clp/.codex-plugin/plugin.json
     Codex plugin manifest.
 plugins/clp/bin/
-    Restricted-passthrough bash wrappers for clp-s.
+    Restricted-passthrough bash wrappers for clp-s, plus local helpers
+    (structurize.py, logtype-cache) that are not clp-s passthroughs.
 plugins/clp/skills-claude/
-    Claude Code skills: compress, search, decompress, claude-code-trajectory.
+    Claude Code skills: compress, compress-folder, search, logtype-insights,
+    decompress, claude-code-trajectory.
 plugins/clp/skills-codex/
-    Codex skills: compress, search, decompress, codex-trajectory.
+    Codex skills: compress, compress-folder, search, logtype-insights,
+    decompress, codex-trajectory.
 
 scripts/validate-codex-plugin.sh
     Validates the Codex plugin manifest and SKILL.md frontmatter.
@@ -94,6 +97,7 @@ See [LOCAL_TESTING.md](LOCAL_TESTING.md) for more on local testing.
 
 - `bin/clp-s-list-sessions`
 - `bin/clp-s-compress-session`
+- `bin/clp-s-compress-folder`
 - `bin/clp-s-search-kql`
 - `bin/clp-s-decompress`
 

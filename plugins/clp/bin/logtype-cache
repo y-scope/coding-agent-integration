@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""
+logtype-cache - persistent cache for the logtype-insights skill's template
+classification.
+
+The classification step (grouping the archive's logtype templates into
+categories and deriving a targeted query plan) is reusable across runs of the
+same application: the same app build emits the same message templates, so the
+classification is paid once and amortized over every future analysis of that
+app. This helper stores and retrieves those classifications, and -- when an
+archive GROWS (new logs add new templates) -- drives an incremental update that
+classifies only the new templates and merges them into the existing entry,
+instead of reclassifying the whole archive.
+
+Cache key (the "app fingerprint") is sha256 of the sorted set of distinct
+logtype strings from `clp-s-search-kql ARCHIVE 'stats.logtypes'`. Same template
+set -> same key -> cache hit -> classification reused. When the template set
+grows, the key changes; `diff` finds the previous entry whose templates are a
+subset of the new set (the archive grew from it) so only the new templates need
+classifying.
+
+Cache layout:
+    <cache-dir>/<KEY>.json
+where each entry is the classification JSON, e.g.:
+    {
+      "app_key": "...",
+      "schema": {"timestamp": "t.$date", "severity": "s", ...},
+      "taxonomy": [{"category": "errors", "description": "..."}],
+      "templates": [{"logtype": "...", "category": "errors"}],
+      "query_plan": [{"label": "Errors", "kql": "s:E OR s:F", "method": "count"}],
+      "classified_at": "2026-08-07T...",
+      "grown_from": "<previous app_key>"   # present only when incrementally grown
+    }
+
+Subcommands:
+    key   --logtypes-file F        Print the app_key for the given stats.logtypes
+                                  NDJSON file.
+    count --logtypes-file F        Print the number of distinct logtypes in the
+                                  stats.logtypes file (the archive's logtype
+                                  count).
+    diff  --logtypes-file F        Dynamic-update probe. Prints ONE header line
+                                  then NDJSON template lines ({"logtype":"..."}):
+                                    UPTODATE\\t<app_key>\\t<count>
+                                        cache is current; no templates to classify.
+                                    GROWTH\\t<app_key>\\t<base_key>\\t<count>\\t<new_count>
+                                        archive grew from <base_key>; the
+                                        following <new_count> templates are NEW
+                                        and need classifying (then put-merged).
+                                    NEW\\t<app_key>\\t<count>
+                                        no base found; all <count> templates
+                                        follow and need classifying.
+    get   KEY [--cache-dir D]      Print cached JSON to stdout (exit 0); exit 1
+                                  on miss.
+    put   KEY [--cache-dir D]      Read classification JSON from stdin and store
+                                  it under <cache-dir>/KEY.json (atomic write).
+                                  Stamps/refreshes `classified_at`.
+    put-merged --base-key BK --key NK [--cache-dir D]
+                                  Read a classification JSON for the NEW templates
+                                  (from `diff`'s GROWTH/NEW output) from stdin,
+                                  merge it into the base entry BK's
+                                  templates/taxonomy/query_plan, and store the
+                                  merged result under NK. With no --base-key (or
+                                  an absent base) this behaves like `put`. The
+                                  merged entry records `grown_from: BK`.
+    list  [--cache-dir D]          List cached entries: key, template count,
+                                  classified_at, grown_from.
+    show  KEY [--cache-dir D]      Pretty-print one cached entry.
+
+--cache-dir overrides the default
+~/.config/yscope-clp-plugin/logtype-cache (or $CLP_LOGTYPE_CACHE_DIR).
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import signal
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+# Cache keys are sha256 hex digests; anything else is rejected by entry_path.
+_KEY_RE = re.compile(r"\A[0-9a-f]{64}\Z")
+
+# Let `head`/pagers close our stdout without raising BrokenPipeError.
+if hasattr(signal, "SIGPIPE"):
+    try:
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    except (ValueError, OSError):
+        pass
+
+
+def default_cache_dir():
+    env = os.environ.get("CLP_LOGTYPE_CACHE_DIR")
+    if env:
+        return os.path.expanduser(env)
+    return os.path.expanduser("~/.config/yscope-clp-plugin/logtype-cache")
+
+
+def load_logtypes(path):
+    """Return the set of distinct logtype strings from a stats.logtypes NDJSON
+    file. Returns an empty set if the file has no parseable logtype lines."""
+    logtypes = set()
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            lt = obj.get("logtype")
+            if isinstance(lt, str) and lt.strip():
+                logtypes.add(lt)
+    return logtypes
+
+
+def app_key_for_logtypes(logtypes):
+    h = hashlib.sha256()
+    for lt in sorted(logtypes):
+        h.update(lt.encode("utf-8"))
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+def entry_path(cache_dir, key):
+    # Every legitimate key is a sha256 hex digest produced by
+    # app_key_for_logtypes. Validate the shape so a hand-passed --key/--base-key
+    # cannot escape the cache directory via path separators or "..".
+    if not isinstance(key, str) or not _KEY_RE.match(key):
+        raise SystemExit(
+            f"error: invalid cache key {key!r}: expected a 64-character hex digest"
+        )
+    return os.path.join(cache_dir, f"{key}.json")
+
+
+def load_entry(cache_dir, key):
+    path = entry_path(cache_dir, key)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def atomic_write(cache_dir, key, obj):
+    os.makedirs(cache_dir, exist_ok=True)
+    path = entry_path(cache_dir, key)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".json", dir=cache_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def dict_list(obj, field):
+    """Return obj[field] as a list of dicts; [] for any malformed shape.
+
+    Cache entries and stdin classifications are model-generated JSON, so a field
+    can arrive as a scalar or null. Coercing here keeps one bad entry from
+    breaking `diff` for every other archive in the cache.
+    """
+    if not isinstance(obj, dict):
+        return []
+    value = obj.get(field)
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, dict)]
+
+
+def entry_template_set(obj):
+    return {
+        t["logtype"]
+        for t in dict_list(obj, "templates")
+        if isinstance(t.get("logtype"), str)
+    }
+
+
+def find_best_base(cache_dir, current_templates):
+    """Return (base_key, base_template_set) for the cached entry whose templates
+    are the largest subset of current_templates (i.e. the archive grew from
+    it). Returns (None, set()) if no cached entry is a subset."""
+    best_key = None
+    best_set = set()
+    if not os.path.isdir(cache_dir):
+        return None, set()
+    for name in sorted(os.listdir(cache_dir)):
+        if not name.endswith(".json") or not _KEY_RE.match(name[:-5]):
+            continue
+        obj = load_entry(cache_dir, name[:-5])
+        if not obj:
+            continue
+        if not isinstance(obj, dict) or not isinstance(obj.get("templates"), list):
+            print(
+                f"warning: skipping malformed cache entry {name} "
+                f"(templates is not a JSON array)",
+                file=sys.stderr,
+            )
+            continue
+        tset = entry_template_set(obj)
+        if tset and tset <= current_templates and len(tset) > len(best_set):
+            best_key, best_set = name[:-5], tset
+    return best_key, best_set
+
+
+def cmd_key(args):
+    if not os.path.exists(args.logtypes_file):
+        print(f"error: logtypes file not found: {args.logtypes_file}", file=sys.stderr)
+        return 2
+    logtypes = load_logtypes(args.logtypes_file)
+    if not logtypes:
+        print("error: no logtype entries found in file", file=sys.stderr)
+        return 1
+    print(app_key_for_logtypes(logtypes))
+    return 0
+
+
+def cmd_count(args):
+    if not os.path.exists(args.logtypes_file):
+        print(f"error: logtypes file not found: {args.logtypes_file}", file=sys.stderr)
+        return 2
+    logtypes = load_logtypes(args.logtypes_file)
+    print(len(logtypes))
+    return 0
+
+
+def cmd_diff(args):
+    if not os.path.exists(args.logtypes_file):
+        print(f"error: logtypes file not found: {args.logtypes_file}", file=sys.stderr)
+        return 2
+    logtypes = load_logtypes(args.logtypes_file)
+    if not logtypes:
+        print("error: no logtype entries found in file", file=sys.stderr)
+        return 1
+    app_key = app_key_for_logtypes(logtypes)
+    # Exact hit: archive unchanged since last classification.
+    if load_entry(args.cache_dir, app_key) is not None:
+        print(f"UPTODATE\t{app_key}\t{len(logtypes)}")
+        return 0
+    # Archive grew? Find a cached entry that is a subset of the current set.
+    base_key, base_set = find_best_base(args.cache_dir, logtypes)
+    if base_key:
+        new_templates = sorted(logtypes - base_set)
+        print(f"GROWTH\t{app_key}\t{base_key}\t{len(logtypes)}\t{len(new_templates)}")
+        for lt in new_templates:
+            print(json.dumps({"logtype": lt}, ensure_ascii=False))
+        return 0
+    # No base: first classification of this application.
+    print(f"NEW\t{app_key}\t{len(logtypes)}")
+    for lt in sorted(logtypes):
+        print(json.dumps({"logtype": lt}, ensure_ascii=False))
+    return 0
+
+
+def cmd_get(args):
+    obj = load_entry(args.cache_dir, args.key)
+    if obj is None:
+        return 1
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False))
+    sys.stdout.write("\n")
+    return 0
+
+
+def atomic_store(cache_dir, key, obj):
+    obj["app_key"] = key
+    obj["classified_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    atomic_write(cache_dir, key, obj)
+    print(f"Stored classification for app_key {key} -> {entry_path(cache_dir, key)}", file=sys.stderr)
+
+
+def cmd_put(args):
+    raw = sys.stdin.read()
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"error: stdin is not valid JSON: {e}", file=sys.stderr)
+        return 2
+    if not isinstance(obj, dict):
+        print("error: classification JSON must be a JSON object", file=sys.stderr)
+        return 2
+    for field in ("templates", "taxonomy", "query_plan"):
+        if field in obj and not isinstance(obj[field], list):
+            print(f"error: '{field}' must be a JSON array", file=sys.stderr)
+            return 2
+    atomic_store(args.cache_dir, args.key, obj)
+    return 0
+
+
+def cmd_put_merged(args):
+    raw = sys.stdin.read()
+    try:
+        new = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"error: stdin is not valid JSON: {e}", file=sys.stderr)
+        return 2
+    if not isinstance(new, dict):
+        print("error: classification JSON must be a JSON object", file=sys.stderr)
+        return 2
+    for field in ("templates", "taxonomy", "query_plan"):
+        if field in new and not isinstance(new[field], list):
+            print(f"error: '{field}' must be a JSON array", file=sys.stderr)
+            return 2
+
+    base = None
+    if args.base_key:
+        base = load_entry(args.cache_dir, args.base_key)
+        if base is None and args.base_key:
+            print(f"warning: base key not found: {args.base_key}; storing as a fresh entry", file=sys.stderr)
+
+    if base:
+        # Merge templates by logtype (base first, new overrides/extends).
+        merged = {}
+        for t in dict_list(base, "templates"):
+            if isinstance(t.get("logtype"), str):
+                merged[t["logtype"]] = t
+        for t in dict_list(new, "templates"):
+            if isinstance(t.get("logtype"), str):
+                merged[t["logtype"]] = t
+        new["templates"] = list(merged.values())
+
+        # Merge taxonomy by category (base first, new categories appended).
+        cats = {}
+        for c in dict_list(base, "taxonomy"):
+            if c.get("category") is not None:
+                cats[c["category"]] = c
+        for c in dict_list(new, "taxonomy"):
+            if c.get("category") is not None:
+                cats.setdefault(c["category"], c)
+        new["taxonomy"] = list(cats.values())
+
+        # Merge query_plan by label (base first; new-only labels appended).
+        labels = {}
+        for q in dict_list(base, "query_plan"):
+            if q.get("label") is not None:
+                labels[q["label"]] = q
+        for q in dict_list(new, "query_plan"):
+            if q.get("label") is not None:
+                labels.setdefault(q["label"], q)
+        new["query_plan"] = list(labels.values())
+
+        # Keep the base schema if the new classification didn't restate it.
+        if "schema" not in new and "schema" in base:
+            new["schema"] = base["schema"]
+        new["grown_from"] = args.base_key
+
+    atomic_store(args.cache_dir, args.key, new)
+    return 0
+
+
+def cmd_list(args):
+    if not os.path.isdir(args.cache_dir):
+        print(f"(cache dir does not exist: {args.cache_dir})", file=sys.stderr)
+        return 0
+    rows = []
+    for name in sorted(os.listdir(args.cache_dir)):
+        if not name.endswith(".json") or not _KEY_RE.match(name[:-5]):
+            continue
+        obj = load_entry(args.cache_dir, name[:-5])
+        if not obj:
+            continue
+        if not isinstance(obj, dict):
+            # Valid JSON but not an object (e.g. a bare list). Surface it as BAD
+            # rather than crashing, so the user can see which file to remove.
+            rows.append((name[:-5], "BAD", "?", "-"))
+            continue
+        templates = obj.get("templates", [])
+        classified_at = obj.get("classified_at", "?")
+        grown_from = obj.get("grown_from", "-")
+        rows.append((name[:-5], len(templates) if isinstance(templates, list) else "BAD", classified_at, grown_from))
+    if not rows:
+        print(f"(no cached classifications in {args.cache_dir})", file=sys.stderr)
+        return 0
+    print(f"{'app_key':<66}  templates  classified_at          grown_from")
+    for key, n, ts, gf in rows:
+        gf_short = gf[:12] if isinstance(gf, str) and gf != "-" else "-"
+        print(f"{key:<66}  {str(n):>9}  {str(ts):<20}  {gf_short}")
+    return 0
+
+
+def cmd_show(args):
+    obj = load_entry(args.cache_dir, args.key)
+    if obj is None:
+        print(f"error: no cache entry for key {args.key}", file=sys.stderr)
+        return 1
+    print(json.dumps(obj, indent=2, ensure_ascii=False))
+    return 0
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(
+        prog="logtype-cache",
+        description="Persistent classification cache for the logtype-insights skill, "
+                    "with incremental update on archive growth.",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    pk = sub.add_parser("key", help="Compute the app_key for a stats.logtypes NDJSON file.")
+    pk.add_argument("--logtypes-file", required=True)
+    pk.set_defaults(func=cmd_key, cache_dir=None)
+
+    pc = sub.add_parser("count", help="Print the number of distinct logtypes in the stats.logtypes file.")
+    pc.add_argument("--logtypes-file", required=True)
+    pc.set_defaults(func=cmd_count, cache_dir=None)
+
+    pd = sub.add_parser("diff", help="Probe for cache hit/growth/new; emit templates to classify.")
+    pd.add_argument("--logtypes-file", required=True)
+    pd.set_defaults(func=cmd_diff)
+
+    pg = sub.add_parser("get", help="Print a cached classification (exit 1 on miss).")
+    pg.add_argument("key")
+    pg.set_defaults(func=cmd_get)
+
+    pp = sub.add_parser("put", help="Store a classification read from stdin.")
+    pp.add_argument("key")
+    pp.set_defaults(func=cmd_put)
+
+    pm = sub.add_parser("put-merged", help="Merge a new-template classification into a base entry and store.")
+    pm.add_argument("--base-key", default=None, help="Base app_key to merge into (absent = fresh store).")
+    pm.add_argument("--key", required=True, help="New app_key to store the merged result under.")
+    pm.set_defaults(func=cmd_put_merged)
+
+    pl = sub.add_parser("list", help="List cached classifications.")
+    pl.set_defaults(func=cmd_list)
+
+    ps = sub.add_parser("show", help="Pretty-print one cached classification.")
+    ps.add_argument("key")
+    ps.set_defaults(func=cmd_show)
+
+    # Shared --cache-dir for get/put/put-merged/diff/list/show (key/count don't need it).
+    for subp in (pd, pg, pp, pm, pl, ps):
+        subp.add_argument(
+            "--cache-dir",
+            default=default_cache_dir(),
+            help="Cache directory (default: %(default)s, or $CLP_LOGTYPE_CACHE_DIR).",
+        )
+
+    args = p.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

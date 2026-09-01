@@ -3,6 +3,8 @@ clp-s-archives/
 
 # Plugin-local downloaded CLP binaries/artifacts.
 plugins/clp/.clp-core/
+# Installer-generated shim pointing at the locally installed clp-s.
+plugins/clp/bin/clp-s
 
 # Local credentials/config.
 .env
@@ -10,3 +12,5 @@ plugins/clp/.clp-core/
 
 # Common local/runtime noise.
 .DS_Store
+__pycache__/
+*.pyc
