@@ -387,8 +387,13 @@ commands together in one call.
       Logger breakdown: project logger + uniq -c. Time span: project the
       timestamp field and use head/tail (records are chronological; do NOT sort),
       OR use --tge/--tle if the schema says time-range flags work.
-   5. Run semantic() ONLY for an entry whose method is "semantic" — never as the
-      default. Scope it: semantic("...") AND <severity>:<value>.
+   5. MANDATORY semantic pass — in addition to any query_plan entries whose
+      method is "semantic", always run at least one scoped semantic() query
+      derived from the goal or the dominant templates, e.g.
+      semantic("...") AND <severity>:<value> or
+      semantic("...") AND <logger>:*<substr>*. Never run an unscoped
+      semantic(). Discard any query that returns nothing or only
+      generic/meaningless logtypes — do not include it in the report.
 
    Efficiency rules:
    - Compound KQL, not many separate queries.
@@ -413,8 +418,12 @@ commands together in one call.
       (if the app produces any); semantic-only findings if any.
    6. Configuration & Startup — config/init templates grounded in the baseline
       (if any).
-   7. Semantic Search Coverage — only if semantic() was used; what it found that
-      template-classification missed.
+   7. Semantic Search Coverage — MANDATORY (the semantic pass always runs).
+      Report ONLY meaningful findings: matches that template-classification
+      missed or confirmed, with their queries. NEVER list empty/no-hit queries
+      or meaningless matches — drop them. If nothing meaningful was found, the
+      section is a single line saying semantic search surfaced nothing beyond
+      the baseline.
    8. Top 3 follow-up KQL queries (derived from templates, mix keyword+semantic).
    ```
 
@@ -556,8 +565,11 @@ directly and is the one KQL construct that reaches message content.
 
 ## When to still use semantic search
 
-With a logtype baseline, semantic search is no longer the default exploratory
-tool — the baseline already tells you what exists. Use `semantic()` only for:
+With a logtype baseline, semantic search is not the default exploratory tool —
+the baseline already tells you what exists. The insight pass still runs one
+mandatory scoped semantic cross-check (reported in the "Semantic Search
+Coverage" section, with empty/no-hit or meaningless results dropped). Beyond
+that mandatory pass, use `semantic()` only for:
 
 | Situation | Why |
 | --- | --- |
@@ -617,6 +629,8 @@ Present subagent results in this order:
    (if the app produces any); semantic-only findings if any.
 6. **Configuration & Startup** — config/init templates grounded in the baseline
    (if any).
-7. **Semantic Search Coverage** — only if semantic() was used; what it found
-   that template-classification missed.
+7. **Semantic Search Coverage** — mandatory section (the insight pass always
+   runs a scoped semantic cross-check). Include ONLY meaningful findings —
+   matches that template-classification missed, with their queries. Never show
+   empty/no-hit or meaningless results; if there are none, one line saying so.
 8. **Follow-up queries** — 2–3 concrete queries derived from templates.

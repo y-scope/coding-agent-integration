@@ -234,6 +234,11 @@ commands together in one call.
    - `project+jq`: run the KQL with `--projection`, then `grep '^{' | jq -r '<jq>'`.
    - `semantic`: run `semantic("...") AND <kql>` with `--projection`.
 
+   Also MANDATORY (in addition to any `semantic` plan entries): run at least one
+   scoped semantic() query derived from the analysis goal or the dominant
+   templates — `semantic("...") AND <severity>:<value>` (never unscoped).
+   Discard any query that returns nothing or only generic/meaningless logtypes.
+
    Then:
    - **Per-template frequencies** (the count baseline): project the message
      field, templatize, `uniq -c`:
@@ -265,8 +270,11 @@ commands together in one call.
       counts (if any); semantic-only findings if any.
    6. **Configuration & Startup** — config/init templates grounded in the
       baseline (if any).
-   7. **Semantic Search Coverage** — only if `semantic()` was used; what it
-      found that template-classification missed.
+   7. **Semantic Search Coverage** — MANDATORY (the semantic pass always runs).
+      Report ONLY meaningful findings: what semantic search found that
+      template-classification missed, with their queries. NEVER list empty/no-hit
+      queries or meaningless matches — drop them; if nothing meaningful was
+      found, one line saying so.
    8. **Follow-up queries** — 2–3 concrete queries derived from templates.
 
 9. Offer to drill deeper on a finding, note that re-running on the same
@@ -372,7 +380,10 @@ construct that reaches message content.
 ## When to still use semantic search
 
 With a logtype baseline, semantic search is not the default — the baseline
-already tells you what exists. Use `semantic()` only for: an ambiguous template
+already tells you what exists. The insight pass still runs one mandatory scoped
+semantic cross-check (reported in "Semantic Search Coverage", with empty/no-hit
+or meaningless results dropped). Beyond that mandatory pass, use `semantic()`
+only for: an ambiguous template
 category, grouping similar templates, a conceptual (non-template-shaped) user
 question, or confirming a classification miss. Combine with a scalar field:
 `semantic("…") AND <severity>:<value>`.
@@ -407,5 +418,5 @@ Present results in this order:
 4. **Notable Categories** — per discovered category of interest, counts + representative templates.
 5. **Performance Signals** — timing/throughput/slow-operation templates and counts (if any); semantic-only findings if any.
 6. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
-7. **Semantic Search Coverage** — only if `semantic()` was used; what it found that classification missed.
+7. **Semantic Search Coverage** — mandatory section (the insight pass always runs a scoped semantic cross-check). Include ONLY meaningful findings — what semantic search found that classification missed. Never show empty/no-hit or meaningless results; if there are none, one line saying so.
 8. **Follow-up queries** — 2–3 concrete queries derived from templates.
