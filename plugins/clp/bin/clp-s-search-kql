@@ -40,9 +40,21 @@ Examples:
   clp-s-search-kql /tmp/archive 'message.content.name:Bash'
   clp-s-search-kql /tmp/archive 'semantic("slow database queries")'
   clp-s-search-kql --projection timestamp,type,sessionId /tmp/archive 'message.content.name:Bash'
+  clp-s-search-kql /tmp/archive 'stats.log_shapes'
   clp-s-search-kql --experimental /tmp/archive 'shape(message): "*error*"'
   clp-s-search-kql --experimental --projection 'shape(message)' /tmp/archive '*'
   clp-s-search-kql --experimental --projection 'decompose(message)' /tmp/archive '*'
+
+Stats queries (dictionary dumps, not KQL): 'stats.log_shapes' emits the
+archive's logtype dictionary as NDJSON ({"archive_id","count","id","shape"});
+'stats.schema_tree' and 'stats.archives' emit schema and archive metadata.
+These require the shapes API (clp-core >= 0.13) and --experimental, which the
+wrapper adds automatically. Shape strings come in two encodings — regular
+archives use raw placeholder bytes (0x11 int, 0x12 str, 0x13 float; count is
+null), clpp/--experimental archives use %rule.name% TextShape placeholders
+(count is an integer) — `logtype-cache normalize` detects the encoding per
+line and renders both to '<*>'. The legacy 'stats.logtypes' query is
+rejected — shapes-API binaries silently return nothing for it.
 
 This search wrapper intentionally does not expose clp-s output handlers,
 reducers, results-cache writes, decompression, or arbitrary clp-s option
@@ -87,9 +99,18 @@ split_projection_csv() {
   for item in "${cols[@]}"; do
     item="${item#"${item%%[![:space:]]*}"}"
     item="${item%"${item##*[![:space:]]}"}"
-    if [[ -n "$item" ]]; then
-      projections+=("$item")
+    if [[ -z "$item" ]]; then
+      continue
     fi
+    # Projection items are appended to argv after --projection, which clp-s
+    # treats as variadic — an item starting with '-' would be parsed as a
+    # clp-s option, bypassing this wrapper's flag allowlist (e.g. smuggling
+    # --enable-telemetry or --count). No real column starts with '-'.
+    if [[ "$item" == -* ]]; then
+      echo "error: invalid projection column: $item" >&2
+      exit 2
+    fi
+    projections+=("$item")
   done
 }
 
@@ -194,6 +215,28 @@ if [[ -z "$archives_dir" || -z "$kql_query" ]]; then
   usage >&2
   exit 2
 fi
+
+# Stats queries (clp-core >= 0.13 shapes API). The binary requires
+# --experimental for these, so add it on the caller's behalf; and the legacy
+# stats.logtypes spelling silently matches nothing on shapes-API binaries, so
+# reject it with the rename instead of returning a confusingly empty result.
+# The binary matches stats directives exactly (unlike KQL, it does not trim
+# whitespace), so trim the query before dispatching AND pass the trimmed form
+# to clp-s — a stray trailing space would otherwise silently return 0 rows.
+trimmed_query="${kql_query#"${kql_query%%[![:space:]]*}"}"
+trimmed_query="${trimmed_query%"${trimmed_query##*[![:space:]]}"}"
+case "$trimmed_query" in
+  stats.log_shapes|stats.schema_tree|stats.archives)
+    experimental=1
+    kql_query="$trimmed_query"
+    ;;
+  stats.logtypes)
+    echo "error: stats.logtypes was renamed to stats.log_shapes (clp-core >= 0.13 shapes API)." >&2
+    echo "  Dump the dictionary with:  clp-s-search-kql ARCHIVE 'stats.log_shapes'" >&2
+    echo "  then render placeholders:  ... | grep '^{' | logtype-cache normalize" >&2
+    exit 2
+    ;;
+esac
 
 if [[ "$kql_query" =~ [Ss][Ee][Mm][Aa][Nn][Tt][Ii][Cc][[:space:]]*\( ]]; then
   semantic_active=1

@@ -1,6 +1,6 @@
 {
   "name": "clp",
-  "version": "0.1.12",
+  "version": "0.2.0",
   "description": "Compress, search, and decompress Claude Code and Codex session log archives with CLP.",
   "author": {
     "name": "YScope"
