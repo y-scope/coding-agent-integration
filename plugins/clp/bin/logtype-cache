@@ -13,11 +13,12 @@ classifies only the new templates and merges them into the existing entry,
 instead of reclassifying the whole archive.
 
 Cache key (the "app fingerprint") is sha256 of the sorted set of distinct
-logtype strings from `clp-s-search-kql ARCHIVE 'stats.logtypes'`. Same template
-set -> same key -> cache hit -> classification reused. When the template set
-grows, the key changes; `diff` finds the previous entry whose templates are a
-subset of the new set (the archive grew from it) so only the new templates need
-classifying.
+logtype strings from the archive's dictionary dump
+(`clp-s-search-kql ARCHIVE 'stats.log_shapes'`, rendered by `normalize`).
+Same template set -> same key -> cache hit -> classification reused. When the
+template set grows, the key changes; `diff` finds the previous entry whose
+templates are a subset of the new set (the archive grew from it) so only the
+new templates need classifying.
 
 Cache layout:
     <cache-dir>/<KEY>.json
@@ -33,10 +34,21 @@ where each entry is the classification JSON, e.g.:
     }
 
 Subcommands:
-    key   --logtypes-file F        Print the app_key for the given stats.logtypes
-                                  NDJSON file.
+    normalize [--shapes-file F]    Render a `stats.log_shapes` NDJSON dump
+                                  (stdin, or F) into canonical logtype NDJSON:
+                                  one {"logtype":"..."} per line, deduplicated.
+                                  Detects the shape encoding per line — raw
+                                  placeholder bytes (0x11 int / 0x12 str /
+                                  0x13 float, count=null) on regular archives,
+                                  %rule.name% TextShape placeholders
+                                  (count=integer) on clpp archives — and
+                                  renders both as `<*>`. Lines that already
+                                  carry a "logtype" field pass through
+                                  unchanged.
+    key   --logtypes-file F        Print the app_key for the given logtypes
+                                  NDJSON file (accepts raw shape lines too).
     count --logtypes-file F        Print the number of distinct logtypes in the
-                                  stats.logtypes file (the archive's logtype
+                                  logtypes file (the archive's logtype
                                   count).
     diff  --logtypes-file F        Dynamic-update probe. Prints ONE header line
                                   then NDJSON template lines ({"logtype":"..."}):
@@ -82,6 +94,107 @@ from datetime import datetime, timezone
 # Cache keys are sha256 hex digests; anything else is rejected by entry_path.
 _KEY_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 
+# Raw CLP shape strings come in TWO encodings, depending on how the archive
+# was compressed:
+#
+# 1. Regular archives (clp_s logtype dictionary): variables are placeholder
+#    bytes (see clp::ir::VariablePlaceholder) 0x11 integer, 0x12
+#    dictionary/string, 0x13 float. A backslash is the escape byte: it is
+#    consumed and the byte after it emitted literally (mirroring
+#    LogTypeDictionaryEntry::decode_log_type).
+# 2. clpp (--experimental) archives (TextShape): variables are
+#    '%qualified.rule.name%' placeholders, a literal '%' is doubled to '%%',
+#    and there is NO backslash escaping.
+#
+# stats.log_shapes marks the difference in its `count` field: clpp lines carry
+# a real integer count, regular-archive lines hard-code null.
+_PLACEHOLDER_INT = "\x11"
+_PLACEHOLDER_STR = "\x12"
+_PLACEHOLDER_FLOAT = "\x13"
+_ESCAPE = "\\"
+
+
+def render_shape(shape):
+    """Render a REGULAR-archive shape string (placeholder bytes + backslash
+    escapes) into the canonical logtype form used for fingerprinting:
+    placeholder bytes become `<*>` and escape bytes are consumed (the escaped
+    byte is emitted literally). Applying this to an already-rendered logtype
+    string is NOT a no-op (it would eat backslashes), so callers must render
+    raw shapes exactly once — and must NOT apply it to clpp TextShape strings
+    (use render_text_shape for those)."""
+    out = []
+    i = 0
+    n = len(shape)
+    while i < n:
+        c = shape[i]
+        if c == _ESCAPE:
+            if i + 1 < n:
+                out.append(shape[i + 1])
+                i += 2
+            else:
+                # Trailing escape with nothing to escape; drop it, matching
+                # decode_log_type's bounds-checked behavior.
+                i += 1
+        elif c in (_PLACEHOLDER_INT, _PLACEHOLDER_STR, _PLACEHOLDER_FLOAT):
+            out.append("<*>")
+            i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def render_text_shape(shape):
+    """Render a clpp TextShape string into the canonical logtype form:
+    '%%' becomes a literal '%', and every '%rule.name%' placeholder becomes
+    `<*>`. Backslashes are ordinary characters here (TextShape does not
+    escape them). An unpaired trailing '%' is emitted literally."""
+    out = []
+    i = 0
+    n = len(shape)
+    while i < n:
+        c = shape[i]
+        if c != "%":
+            out.append(c)
+            i += 1
+            continue
+        if i + 1 < n and shape[i + 1] == "%":
+            out.append("%")
+            i += 2
+            continue
+        end = shape.find("%", i + 1)
+        if end == -1:
+            # Unpaired '%' (shouldn't happen in well-formed TextShape output);
+            # emit literally rather than swallowing the tail.
+            out.append(c)
+            i += 1
+        else:
+            out.append("<*>")
+            i = end + 1
+    return "".join(out)
+
+
+def shape_line_to_logtype(obj):
+    """Return the canonical logtype string for one parsed NDJSON line, or None.
+
+    Lines carrying a "logtype" field are already canonical and pass through
+    unchanged. Lines carrying a raw "shape" field are rendered according to
+    the encoding the emitting archive used — clpp TextShape when `count` is an
+    integer, regular placeholder-byte encoding when `count` is null/absent
+    (stats.log_shapes hard-codes null for regular archives)."""
+    if not isinstance(obj, dict):
+        return None
+    lt = obj.get("logtype")
+    if isinstance(lt, str):
+        return lt
+    shape = obj.get("shape")
+    if not isinstance(shape, str):
+        return None
+    count = obj.get("count")
+    if isinstance(count, int) and not isinstance(count, bool):
+        return render_text_shape(shape)
+    return render_shape(shape)
+
 # Let `head`/pagers close our stdout without raising BrokenPipeError.
 if hasattr(signal, "SIGPIPE"):
     try:
@@ -98,8 +211,14 @@ def default_cache_dir():
 
 
 def load_logtypes(path):
-    """Return the set of distinct logtype strings from a stats.logtypes NDJSON
-    file. Returns an empty set if the file has no parseable logtype lines."""
+    """Return the set of distinct canonical logtype strings from a dictionary
+    NDJSON file. Accepts both line shapes:
+      {"logtype": "..."}                      already canonical (`<*>` markers)
+      {...,"count":...,"shape": "..."}        raw stats.log_shapes line; the
+                                              shape is rendered per its
+                                              encoding (see shape_line_to_logtype)
+    A line carrying both fields uses "logtype" (assumed already rendered).
+    Returns an empty set if the file has no parseable lines."""
     logtypes = set()
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -110,7 +229,7 @@ def load_logtypes(path):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            lt = obj.get("logtype")
+            lt = shape_line_to_logtype(obj)
             if isinstance(lt, str) and lt.strip():
                 logtypes.add(lt)
     return logtypes
@@ -211,6 +330,47 @@ def find_best_base(cache_dir, current_templates):
         if tset and tset <= current_templates and len(tset) > len(best_set):
             best_key, best_set = name[:-5], tset
     return best_key, best_set
+
+
+def cmd_normalize(args):
+    """Render stats.log_shapes NDJSON (stdin or --shapes-file) to canonical
+    {"logtype": "..."} NDJSON, deduplicated and sorted."""
+    if args.shapes_file:
+        if not os.path.isfile(args.shapes_file):
+            print(f"error: shapes file not found: {args.shapes_file}", file=sys.stderr)
+            return 2
+        try:
+            src = open(args.shapes_file, "r", encoding="utf-8")
+        except OSError as e:
+            print(f"error: cannot read shapes file: {e}", file=sys.stderr)
+            return 2
+    else:
+        src = sys.stdin
+    logtypes = set()
+    try:
+        for line in src:
+            line = line.strip()
+            if not line or not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            lt = shape_line_to_logtype(obj)
+            if isinstance(lt, str) and lt.strip():
+                logtypes.add(lt)
+    except UnicodeDecodeError as e:
+        print(f"error: shapes file is not valid UTF-8: {e}", file=sys.stderr)
+        return 2
+    finally:
+        if src is not sys.stdin:
+            src.close()
+    if not logtypes:
+        print("error: no shape/logtype entries found in input", file=sys.stderr)
+        return 1
+    for lt in sorted(logtypes):
+        print(json.dumps({"logtype": lt}, ensure_ascii=False))
+    return 0
 
 
 def cmd_key(args):
@@ -404,11 +564,15 @@ def main(argv=None):
     )
     sub = p.add_subparsers(dest="command", required=True)
 
-    pk = sub.add_parser("key", help="Compute the app_key for a stats.logtypes NDJSON file.")
+    pn = sub.add_parser("normalize", help="Render stats.log_shapes NDJSON to canonical logtype NDJSON.")
+    pn.add_argument("--shapes-file", default=None, help="Input file (default: stdin).")
+    pn.set_defaults(func=cmd_normalize, cache_dir=None)
+
+    pk = sub.add_parser("key", help="Compute the app_key for a logtypes NDJSON file.")
     pk.add_argument("--logtypes-file", required=True)
     pk.set_defaults(func=cmd_key, cache_dir=None)
 
-    pc = sub.add_parser("count", help="Print the number of distinct logtypes in the stats.logtypes file.")
+    pc = sub.add_parser("count", help="Print the number of distinct logtypes in the logtypes file.")
     pc.add_argument("--logtypes-file", required=True)
     pc.set_defaults(func=cmd_count, cache_dir=None)
 

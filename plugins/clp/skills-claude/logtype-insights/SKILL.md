@@ -125,7 +125,7 @@ commands together in one call.
    - **severity** — e.g. `level` (vLLM) or `s` (Mongo).
    - **logger/component** — e.g. `logger` (vLLM) or `c` (Mongo).
    - **message** — the clp-string field whose logtypes appear in
-     `stats.logtypes` — e.g. `message` (vLLM) or `msg` (Mongo).
+     `stats.log_shapes` — e.g. `message` (vLLM) or `msg` (Mongo).
    - **payload** (optional) — e.g. `attr` (Mongo); note the useful leaf paths
      (e.g. `attr.durationMillis`, `attr.host`).
    Also note the distinct values of the severity and logger fields (one count
@@ -138,20 +138,30 @@ commands together in one call.
 4. **Dump the logtype baseline** (cheap; reads the dictionary, not every record):
 
    ```bash
-   # Canonical template dictionary — one JSON object per logtype:
-   #   {"id":0,"logtype":"Triton not installed ... <*> functions ..."}
-   # The wrapper prints archive-metadata header lines to stdout, so filter to
-   # JSON records with grep '^{' before jq — jq errors on the header otherwise.
-   "$SEARCH" "$ARCHIVE" 'stats.logtypes' 2>/tmp/logtypes.err \
-     | grep '^{' > /tmp/logtypes.ndjson
+   # Dictionary dump (shapes API, clp-core >= 0.13). stats.log_shapes emits one
+   # raw line per template — {"archive_id":"...","count":...,"id":N,"shape":"..."} —
+   # where the shape string encodes variables in an archive-dependent form
+   # (raw placeholder bytes on regular archives, %rule.name% TextShape
+   # placeholders on clpp/--experimental archives). `logtype-cache normalize`
+   # detects the encoding per line and renders both to `<*>`, emitting the
+   # canonical, deduplicated {"logtype":"...<*>..."} NDJSON used everywhere
+   # below. The wrapper adds --experimental for stats queries automatically and
+   # rejects the legacy `stats.logtypes` spelling.
+   # It also prints archive-metadata header lines to stdout, so filter to JSON
+   # records with grep '^{' first (the repo-wide idiom; required by the
+   # jq-based pipelines).
+   "$SEARCH" "$ARCHIVE" 'stats.log_shapes' 2>/tmp/logtypes.err \
+     | grep '^{' \
+     | "${CLAUDE_PLUGIN_ROOT}/bin/logtype-cache" normalize > /tmp/logtypes.ndjson
 
    # Summary: how many distinct templates, and the templates themselves.
    jq -s 'length' /tmp/logtypes.ndjson
    jq -r '.logtype' /tmp/logtypes.ndjson
    ```
 
-   **Fallback if `stats.logtypes` emits no NDJSON** (some builds only print a
-   `[stats]` dictionary-size summary to stderr). If `/tmp/logtypes.ndjson` has
+   **Fallback if `stats.log_shapes` emits no NDJSON** (e.g. the binary predates
+   the shapes API and fails to open the archive with `--experimental`). If
+   `/tmp/logtypes.ndjson` has
    zero JSON lines, build an approximate baseline by projecting the message
    field for all records and templatizing the variable runs (O(records), but
    produces templates AND counts in one pass):
@@ -459,36 +469,49 @@ Rules of thumb:
 
 In CLP archives the message field (`message` for structurized text, `msg` for
 native Mongo, etc.) is stored as a CLP-string (a logtype template + encoded
-variables — that is what makes `stats.logtypes` work and what gives the
+variables — that is what makes `stats.log_shapes` work and what gives the
 compression). A consequence: **KQL cannot search message content** —
 `<message>:term` and `<message>:*term*` always return 0 (verified: even on a
 clean archive where the message literally contains the term). Only existence
 (`<message>:*`) matches. The scalar fields (severity, logger, and — for native
 JSON — payload leaf paths) ARE KQL-searchable.
 
-This is exactly why the logtype-baseline approach matters: `stats.logtypes`
+This is exactly why the logtype-baseline approach matters: `stats.log_shapes`
 reads the message dictionary directly (bypassing KQL), giving the full template
 vocabulary that blind `<message>:*term*` queries cannot reach. To retrieve/count
 records of a template, project the message field and grep — do not use
 `<message>:` KQL. Semantic search (`semantic("…")`) also searches the logtypes
 directly and is the one KQL construct that reaches message content.
 
-## stats.logtypes details
+## stats.log_shapes details
 
-- `stats.logtypes` dumps the logtype dictionary: one JSON object per line,
-  `{"id":N,"logtype":"...<*>..."}`. It works on both structurized text archives
-  and native-JSON archives (the logtypes are built from the message field).
-- You **cannot** filter a stats query by substring (`stats.logtypes:foo` is not
-  valid). It always dumps the whole dictionary. Filter the NDJSON downstream:
+- `stats.log_shapes` dumps the logtype dictionary: one raw JSON object per
+  line, `{"archive_id":"...","count":...,"id":N,"shape":"..."}`. The shape
+  string encodes variables in an archive-dependent form — regular archives
+  use raw placeholder bytes (0x11 int, 0x12 str, 0x13 float; `count` is
+  null), clpp/`--experimental` archives use `%rule.name%` TextShape
+  placeholders (`count` is a real integer) — pipe through
+  `logtype-cache normalize`, which detects the encoding per line and renders
+  both to the canonical
+  `{"logtype":"...<*>..."}` NDJSON used by this skill and the cache. It works
+  on both structurized text archives and native-JSON archives (the logtypes
+  are built from the message field). The wrapper adds the required
+  `--experimental` flag automatically; the legacy `stats.logtypes` spelling is
+  rejected (shapes-API binaries silently return nothing for it).
+- You **cannot** filter a stats query by substring (`stats.log_shapes:foo` is
+  not valid). It always dumps the whole dictionary. Filter the normalized
+  NDJSON downstream:
   ```bash
   jq -r 'select(.logtype|test("failed";"i")) | .logtype' /tmp/logtypes.ndjson
   ```
-- `stats.logtypes` gives templates and ids but **not per-template counts**. Get
+- `stats.log_shapes` gives templates and ids but **not per-template counts on
+  regular archives** (the `count` field is null there; clpp archives do carry
+  real counts). Get
   counts with the templatize pass (project the message field + sed + `uniq -c`),
   which yields `count \t template` directly in one O(records) scan. For a single
   template, project the message field and `grep -c` its distinctive static text.
-- On builds where `stats.logtypes` emits no NDJSON (only `[stats]` summary on
-  stderr), use the templatize fallback (step 4) — it produces templates + counts
+- On builds where `stats.log_shapes` emits no NDJSON, use the templatize
+  fallback (step 4) — it produces templates + counts
   in one pass over the message field.
 
 ## Classification cache details
@@ -524,9 +547,11 @@ directly and is the one KQL construct that reaches message content.
   "${CLAUDE_PLUGIN_ROOT}/bin/logtype-cache" show <APP_KEY>
   ```
 - Caveat: GROWTH detection requires the cached entry's `templates[].logtype` to
-  use the **exact** `stats.logtypes` strings (same whitespace and `{var}`/`<*>`
-  placeholders). The classification subagent must paste the logtypes verbatim
-  from the `stats.logtypes` NDJSON, not a re-templatized or stripped form, or the
+  use the **exact** normalized logtype strings (same whitespace and
+  `{var}`/`<*>` placeholders). The classification subagent must paste the
+  logtypes verbatim
+  from the normalized NDJSON (`logtype-cache normalize` output), not a
+  re-templatized or stripped form, or the
   subset match can miss on whitespace.
 
 ## When to still use semantic search

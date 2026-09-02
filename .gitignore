@@ -1,5 +1,9 @@
 # Generated CLP archives from local compression tests.
 clp-s-archives/
+# Scratch outputs from the release-testing walkthrough.
+release-testing/workdir/
+# Local from-scratch build of the private CLP repo (never commit here).
+private-clp-build/
 
 # Plugin-local downloaded CLP binaries/artifacts.
 plugins/clp/.clp-core/

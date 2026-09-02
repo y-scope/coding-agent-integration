@@ -15,7 +15,7 @@ The plugin exposes only:
 - compress one selected session with `clp-s c --timestamp-key timestamp`.
 - compress log files from an arbitrary folder with `clp-s c --remove-path-prefix FOLDER -f FILE_LIST OUTPUT_DIR`.
 - search local CLP archives with KQL (including `semantic("query")`) and stdout results.
-- dump an archive's logtype dictionary with the `stats.logtypes` query.
+- dump an archive's logtype dictionary with the `stats.log_shapes` query.
 - decompress a local CLP archive directory.
 
 It does not expose full-project compression, reducers, network/file output
@@ -263,10 +263,18 @@ dictionary** — the complete vocabulary of distinct message templates, with
 variables replaced by `<*>`:
 
 ```bash
-# The wrapper prints archive-metadata header lines to stdout, so filter to JSON
-# records with grep '^{' before jq — jq errors on the header otherwise.
-./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.logtypes' 2>/dev/null \
-  | grep '^{' > /tmp/logtypes.ndjson
+# stats.log_shapes (shapes API, clp-core >= 0.13) dumps the dictionary as raw
+# {"archive_id","count","id","shape"} lines; the wrapper adds the required
+# --experimental automatically. Shape strings encode variables in an
+# archive-dependent form (raw placeholder bytes on regular archives,
+# %rule.name% TextShape placeholders on clpp archives) — `logtype-cache
+# normalize` detects the encoding per line and renders both to the canonical
+# {"logtype":"...<*>..."} NDJSON.
+# The wrapper prints archive-metadata header lines to stdout, so filter to
+# JSON records with grep '^{' first. The legacy `stats.logtypes` spelling is
+# rejected: shapes-API binaries silently return nothing for it.
+./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
+  | grep '^{' | ./plugins/clp/bin/logtype-cache normalize > /tmp/logtypes.ndjson
 jq -s 'length' /tmp/logtypes.ndjson
 ```
 
@@ -292,15 +300,23 @@ Classifying templates into categories and deriving a query plan is the
 expensive step, and it is a property of the *application*, not the individual
 capture — the same build emits the same templates every run. `bin/logtype-cache`
 persists that classification, keyed by `sha256` of the sorted distinct logtype
-strings:
+strings (the placeholder-rendered form, so fingerprints are stable across
+binary generations):
 
 ```bash
 LC=./plugins/clp/bin/logtype-cache
+# Dump the dictionary and render it to canonical logtype NDJSON in one pipe:
+./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
+  | grep '^{' | "$LC" normalize > /tmp/logtypes.ndjson
 "$LC" count --logtypes-file /tmp/logtypes.ndjson   # distinct templates
 "$LC" diff  --logtypes-file /tmp/logtypes.ndjson   # UPTODATE | GROWTH | NEW
 "$LC" list                                          # cached entries + lineage
 "$LC" show <APP_KEY>
 ```
+
+(`key`, `count`, and `diff` also accept a raw `stats.log_shapes` dump directly
+— lines carrying a `shape` field are rendered on the fly — but store and pass
+around the normalized form so every tool sees identical strings.)
 
 `diff` prints one tab-separated header line, followed by NDJSON
 `{"logtype":"…"}` lines for the templates that still need classifying:
@@ -319,7 +335,8 @@ costs the classification of its newly-added templates.
 Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with
 `$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands
 that read or write the cache (`diff`, `get`, `put`, `put-merged`, `list`,
-`show`). `count` and `key` only hash the input file and do not accept it.
+`show`). `normalize`, `count`, and `key` only transform/hash the input and do
+not accept it.
 
 ## Query Starters
 

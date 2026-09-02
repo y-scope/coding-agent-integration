@@ -26,7 +26,9 @@ Install or have available:
   each input file through `bin/structurize.py`.
 - `clp-s` on `PATH` for wrapper compression/search. If `clp-s` is not on
   `PATH`, set `CLP_S_BIN=/path/to/clp-s` to point the wrappers at a
-  specific binary.
+  specific binary. The Folder + Logtype smoke test needs **clp-core 0.13+**
+  (shapes API) for `stats.log_shapes`; the session wrapper smoke tests work
+  on older builds too.
 
 The plugin also reads marketplace manifests from this repository's
 `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`,
@@ -155,10 +157,12 @@ ARCHIVE="$(ls -dt "$FOLDER_DIR"/folder-* | head -1)"
 # timestamp/logger/level/message):
 ./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" '*' 2>/dev/null | grep '^{' | head -1
 
-# The wrapper prints metadata header lines to stdout, so filter with grep '^{'
-# before jq:
-./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" 'stats.logtypes' 2>/dev/null \
-  | grep '^{' > /tmp/smoke-logtypes.ndjson
+# The wrapper prints metadata header lines to stdout, so filter with grep '^{'.
+# stats.log_shapes emits raw shape lines (placeholder bytes, not <*>);
+# logtype-cache normalize renders them to canonical {"logtype":...} NDJSON.
+# The wrapper adds the required --experimental flag automatically.
+./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" 'stats.log_shapes' 2>/dev/null \
+  | grep '^{' | ./plugins/clp/bin/logtype-cache normalize > /tmp/smoke-logtypes.ndjson
 jq -s 'length' /tmp/smoke-logtypes.ndjson
 ```
 
