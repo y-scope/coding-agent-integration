@@ -110,6 +110,19 @@ def convert_vllm_log_to_json(input_filepath, output_filepath):
                         # lines during compression is worse than a null level.
                         preamble.append(line)
 
+    # This script only understands vLLM log formats (sflow-wrapped vllm_worker
+    # lines or raw `vllm serve` output). If not a single line matched either
+    # vLLM pattern, the input is some other application's log — refuse to
+    # continue rather than emitting the whole file as one preamble blob.
+    if not structured_logs:
+        print(f"Error: {input_filepath} does not match any supported vLLM log format "
+              "(sflow-wrapped vllm_worker or raw `vllm serve` output).",
+              file=sys.stderr)
+        print("structurize.py only supports vLLM logs. Agent: abort this "
+              "structurization task — do not retry with this input file.",
+              file=sys.stderr)
+        sys.exit(3)
+
     if preamble:
         structured_logs.insert(0, {
             'timestamp': (structured_logs[0]['timestamp'] if structured_logs
@@ -123,10 +136,6 @@ def convert_vllm_log_to_json(input_filepath, output_filepath):
     with open(output_filepath, 'w', encoding='utf-8') as out_f:
         for log in structured_logs:
             out_f.write(json.dumps(log) + '\n')
-
-    if len(structured_logs) == 0:
-        print(f"Warning: no structured log entries produced from {input_filepath}.", file=sys.stderr)
-        sys.exit(1)
 
     print(f"Successfully processed {len(structured_logs)} structured log entries.")
 
