@@ -132,7 +132,10 @@ claude plugin validate .
 claude plugin validate ./plugins/clp
 
 # Wrapper syntax
-for f in plugins/clp/bin/clp-s-*; do bash -n "$f"; done
+for f in plugins/clp/bin/clp-s-* plugins/clp/bin/logtype-cache \
+         plugins/clp/bin/logtype-insights-bootstrap \
+         plugins/clp/bin/logtype-cluster; do bash -n "$f"; done
+python3 -m py_compile plugins/clp/bin/logtype-cluster.py
 
 # Static analysis (if shellcheck is installed)
 shellcheck \
@@ -140,6 +143,8 @@ shellcheck \
   plugins/clp/bin/clp-s-compress-session \
   plugins/clp/bin/clp-s-search-kql \
   plugins/clp/bin/clp-s-decompress \
+  plugins/clp/bin/logtype-insights-bootstrap \
+  plugins/clp/bin/logtype-cluster \
   plugins/clp/bin/lib/clp-common.sh
 ```
 

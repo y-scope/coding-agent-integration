@@ -47,9 +47,12 @@ scripts/validate-codex-plugin.sh ./plugins/clp
 Check shell wrapper syntax and style:
 
 ```bash
-for f in plugins/clp/bin/clp-s-*; do
+for f in plugins/clp/bin/clp-s-* plugins/clp/bin/logtype-cache \
+         plugins/clp/bin/logtype-insights-bootstrap \
+         plugins/clp/bin/logtype-cluster; do
   bash -n "$f"
 done
+python3 -m py_compile plugins/clp/bin/logtype-cluster.py
 
 shellcheck \
   plugins/clp/bin/clp-s-list-sessions \
@@ -57,6 +60,8 @@ shellcheck \
   plugins/clp/bin/clp-s-compress-folder \
   plugins/clp/bin/clp-s-search-kql \
   plugins/clp/bin/clp-s-decompress \
+  plugins/clp/bin/logtype-insights-bootstrap \
+  plugins/clp/bin/logtype-cluster \
   plugins/clp/bin/lib/clp-common.sh
 ```
 
@@ -188,6 +193,25 @@ jq -s '{schema:{message:"message"},
 
 "$LC" diff --logtypes-file /tmp/smoke-logtypes.ndjson | head -1   # -> UPTODATE
 "$LC" list
+```
+
+Exercise the `logtype-insights` helper scripts. The bootstrap wraps the
+schema sample, the dictionary dump, and the cache probe in one command; on
+clp-core 0.13+ one call suffices, on older builds it prints
+`FALLBACK=TEMPLATIZE_NEEDS_MESSAGE` — re-run adding `--message message`:
+
+```bash
+./plugins/clp/bin/logtype-insights-bootstrap \
+  --cache-dir /tmp/smoke-lt-cache --out-dir /tmp/smoke-bootstrap "$ARCHIVE"
+# Expect DIST lines, LOGTYPE_COUNT>0, CACHE_MODE=UPTODATE (cache primed above).
+
+# Clusterer: one-time setup (network — installs model2vec into a plugin venv
+# and downloads the embedding model), then cluster the baseline:
+./plugins/clp/bin/logtype-cluster setup
+./plugins/clp/bin/logtype-cluster cluster \
+  --input /tmp/smoke-bootstrap/logtypes.ndjson
+# Expect CLUSTERS<=TEMPLATES and one {"id","count","representative"} line per
+# cluster; /tmp/logtype-clusters.json holds the memberships for `expand`.
 ```
 
 Note that the message field is a CLP-string: `message:term` returns 0 by

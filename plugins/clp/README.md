@@ -79,13 +79,22 @@ boundary (flag allowlist, path validation, env hardening):
 The wrappers prefer `CLP_S_BIN`, then plugin-local `bin/clp-s`, then
 plugin-local `.clp-core/bin/clp-s`, then `clp-s` on `PATH`.
 
-Local helpers (not `clp-s` passthroughs — they never invoke the binary):
+Local helpers (not `clp-s` passthroughs — they invoke `clp-s` only through
+the wrappers above, or not at all):
 
 - `bin/structurize.py` — converts unstructured text logs to structured JSONL.
   Used by `clp-s-compress-folder --structurize`; not called directly.
 - `bin/logtype-cache` — persistent cache of the `logtype-insights`
   classification, with incremental update when an archive grows. See
   [Logtype Cache](#logtype-cache).
+- `bin/logtype-insights-bootstrap` — one-command bootstrap for the
+  `logtype-insights` skill: schema-discovery sample, per-field value
+  distributions, logtype dictionary dump (with the templatize fallback for
+  binaries that predate the shapes API), and the classification-cache probe,
+  summarized as grep-able `KEY=VALUE` lines.
+- `bin/logtype-cluster` (+ `logtype-cluster.py`) — groups semantically similar
+  logtypes with model2vec static embeddings so the LLM classifies one
+  representative per cluster. See [Logtype Cluster](#logtype-cluster).
 
 ## Session Workflow
 
@@ -287,6 +296,19 @@ The skill is app-agnostic — it discovers the schema (timestamp/severity/logger
 message field names) from a sample record, so it works on structurized text
 archives and native-JSON archives alike.
 
+The skill's mechanical preamble is packaged as one command:
+
+```bash
+./plugins/clp/bin/logtype-insights-bootstrap /tmp/archive
+```
+
+It samples records for schema discovery, prints per-field value
+distributions, dumps + normalizes the dictionary (falling back to
+templatization on binaries that predate the shapes API — re-run with
+`--message <field>` when it asks), probes the classification cache, and prints
+a grep-able `KEY=VALUE` summary (`LOGTYPE_COUNT=`, `FALLBACK=`, `CACHE_MODE=`,
+`TO_CLASSIFY=`, output-file paths).
+
 Note that the message field is stored as a CLP-string, so KQL **cannot** match
 message content: `message:term` and `message:*term*` always return 0. Retrieve
 message content by projecting the field and grepping it; the scalar fields
@@ -337,6 +359,36 @@ Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with
 that read or write the cache (`diff`, `get`, `put`, `put-merged`, `list`,
 `show`). `normalize`, `count`, and `key` only transform/hash the input and do
 not accept it.
+
+### Logtype Cluster
+
+Classification cost scales with the number of templates the LLM must label.
+`bin/logtype-cluster` shrinks that: it embeds the to-classify logtypes with a
+lightweight model2vec static model (numpy-only, no torch) and greedily groups
+them at a cosine-similarity threshold, so the LLM classifies one
+representative per cluster (by cluster id) and `expand` propagates the
+category to every member mechanically — byte-exact, because the LLM never
+echoes logtype strings.
+
+```bash
+LTC=./plugins/clp/bin/logtype-cluster
+"$LTC" setup                                   # one-time: venv + model2vec + model download
+"$LTC" cluster --input /tmp/logtypes-to-classify.ndjson
+"$LTC" expand --clusters /tmp/logtype-clusters.json \
+  --classification /tmp/logtype-class.json     # id-based assignments from the LLM
+```
+
+- `setup` creates a venv at `~/.config/yscope-clp-plugin/venvs/logtype-cluster`
+  and pins the HuggingFace model cache to
+  `~/.config/yscope-clp-plugin/huggingface` (unless `HF_HOME` is already set).
+  Needs network once; afterwards `cluster` runs offline.
+- Model: `minishlab/potion-base-8M` (override with `--model` or
+  `$CLP_LOG_CLUSTER_MODEL`). Threshold: cosine 0.80 (override with
+  `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to 0.85–0.90 to split
+  more, lower to merge more).
+- `expand` is stdlib-only (no venv needed) and validates that every cluster id
+  is assigned exactly once before writing anything (exit 2 otherwise), which
+  protects the logtype cache from partial classifications.
 
 ## Query Starters
 
