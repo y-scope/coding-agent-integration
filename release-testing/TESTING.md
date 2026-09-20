@@ -314,6 +314,19 @@ Expected: `4`
 This is the feature's core value: re-analyzing a growing log costs only the
 classification of what's new.
 
+By the way — Steps 2, 5, and the cache probe are what the `logtype-insights`
+skill runs as its first command, via one helper:
+
+```bash
+"$B/logtype-insights-bootstrap" --cache-dir release-testing/workdir/lt-cache \
+  --out-dir release-testing/workdir/bootstrap "$ARCHIVE"
+```
+
+Expected: a `SAMPLE=` record, `DIST field=...` value distributions for the
+four fields, `LOGTYPE_COUNT=100`, `FALLBACK=SHAPES_OK`, and
+`CACHE_MODE=UPTODATE` (the classification you stored above is fetched to
+`release-testing/workdir/bootstrap/logtype-classification.json`).
+
 ## Step 7 — Semantic search (natural language)
 
 `semantic("...")` finds records whose message *means* something similar to
@@ -367,9 +380,14 @@ then ask:
 > insights.
 
 The agent should: compress with `--structurize`, report the compression stats,
-dump the 100-template dictionary, classify the templates (caching the result),
-and return a report with severity counts, top templates, warnings, and
-follow-up queries — the same steps you just did by hand.
+run `logtype-insights-bootstrap` (one command covering the schema sample, the
+100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above),
+cluster the templates with `logtype-cluster` (first use may run its one-time
+`setup`, which downloads a small embedding model), classify the cluster
+representatives with a fast subagent (caching the expanded result), and return
+a report with severity counts, top templates, warnings, and follow-up queries
+— the same steps you just did by hand, with the expensive classification
+shrunk to one prompt over cluster representatives.
 
 ## Cleanup
 
@@ -385,6 +403,7 @@ rm -rf release-testing/workdir
 | `jq: parse error: Invalid numeric literal` | You piped wrapper output straight into `jq`. The wrapper prints header lines first — always filter with `grep '^{'`. |
 | `message:<word>` returns 0 | Expected (Step 4). Message content is not KQL-searchable; project + grep instead. |
 | Step 5 prints `error: no shape/logtype entries found in input` and the count is 0 | Your `clp-s` predates the shapes API (e.g. clp-core 0.12.x) — the underlying error (`--experimental flag set but archive was not created with --experimental`) is hidden by the `2>/dev/null` in the pipeline. Your archive is fine and Steps 1–4/7–8 remain valid; only the binary is too old. Point `CLP_S_BIN` at a 0.13+ build and re-run Step 5 — no recompression needed. |
+| `logtype-insights-bootstrap` prints `LOGTYPE_COUNT=0` and `FALLBACK=TEMPLATIZE_NEEDS_MESSAGE` | Same 0.12.x cause as above, handled gracefully: re-run the bootstrap adding `--message message` and it builds an approximate templatized baseline (`FALLBACK=TEMPLATIZE_USED`) that feeds the cache probe normally. Template strings/counts may differ slightly from the shapes-API numbers in this doc. |
 | `error: stats.logtypes was renamed to stats.log_shapes` | You ran the legacy query spelling; use `stats.log_shapes` as shown in Step 5. |
 | Semantic search: endpoint error | The embedding service is unreachable. Keyword/logtype steps are unaffected. |
 | `warning: clp-s does not support --semantic-cache-dir` | Your `clp-s` build lacks the local semantic cache; the search falls back to remote-only scoring and still works. |
