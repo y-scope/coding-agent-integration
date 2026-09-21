@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # consumed by sourced wrappers
-# Ordered list of remote semantic-cache endpoints used as the last resort when
-# the endpoint was not supplied inline, in the environment, or in the config
-# file. Tried in order; the first that passes the health check is used.
-# ca-central-1 is tried first, ca-central-2 as fallback.
+# Remote semantic-cache endpoint used as the last resort when the endpoint was
+# not supplied inline, in the environment, or in the config file. This is the
+# default deployment clp-s itself documents; it fronts the regional backends,
+# so the list holds one entry rather than per-region hostnames. Still an array:
+# the resolver walks it in order and uses the first that passes /health.
 #
 # The plugin never starts an embedding server of its own (no Docker, no local
 # model download) — it only ever talks to an already-running server. To use a
@@ -13,8 +14,7 @@ set -euo pipefail
 # --semantic-endpoint, CLP_SEMANTIC_ENDPOINT, or the semantic-endpoint config
 # file; it is not auto-detected.
 DEFAULT_SEMANTIC_ENDPOINTS=(
-  "https://ca-central-1-semantic-cache.yscope.ai"
-  "https://ca-central-2-semantic-cache.yscope.ai"
+  "https://ca-central-semantic-cache.yscope.ai"
 )
 # Default local embedded-semantic-cache directory (auto-enabled by the search
 # wrapper under the plugin config dir). Override per-invocation with

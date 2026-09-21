@@ -123,10 +123,9 @@ Endpoint resolution, highest precedence first:
    `~/.config/yscope-clp-plugin/semantic-endpoint`, one URL per line, blank
    lines and `#comments` ignored (override the path with
    `CLP_SEMANTIC_ENDPOINT_FILE`)
-4. the built-in remote endpoints, in order —
-   `https://ca-central-1-semantic-cache.yscope.ai` then
-   `https://ca-central-2-semantic-cache.yscope.ai`; the first that passes the
-   health check is used
+4. the built-in remote endpoint —
+   `https://ca-central-semantic-cache.yscope.ai`, used if it passes the
+   health check
 
 An endpoint named by 1–3 that fails its health check is a hard error — the
 wrapper will not silently fall back to a different host. A server you host
