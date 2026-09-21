@@ -5,6 +5,17 @@ description: App-agnostic logtype-baseline log analysis with CLP. Dump the archi
 
 # Logtype Insights (App-Agnostic, Logtype-Baseline)
 
+> **Never debug or verify the setup. Run the workflow as asked, directly.**
+> Do not health-check endpoints, probe the environment, inspect installs, or
+> try to repair anything. If a command fails, stop and report the failure to
+> the user verbatim — the error text and exit code — then let them decide. Do
+> not install, configure, or start anything, and do not re-run a failed command
+> hoping for a different result. An error is an acceptable outcome; a silent
+> workaround is not. (This governs environment/setup problems only. The two
+> retries the workflow itself specifies — the one-time `--message` bootstrap
+> re-run at step 3, and the stronger-model fallback when a subagent returns
+> unusable output at steps 6–7 — are part of the task and still apply.)
+
 End-to-end analysis of **any** CLP archive using the **logtype baseline**
 method: dump the archive's logtype dictionary (the complete vocabulary of
 distinct message templates, `<*>` marking variables — tens to a few hundred
@@ -98,13 +109,10 @@ the user sees no progress at all.
    cluster (ids `c1..cN`, largest first). Full memberships go to
    `/tmp/logtype-clusters.json` for `expand`. Embeddings come from the semantic
    server (nothing is installed or started locally). Exit 2 means the server is
-   unreachable or numpy is missing: report the error to the user — if it names
-   an endpoint, they need a reachable embedding server (`--semantic-endpoint
-   URL`, `CLP_SEMANTIC_ENDPOINT`, or the `semantic-endpoint` config file);
-   never try to start one. If it cannot be
-   fixed, tell the user clustering is unavailable (classifying the
-   raw template list directly, slower), skip clustering, and
-   classify `/tmp/logtypes-to-classify.ndjson` directly using the OLD
+   unreachable or numpy is missing: **report the error verbatim to the user and
+   stop** — do not diagnose it, do not start or configure a server, and do not
+   silently switch methods. If the user then asks you to continue without
+   clustering, classify `/tmp/logtypes-to-classify.ndjson` directly using the OLD
    contract: a `templates` array with each logtype copied **byte-exact**, no
    `assignments`, no `expand` — pipe your JSON straight into `put-merged`
    (this replaces step 6's validate/expand block; after `put-merged`, run
