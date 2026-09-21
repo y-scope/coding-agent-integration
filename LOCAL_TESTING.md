@@ -47,12 +47,13 @@ scripts/validate-codex-plugin.sh ./plugins/clp
 Check shell wrapper syntax and style:
 
 ```bash
-for f in plugins/clp/bin/clp-s-* plugins/clp/bin/logtype-cache \
+for f in plugins/clp/bin/clp-s-* \
          plugins/clp/bin/logtype-insights-bootstrap \
          plugins/clp/bin/logtype-cluster; do
   bash -n "$f"
 done
-python3 -m py_compile plugins/clp/bin/logtype-cluster.py
+python3 -m py_compile plugins/clp/bin/logtype-cluster.py \
+  plugins/clp/bin/logtype-cache plugins/clp/bin/structurize.py
 
 shellcheck \
   plugins/clp/bin/clp-s-list-sessions \
@@ -205,9 +206,9 @@ clp-core 0.13+ one call suffices, on older builds it prints
   --cache-dir /tmp/smoke-lt-cache --out-dir /tmp/smoke-bootstrap "$ARCHIVE"
 # Expect DIST lines, LOGTYPE_COUNT>0, CACHE_MODE=UPTODATE (cache primed above).
 
-# Clusterer: one-time setup (network — installs model2vec into a plugin venv
-# and downloads the embedding model), then cluster the baseline:
-./plugins/clp/bin/logtype-cluster setup
+# Clusterer: embeds via the semantic server (no setup, no local model).
+# Needs a reachable endpoint — the built-in remote default is used unless
+# CLP_SEMANTIC_ENDPOINT or the semantic-endpoint config file says otherwise:
 ./plugins/clp/bin/logtype-cluster cluster \
   --input /tmp/smoke-bootstrap/logtypes.ndjson
 # Expect CLUSTERS<=TEMPLATES and one {"id","count","representative"} line per

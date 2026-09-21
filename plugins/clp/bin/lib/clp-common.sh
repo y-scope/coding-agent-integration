@@ -2,11 +2,16 @@
 set -euo pipefail
 
 # shellcheck disable=SC2034  # consumed by sourced wrappers
-# Ordered list of remote semantic-cache endpoints used as auto-detect
-# fallbacks when no local embedding server is running on localhost:8080. A
-# local server is preferred so token data stays on the machine (privacy);
-# these remote endpoints are tried in order and the first that passes the
-# health check is used. ca-central-1 is tried first, ca-central-2 as fallback.
+# Ordered list of remote semantic-cache endpoints used as the last resort when
+# the endpoint was not supplied inline, in the environment, or in the config
+# file. Tried in order; the first that passes the health check is used.
+# ca-central-1 is tried first, ca-central-2 as fallback.
+#
+# The plugin never starts an embedding server of its own (no Docker, no local
+# model download) — it only ever talks to an already-running server. To use a
+# server you host yourself (including one on localhost), configure it via
+# --semantic-endpoint, CLP_SEMANTIC_ENDPOINT, or the semantic-endpoint config
+# file; it is not auto-detected.
 DEFAULT_SEMANTIC_ENDPOINTS=(
   "https://ca-central-1-semantic-cache.yscope.ai"
   "https://ca-central-2-semantic-cache.yscope.ai"
@@ -23,6 +28,112 @@ DEFAULT_SEMANTIC_CACHE_COLD_CAPACITY="10000000"
 
 default_semantic_cache_dir() {
   printf '%s/%s\n' "$(clp_config_dir)" "$DEFAULT_SEMANTIC_CACHE_SUBDIR"
+}
+
+# Config file holding the semantic (embedding) server URL, one line. Sits
+# between the environment and the built-in remote defaults in the precedence
+# chain, so a user can pin an endpoint once instead of exporting it per shell.
+semantic_endpoint_config_file() {
+  if [[ -n "${CLP_SEMANTIC_ENDPOINT_FILE:-}" ]]; then
+    printf '%s\n' "$CLP_SEMANTIC_ENDPOINT_FILE"
+  else
+    printf '%s/semantic-endpoint\n' "$(clp_config_dir)"
+  fi
+}
+
+# Reads the endpoint from the config file, ignoring blank lines and #comments.
+# Return: 0 endpoint printed, 1 no config file (fall through to the defaults),
+# 2 the file exists but is unusable (unreadable, or no endpoint in it) — the
+# caller must treat that as a hard error rather than silently using a default.
+read_configured_semantic_endpoint() {
+  local config_file line
+  config_file="$(semantic_endpoint_config_file)"
+  [[ -e "$config_file" ]] || return 1
+  if [[ ! -r "$config_file" ]]; then
+    echo "error: semantic endpoint config file is not readable: $config_file" >&2
+    return 2
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Strip comments, a trailing CR (CRLF files), and surrounding whitespace.
+    line="${line%%#*}"
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -n "$line" ]] || continue
+    printf '%s\n' "$line"
+    return 0
+  done < "$config_file"
+
+  echo "error: semantic endpoint config file contains no endpoint: $config_file" >&2
+  return 2
+}
+
+# Resolves the semantic endpoint by precedence:
+#   1. $1              inline (--semantic-endpoint)
+#   2. CLP_SEMANTIC_ENDPOINT / CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT
+#   3. config file     (~/.config/yscope-clp-plugin/semantic-endpoint)
+#   4. DEFAULT_SEMANTIC_ENDPOINTS, first one that passes /health
+#
+# Sources 1-3 name one specific server, so a failure there is a hard error — an
+# unhealthy endpoint, an unusable config file, or a non-HTTPS URL all stop the
+# run. Silently falling back to a yscope-hosted endpoint would ship log text
+# somewhere the user did not choose. Only the built-in defaults in 4 are probed
+# and skipped on failure.
+#
+# Prints the endpoint on stdout; diagnostics go to stderr.
+# Return: 0 ok, 1 nothing configured/reachable, 2 rejected URL or bad config.
+resolve_semantic_endpoint() {
+  local inline="${1:-}"
+  local endpoint source candidate rc
+
+  if [[ -n "$inline" ]]; then
+    endpoint="$inline"
+    source="--semantic-endpoint"
+  elif [[ -n "${CLP_SEMANTIC_ENDPOINT:-}" ]]; then
+    endpoint="$CLP_SEMANTIC_ENDPOINT"
+    source="CLP_SEMANTIC_ENDPOINT"
+  elif [[ -n "${CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT:-}" ]]; then
+    endpoint="$CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT"
+    source="CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT"
+  else
+    # Assign separately from `local` so the function's return code survives.
+    endpoint="$(read_configured_semantic_endpoint)"
+    rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+      source="$(semantic_endpoint_config_file)"
+    elif [[ "$rc" -eq 2 ]]; then
+      # The user pinned a config file but it is unusable — fail rather than
+      # quietly sending their logs to a built-in default.
+      return 2
+    else
+      for candidate in "${DEFAULT_SEMANTIC_ENDPOINTS[@]}"; do
+        if check_semantic_endpoint "$candidate" >/dev/null 2>&1; then
+          printf '%s\n' "$candidate"
+          echo "Semantic endpoint: $candidate (built-in default)" >&2
+          return 0
+        fi
+      done
+      echo "error: no semantic endpoint is configured or reachable." >&2
+      echo "  This plugin never starts an embedding server; it uses one you point it at." >&2
+      echo "  Set one of (highest precedence first):" >&2
+      echo "    --semantic-endpoint URL" >&2
+      echo "    CLP_SEMANTIC_ENDPOINT=URL" >&2
+      echo "    echo URL > $(semantic_endpoint_config_file)" >&2
+      echo "  Built-in defaults tried (all unreachable):" >&2
+      printf '    - %s\n' "${DEFAULT_SEMANTIC_ENDPOINTS[@]}" >&2
+      return 1
+    fi
+  fi
+
+  require_secure_url "$endpoint" || return 2
+  if ! check_semantic_endpoint "$endpoint"; then
+    echo "error: semantic endpoint from $source is unavailable: $endpoint" >&2
+    echo "  Check that the embedding server is running and reachable." >&2
+    return 1
+  fi
+  printf '%s\n' "$endpoint"
+  echo "Semantic endpoint: $endpoint (from $source)" >&2
 }
 
 resolve_clp_s() {

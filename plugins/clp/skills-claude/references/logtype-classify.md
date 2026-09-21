@@ -24,10 +24,9 @@ guarantees this by construction: the LLM only ever returns cluster ids, and
 ## Cluster contract (`logtype-cluster`)
 
 ```bash
-# One-time install (venv + model2vec + embedding-model download; needs network):
-"${CLAUDE_PLUGIN_ROOT}/bin/logtype-cluster" setup
-
-# Group the to-classify templates (from the bootstrap) by semantic similarity:
+# Group the to-classify templates (from the bootstrap) by semantic similarity.
+# Embeddings come from the semantic server — nothing is installed or started
+# locally, and no model is downloaded:
 "${CLAUDE_PLUGIN_ROOT}/bin/logtype-cluster" cluster \
   --input /tmp/logtypes-to-classify.ndjson
 ```
@@ -36,17 +35,19 @@ guarantees this by construction: the LLM only ever returns cluster ids, and
 `{"id","count","representative"}` line per cluster (ids `c1..cN`, largest
 first; the representative is a real template closest to the cluster centroid).
 Full memberships are written to `/tmp/logtype-clusters.json`. Tunables:
-`--model` / `$CLP_LOG_CLUSTER_MODEL` (default `minishlab/potion-base-8M`),
 `--threshold` / `$CLP_LOG_CLUSTER_THRESHOLD` (cosine, default 0.80 — raise to
-0.85–0.90 if unrelated templates land in one cluster, lower to merge more).
+0.85–0.90 if unrelated templates land in one cluster, lower to merge more),
+`--semantic-endpoint` / `$CLP_SEMANTIC_ENDPOINT` (the embedding server; falls
+back to the `semantic-endpoint` config file, then the built-in remote
+endpoints), and `--batch-size` (texts per request, default 256).
 
-**Raw-NDJSON last resort** (only if `setup` is impossible, e.g. no network):
-skip clustering; paste `/tmp/logtypes-to-classify.ndjson` directly into the
-prompt, replace the `assignments` output contract with
+**Raw-NDJSON last resort** (only if no embedding server is reachable): skip
+clustering; paste `/tmp/logtypes-to-classify.ndjson` directly into the prompt,
+replace the `assignments` output contract with
 `"templates": [{"logtype":"<verbatim template>","category":"..."}]`, instruct
 the subagent to copy each logtype **byte-exact** from the input, skip `expand`,
 and pipe the subagent's JSON straight into `put-merged`. Slower and fragile for
-GROWTH — prefer installing the clusterer.
+GROWTH — prefer fixing the endpoint.
 
 ## Classification subagent prompt template
 

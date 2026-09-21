@@ -93,7 +93,7 @@ the wrappers above, or not at all):
   binaries that predate the shapes API), and the classification-cache probe,
   summarized as grep-able `KEY=VALUE` lines.
 - `bin/logtype-cluster` (+ `logtype-cluster.py`) — groups semantically similar
-  logtypes with model2vec static embeddings so the LLM classifies one
+  logtypes using embeddings from the semantic server so the LLM classifies one
   representative per cluster. See [Logtype Cluster](#logtype-cluster).
 
 ## Session Workflow
@@ -230,15 +230,40 @@ natural language query, even when exact keywords differ. Use `semantic("query")`
 in KQL and combine with regular KQL using `AND`, e.g.
 `'semantic("errors") AND level:error'`.
 
-The wrapper health-checks the embedding service before running a semantic
-search; if the service is unavailable, the search fails with a clear error.
+Semantic search requires an embedding server that is **already running**. The
+plugin never starts one — no Docker container is spun up and no embedding model
+is downloaded locally. The wrapper health-checks the endpoint before running a
+semantic search; if it is unavailable, the search fails with a clear error.
 
-Endpoint: auto-detected — a local embedding server on `http://localhost:8080`
-is preferred (so token data stays on the machine), otherwise the remote
-endpoints are tried in order — `https://ca-central-1-semantic-cache.yscope.ai`
-then `https://ca-central-2-semantic-cache.yscope.ai` — and the first that
-passes the health check is used. Override with
-`--semantic-endpoint URL` or set `CLP_SEMANTIC_ENDPOINT`.
+Endpoint resolution, highest precedence first:
+
+1. `--semantic-endpoint URL` (inline)
+2. `CLP_SEMANTIC_ENDPOINT`
+3. the `semantic-endpoint` config file —
+   `~/.config/yscope-clp-plugin/semantic-endpoint`, one URL per line, blank
+   lines and `#comments` ignored (override the path with
+   `CLP_SEMANTIC_ENDPOINT_FILE`)
+4. the built-in remote endpoints, in order —
+   `https://ca-central-1-semantic-cache.yscope.ai` then
+   `https://ca-central-2-semantic-cache.yscope.ai`; the first that passes the
+   health check is used
+
+An endpoint named by 1–3 that fails its health check is a hard error: the
+wrapper will not silently fall back to a different host, since that would send
+log text somewhere the user did not choose. Only the built-in defaults in 4 are
+probed and skipped on failure. A server you host yourself (including one on
+`localhost`) must be named explicitly; it is not auto-detected.
+
+```bash
+# Pin an endpoint once, for every wrapper and session:
+echo 'https://embeddings.internal.example.com' \
+  > ~/.config/yscope-clp-plugin/semantic-endpoint
+```
+
+URLs must be HTTPS, a `localhost`/loopback address, or a `*.yscope.ai` host.
+The same resolution drives `logtype-cluster` (see below), so one setting covers
+both semantic search and logtype clustering.
+
 Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T`
 (default 0.3, range 0.0-1.0), `--embedding-batch-size N` (default auto),
 `--semantic-cache-dir DIR`, and `--semantic-cache-cold-capacity N`.
@@ -363,32 +388,44 @@ not accept it.
 ### Logtype Cluster
 
 Classification cost scales with the number of templates the LLM must label.
-`bin/logtype-cluster` shrinks that: it embeds the to-classify logtypes with a
-lightweight model2vec static model (numpy-only, no torch) and greedily groups
+`bin/logtype-cluster` shrinks that: it embeds the to-classify logtypes through
+the semantic server's `/v1/embeddings` endpoint and greedily groups
 them at a cosine-similarity threshold, so the LLM classifies one
 representative per cluster (by cluster id) and `expand` propagates the
 category to every member mechanically — byte-exact, because the LLM never
 echoes logtype strings.
 
+Embeddings come from the same already-running server that powers semantic
+search. Nothing is installed, downloaded, or started locally — the only
+dependency is numpy.
+
 ```bash
 LTC=./plugins/clp/bin/logtype-cluster
-"$LTC" setup                                   # one-time: venv + model2vec + model download
 "$LTC" cluster --input /tmp/logtypes-to-classify.ndjson
 "$LTC" expand --clusters /tmp/logtype-clusters.json \
   --classification /tmp/logtype-class.json     # id-based assignments from the LLM
 ```
 
-- `setup` creates a venv at `~/.config/yscope-clp-plugin/venvs/logtype-cluster`
-  and pins the HuggingFace model cache to
-  `~/.config/yscope-clp-plugin/huggingface` (unless `HF_HOME` is already set).
-  Needs network once; afterwards `cluster` runs offline.
-- Model: `minishlab/potion-base-8M` (override with `--model` or
-  `$CLP_LOG_CLUSTER_MODEL`). Threshold: cosine 0.80 (override with
-  `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to 0.85–0.90 to split
-  more, lower to merge more).
-- `expand` is stdlib-only (no venv needed) and validates that every cluster id
+- Endpoint: `--semantic-endpoint`, then `$CLP_SEMANTIC_ENDPOINT`, then the
+  `semantic-endpoint` config file, then the built-in remote endpoints — the
+  same chain as [Semantic search](#semantic-search). The launcher resolves and
+  health-checks it, then passes it down.
+- Model contract: `BAAI/bge-base-en-v1.5`, int8[768] — matching what `clp-s`
+  advertises, so both hit the same server-side cache. Threshold: cosine 0.80
+  (override with `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to
+  0.85–0.90 to split more, lower to merge more). `--batch-size` sets texts per
+  request (default 256).
+- `expand` is stdlib-only and fully offline — it needs no endpoint — and
+  validates that every cluster id
   is assigned exactly once before writing anything (exit 2 otherwise), which
   protects the logtype cache from partial classifications.
+- Exit codes for `cluster`: 0 ok, 1 input problem, 2 the embedding server is
+  unreachable/rejected or numpy is missing, 3 usage error. `--help` and
+  `expand` never touch the network.
+- `setup` has been removed; it now exits 2 with a pointer to the endpoint
+  settings. Existing venvs under
+  `~/.config/yscope-clp-plugin/venvs/logtype-cluster` are no longer used and
+  can be deleted.
 
 ## Query Starters
 

@@ -330,9 +330,11 @@ four fields, `LOGTYPE_COUNT=100`, `FALLBACK=SHAPES_OK`, and
 ## Step 7 — Semantic search (natural language)
 
 `semantic("...")` finds records whose message *means* something similar to
-your query, even with no keyword overlap. It needs a working embedding
-endpoint (auto-detected; requires network unless you run a local embedding
-server):
+your query, even with no keyword overlap. It needs a reachable embedding
+server — the plugin never starts one. By default it uses the built-in remote
+endpoint (needs network); point it elsewhere with `--semantic-endpoint URL`,
+`CLP_SEMANTIC_ENDPOINT`, or
+`~/.config/yscope-clp-plugin/semantic-endpoint`:
 
 ```bash
 "$B/clp-s-search-kql" "$ARCHIVE" 'semantic("GPU features unavailable")' 2>/dev/null \
@@ -382,8 +384,9 @@ then ask:
 The agent should: compress with `--structurize`, report the compression stats,
 run `logtype-insights-bootstrap` (one command covering the schema sample, the
 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above),
-cluster the templates with `logtype-cluster` (first use may run its one-time
-`setup`, which downloads a small embedding model), classify the cluster
+cluster the templates with `logtype-cluster` (which embeds them through the
+semantic server — it should never try to install a model or start a server),
+classify the cluster
 representatives with a fast subagent (caching the expanded result), and return
 a report with severity counts, top templates, warnings, and follow-up queries
 — the same steps you just did by hand, with the expensive classification
@@ -405,6 +408,7 @@ rm -rf release-testing/workdir
 | Step 5 prints `error: no shape/logtype entries found in input` and the count is 0 | Your `clp-s` predates the shapes API (e.g. clp-core 0.12.x) — the underlying error (`--experimental flag set but archive was not created with --experimental`) is hidden by the `2>/dev/null` in the pipeline. Your archive is fine and Steps 1–4/7–8 remain valid; only the binary is too old. Point `CLP_S_BIN` at a 0.13+ build and re-run Step 5 — no recompression needed. |
 | `logtype-insights-bootstrap` prints `LOGTYPE_COUNT=0` and `FALLBACK=TEMPLATIZE_NEEDS_MESSAGE` | Same 0.12.x cause as above, handled gracefully: re-run the bootstrap adding `--message message` and it builds an approximate templatized baseline (`FALLBACK=TEMPLATIZE_USED`) that feeds the cache probe normally. Template strings/counts may differ slightly from the shapes-API numbers in this doc. |
 | `error: stats.logtypes was renamed to stats.log_shapes` | You ran the legacy query spelling; use `stats.log_shapes` as shown in Step 5. |
-| Semantic search: endpoint error | The embedding service is unreachable. Keyword/logtype steps are unaffected. |
+| Semantic search: endpoint error | The embedding server is unreachable. Check the endpoint (`--semantic-endpoint`, `CLP_SEMANTIC_ENDPOINT`, or `~/.config/yscope-clp-plugin/semantic-endpoint`); the plugin never starts a server itself. Keyword/logtype steps are unaffected. |
+| `logtype-cluster` exits 2 | Either the embedding server is unreachable (same fix as above) or numpy is missing (`python3 -m pip install numpy`). `setup` no longer exists — clustering uses the server, not a local model. |
 | `warning: clp-s does not support --semantic-cache-dir` | Your `clp-s` build lacks the local semantic cache; the search falls back to remote-only scoring and still works. |
 | Numbers differ slightly from this doc | Byte counts vary with clp-s version; record/template counts (250 / 100 / 96 / 4 / 35 / 18) should match exactly. |
