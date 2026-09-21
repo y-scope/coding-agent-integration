@@ -19,7 +19,9 @@ Allowed search controls:
   --archive-id ID          Limit search to one archive ID.
   --projection COLUMNS     Project comma-separated columns, e.g. level,message.
                            May be repeated.
-  --semantic-endpoint URL  Embedding service URL for semantic search.
+  --semantic-endpoint URL  Embedding server URL for semantic search. Defaults
+                           to $CLP_SEMANTIC_ENDPOINT, then the semantic-endpoint
+                           config file, then the built-in remote endpoints.
   --semantic-top-k K       Return up to K nearest logtypes (default 5).
   --semantic-threshold T   Minimum similarity floor 0.0-1.0 (default 0.3).
   --embedding-batch-size N  Batch size for vector processing (default auto).
@@ -60,13 +62,22 @@ This search wrapper intentionally does not expose clp-s output handlers,
 reducers, results-cache writes, decompression, or arbitrary clp-s option
 passthrough.
 
-Semantic search uses semantic("query") in KQL and requires a running embedding
-service. The wrapper health-checks the endpoint before search. With no
---semantic-endpoint and no CLP_SEMANTIC_ENDPOINT, it auto-detects: a local
-embedding server on http://localhost:8080 is preferred, otherwise it tries the
-remote endpoints in order (https://ca-central-1-semantic-cache.yscope.ai then
-https://ca-central-2-semantic-cache.yscope.ai) and uses the first that is
-healthy.
+Semantic search uses semantic("query") in KQL and requires a reachable embedding
+server. This wrapper never starts one — point it at a server that is already
+running. The endpoint is resolved by precedence, and health-checked before the
+search:
+  1. --semantic-endpoint URL
+  2. $CLP_SEMANTIC_ENDPOINT
+  3. the semantic-endpoint config file
+     (~/.config/yscope-clp-plugin/semantic-endpoint, one URL per line;
+      blank lines and #comments ignored; override the path with
+      $CLP_SEMANTIC_ENDPOINT_FILE)
+  4. the built-in remote endpoints, in order
+     (https://ca-central-1-semantic-cache.yscope.ai then
+      https://ca-central-2-semantic-cache.yscope.ai) — first healthy one wins
+An endpoint named by 1-3 that fails its health check is a hard error; only the
+built-in defaults in 4 are probed and skipped. A server you host yourself
+(including on localhost) must be named explicitly — it is not auto-detected.
 
 A local embedded semantic cache is auto-enabled under the plugin config dir
 (~/.config/yscope-clp-plugin/semantic-cache) so repeated semantic queries hit
@@ -271,39 +282,10 @@ if [[ "$archives_dir" != "$input_archives_dir" ]]; then
 fi
 
 if [[ "$semantic_active" -eq 1 ]]; then
-  if [[ -z "$semantic_endpoint" ]]; then
-    semantic_endpoint="${CLP_SEMANTIC_ENDPOINT:-${CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT:-}}"
-  fi
-  if [[ -z "$semantic_endpoint" ]]; then
-    # Auto-detect: prefer a local embedding server so token data stays on
-    # the machine (privacy); otherwise try the remote semantic-cache endpoints
-    # in order (DEFAULT_SEMANTIC_ENDPOINTS) and use the first that is healthy.
-    if curl -sf --connect-timeout 2 http://localhost:8080/health >/dev/null 2>&1; then
-      semantic_endpoint="http://localhost:8080"
-    else
-      for candidate in "${DEFAULT_SEMANTIC_ENDPOINTS[@]}"; do
-        if check_semantic_endpoint "$candidate" >/dev/null 2>&1; then
-          semantic_endpoint="$candidate"
-          break
-        fi
-      done
-      if [[ -z "$semantic_endpoint" ]]; then
-        echo "error: no semantic endpoint is reachable." >&2
-        echo "  Tried local http://localhost:8080 and remote (in order):" >&2
-        printf '    - %s\n' "${DEFAULT_SEMANTIC_ENDPOINTS[@]}" >&2
-        echo "  Start a local embedding server or pass --semantic-endpoint URL." >&2
-        exit 1
-      fi
-    fi
-    echo "Auto-selected semantic endpoint: $semantic_endpoint" >&2
-  fi
-  require_secure_url "$semantic_endpoint" || exit 2
-  check_semantic_endpoint "$semantic_endpoint" || {
-    echo "error: semantic endpoint is unavailable: $semantic_endpoint" >&2
-    echo "  Check that the embedding service is running and reachable." >&2
-    exit 1
-  }
-
+  # Endpoint precedence: --semantic-endpoint, CLP_SEMANTIC_ENDPOINT, the
+  # semantic-endpoint config file, then the built-in remote defaults. The
+  # plugin never starts an embedding server itself.
+  semantic_endpoint="$(resolve_semantic_endpoint "$semantic_endpoint")" || exit $?
   # Local embedded semantic cache: auto-enabled under the plugin config dir so
   # repeated semantic queries score in-process instead of round-tripping. Pass
   # "none" (or set CLP_SEMANTIC_CACHE_DIR=none) to disable and use remote-only

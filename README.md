@@ -110,16 +110,37 @@ flag allowlist, and example commands.
 ## Semantic search
 
 `clp-s-search-kql` supports `semantic("query")` in KQL for natural-language
-similarity search. The wrapper health-checks the embedding service before
-running a semantic search; if the service is unavailable, the search fails with
-a clear error.
+similarity search. It requires an embedding server that is **already running** —
+the plugin never starts one (no Docker, no local model download). The wrapper
+health-checks the endpoint before running a semantic search; if it is
+unavailable, the search fails with a clear error.
 
-Endpoint: auto-detected — a local embedding server on `http://localhost:8080`
-is preferred (so token data stays on the machine), otherwise the remote
-endpoints are tried in order — `https://ca-central-1-semantic-cache.yscope.ai`
-then `https://ca-central-2-semantic-cache.yscope.ai` — and the first that
-passes the health check is used. Override with
-`--semantic-endpoint URL` or set `CLP_SEMANTIC_ENDPOINT`.
+Endpoint resolution, highest precedence first:
+
+1. `--semantic-endpoint URL` (inline)
+2. `CLP_SEMANTIC_ENDPOINT`
+3. the `semantic-endpoint` config file —
+   `~/.config/yscope-clp-plugin/semantic-endpoint`, one URL per line, blank
+   lines and `#comments` ignored (override the path with
+   `CLP_SEMANTIC_ENDPOINT_FILE`)
+4. the built-in remote endpoints, in order —
+   `https://ca-central-1-semantic-cache.yscope.ai` then
+   `https://ca-central-2-semantic-cache.yscope.ai`; the first that passes the
+   health check is used
+
+An endpoint named by 1–3 that fails its health check is a hard error — the
+wrapper will not silently fall back to a different host. A server you host
+yourself (including one on `localhost`) must be named explicitly; it is not
+auto-detected.
+
+```bash
+echo 'https://embeddings.internal.example.com' \
+  > ~/.config/yscope-clp-plugin/semantic-endpoint
+```
+
+The same endpoint drives `logtype-cluster`, which embeds logtype templates
+through the server's `/v1/embeddings` endpoint.
+
 Other semantic flags: `--semantic-top-k K`, `--semantic-threshold T`,
 `--embedding-batch-size N`, `--semantic-cache-dir DIR`,
 `--semantic-cache-cold-capacity N`.

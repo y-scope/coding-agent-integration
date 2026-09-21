@@ -96,11 +96,13 @@ the user sees no progress at all.
 
    Stdout prints a summary then one `{"id","count","representative"}` line per
    cluster (ids `c1..cN`, largest first). Full memberships go to
-   `/tmp/logtype-clusters.json` for `expand`. Exit 2 means model2vec is
-   missing: tell the user you are running the one-time
-   `~/.codex/marketplaces/yscope/plugins/clp/bin/logtype-cluster setup`
-   (network — downloads a small embedding model, ~30 s) and retry. If setup
-   is impossible, tell the user clustering is unavailable (classifying the
+   `/tmp/logtype-clusters.json` for `expand`. Embeddings come from the semantic
+   server (nothing is installed or started locally). Exit 2 means the server is
+   unreachable or numpy is missing: report the error to the user — if it names
+   an endpoint, they need a reachable embedding server (`--semantic-endpoint
+   URL`, `CLP_SEMANTIC_ENDPOINT`, or the `semantic-endpoint` config file);
+   never try to start one. If it cannot be
+   fixed, tell the user clustering is unavailable (classifying the
    raw template list directly, slower), skip clustering, and
    classify `/tmp/logtypes-to-classify.ndjson` directly using the OLD
    contract: a `templates` array with each logtype copied **byte-exact**, no

@@ -130,12 +130,14 @@ narration the user sees only a spinner.
 
    Stdout prints a summary then one `{"id","count","representative"}` line per
    cluster — paste those lines into the classification prompt. Full
-   memberships go to `/tmp/logtype-clusters.json` for `expand`. Exit 2 means
-   model2vec is missing: tell the user you are running the one-time
-   `"${CLAUDE_PLUGIN_ROOT}/bin/logtype-cluster" setup` (network — downloads a
-   small embedding model, ~30 s) and retry; if setup is impossible, tell the
-   user clustering is unavailable (classifying the raw template list directly,
-   slower) and use the raw-NDJSON last resort in
+   memberships go to `/tmp/logtype-clusters.json` for `expand`. Embeddings come
+   from the semantic server (nothing is installed or started locally). Exit 2
+   means the server is unreachable or numpy is missing: report the error to the
+   user — if it names an endpoint, they need a reachable embedding server
+   (`--semantic-endpoint URL`, `CLP_SEMANTIC_ENDPOINT`, or the
+   `semantic-endpoint` config file); never try to start one. If it cannot be
+   fixed, tell the user clustering is unavailable (classifying the raw template
+   list directly, slower) and use the raw-NDJSON last resort in
    `references/logtype-classify.md`. Report the
    reduction to the user (`TEMPLATES=N` → `CLUSTERS=M`).
 

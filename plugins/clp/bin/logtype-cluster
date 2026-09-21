@@ -3,39 +3,76 @@ set -euo pipefail
 
 # logtype-cluster — launcher for the logtype-insights pre-clustering tool.
 #
-# `setup` creates a dedicated venv under the plugin config dir and installs
-# model2vec (the lightweight static-embedding model used to merge semantically
-# similar logtype templates before LLM classification), then pre-downloads the
-# embedding model so later runs work offline. Every other subcommand is
-# forwarded to logtype-cluster.py, preferring the venv python when it exists.
+# Resolves the semantic (embedding) server URL with the same precedence, scheme
+# check, and health check as the search wrapper — inline flag,
+# CLP_SEMANTIC_ENDPOINT, the semantic-endpoint config file, then the built-in
+# remote endpoints — and exports it for logtype-cluster.py, which embeds the
+# logtype templates via the server's /v1/embeddings endpoint.
+#
+# No venv, no model download, no server of our own: embeddings always come from
+# an already-running server. The only local dependency is numpy.
 
 CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck disable=SC1091
 source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
 
-VENV_DIR="$(clp_config_dir)/venvs/logtype-cluster"
-DEFAULT_MODEL="${CLP_LOG_CLUSTER_MODEL:-minishlab/potion-base-8M}"
-# Keep the embedding-model download under the plugin config dir instead of the
-# user-wide HF cache, unless the user already pinned HF_HOME themselves.
-export HF_HOME="${HF_HOME:-$(clp_config_dir)/huggingface}"
-
 if [[ "${1:-}" == "setup" ]]; then
-  echo "Creating venv: $VENV_DIR"
-  python3 -m venv "$VENV_DIR"
-  "$VENV_DIR/bin/pip" install --quiet --disable-pip-version-check "model2vec>=0.4,<1"
-  echo "Pre-downloading embedding model: $DEFAULT_MODEL (HF_HOME=$HF_HOME)"
-  "$VENV_DIR/bin/python" - "$DEFAULT_MODEL" <<'PY'
-import sys
-from model2vec import StaticModel
-model = StaticModel.from_pretrained(sys.argv[1])
-dims = model.encode(["setup probe"]).shape
-print(f"model ready: {sys.argv[1]} (embedding shape {dims})")
-PY
-  echo "Setup complete. 'logtype-cluster cluster' now works offline."
-  exit 0
+  cat >&2 <<EOF
+error: 'logtype-cluster setup' has been removed.
+
+Clustering no longer installs a venv or downloads an embedding model — it
+embeds templates through a semantic server that is already running. Point it
+at one (highest precedence first):
+  logtype-cluster cluster --semantic-endpoint URL ...
+  CLP_SEMANTIC_ENDPOINT=URL
+  echo URL > $(semantic_endpoint_config_file)
+Otherwise the built-in remote endpoints are used automatically.
+
+The only local dependency is numpy (python3 -m pip install numpy).
+EOF
+  exit 2
 fi
 
-PY_BIN="$VENV_DIR/bin/python"
-[[ -x "$PY_BIN" ]] || PY_BIN="$(command -v python3)"
-export LOGTYPE_CLUSTER_SETUP_CMD="${CLP_PLUGIN_BIN_DIR}/logtype-cluster setup"
-exec "$PY_BIN" "${CLP_PLUGIN_BIN_DIR}/logtype-cluster.py" "$@"
+# Decide whether this invocation needs an embedding server at all, and pick up
+# an inline --semantic-endpoint if one was given. Scanning argv positionally
+# (rather than pattern-matching "$*") keeps an argument VALUE that happens to
+# contain the flag text from being mistaken for the flag itself.
+needs_endpoint=1
+inline_endpoint=""
+expect_endpoint_value=0
+end_of_flags=0
+
+case "${1:-}" in
+  # `expand` only propagates categories to cluster members — stdlib-only and
+  # fully offline. Help and the bare usage path must stay offline and instant,
+  # so never health-check the network just to print text.
+  expand|-h|--help|"") needs_endpoint=0 ;;
+esac
+
+for arg in "$@"; do
+  if [[ "$expect_endpoint_value" -eq 1 ]]; then
+    inline_endpoint="$arg"
+    expect_endpoint_value=0
+    continue
+  fi
+  if [[ "$end_of_flags" -eq 1 ]]; then
+    continue
+  fi
+  case "$arg" in
+    --) end_of_flags=1 ;;
+    --semantic-endpoint) expect_endpoint_value=1 ;;
+    --semantic-endpoint=*) inline_endpoint="${arg#*=}" ;;
+    -h|--help) needs_endpoint=0 ;;
+  esac
+done
+
+if [[ "$needs_endpoint" -eq 1 ]]; then
+  # Always route through resolve_semantic_endpoint — including the inline
+  # value — so the HTTPS/loopback scheme check and the health check apply
+  # uniformly to every source. Map any resolution failure to exit 2, the
+  # clusterer's documented "cannot embed" code (see logtype-cluster.py).
+  CLP_SEMANTIC_ENDPOINT="$(resolve_semantic_endpoint "$inline_endpoint")" || exit 2
+  export CLP_SEMANTIC_ENDPOINT
+fi
+
+exec python3 "${CLP_PLUGIN_BIN_DIR}/logtype-cluster.py" "$@"
