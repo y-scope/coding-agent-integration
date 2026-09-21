@@ -72,9 +72,8 @@ search:
      (~/.config/yscope-clp-plugin/semantic-endpoint, one URL per line;
       blank lines and #comments ignored; override the path with
       $CLP_SEMANTIC_ENDPOINT_FILE)
-  4. the built-in remote endpoints, in order
-     (https://ca-central-1-semantic-cache.yscope.ai then
-      https://ca-central-2-semantic-cache.yscope.ai) — first healthy one wins
+  4. the built-in remote endpoint
+     (https://ca-central-semantic-cache.yscope.ai)
 An endpoint named by 1-3 that fails its health check is a hard error; only the
 built-in defaults in 4 are probed and skipped. A server you host yourself
 (including on localhost) must be named explicitly — it is not auto-detected.
