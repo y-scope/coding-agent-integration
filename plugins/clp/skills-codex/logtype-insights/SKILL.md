@@ -24,7 +24,9 @@ templates into categories, and derive every later query from a template that
 is guaranteed to exist. No blind keyword batteries.
 
 The classification is a property of the **application**, not the capture, so
-it is cached (keyed by `sha256` of the sorted template set) and updated
+it is cached (keyed by `sha256` of the sorted template set, each template capped
+at a character limit — 512 by default — and de-duplicated, matching what is
+embedded) and updated
 incrementally when the archive grows — re-analyzing the same app skips
 classification entirely. The skill reports the archive's logtype count.
 
@@ -76,7 +78,9 @@ the user sees no progress at all.
      shapes API; tell the user ("old clp-s binary — rebuilding the baseline
      via message templatization"), then re-run ONCE adding
      `--message <message-field>` (from SAMPLE/DIST).
-   - `CACHE_MODE=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` → step 4.
+   - `CACHE_MODE=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` / `MAX_CHARS=` →
+     step 4. Pass `MAX_CHARS` through to `logtype-cluster` and `logtype-cache`
+     so their fingerprints match.
 
    Then tell the user what the bootstrap found, in 2–3 lines: the logtype
    count, the schema you picked, whether the templatize fallback was used,
@@ -95,30 +99,37 @@ the user sees no progress at all.
      `/tmp/logtype-base-classification.json`. Continue to step 5.
    - **NEW** — classify all of `/tmp/logtypes-to-classify.ndjson`. Continue.
 
-5. **Cluster the templates to classify** — merges semantically similar
+5. **Cluster the templates to classify** — truncates each template to a
+   character limit (`MAX_CHARS` from the bootstrap, 512 by default),
+   de-duplicates the results, and merges semantically similar
    templates so you classify one representative per cluster, not every
    template (in step 4's schema-mismatch case, pass
    `--input /tmp/logtypes.ndjson` instead):
 
    ```bash
    ~/.codex/marketplaces/yscope/plugins/clp/bin/logtype-cluster cluster \
+     --max-chars "$MAX_CHARS" \
      --input /tmp/logtypes-to-classify.ndjson
    ```
 
    Stdout prints a summary then one `{"id","count","representative"}` line per
    cluster (ids `c1..cN`, largest first). Full memberships go to
-   `/tmp/logtype-clusters.json` for `expand`. Embeddings come from the semantic
+   `/tmp/logtype-clusters.json` for `expand`. Representatives and members are
+   always FULL templates; only the embedding request uses the truncated,
+   de-duplicated texts, so `EMBEDDED` is at most `TEMPLATES`. Embeddings come
+   from the semantic
    server (nothing is installed or started locally). Exit 2 means the server is
-   unreachable or numpy is missing: **report the error verbatim to the user and
+   unreachable or rejected: **report the error verbatim to the user and
    stop** — do not diagnose it, do not start or configure a server, and do not
    silently switch methods. If the user then asks you to continue without
    clustering, classify `/tmp/logtypes-to-classify.ndjson` directly using the OLD
    contract: a `templates` array with each logtype copied **byte-exact**, no
-   `assignments`, no `expand` — pipe your JSON straight into `put-merged`
+   `assignments`, no `expand` — pipe your JSON straight into
+   `put-merged --max-chars "$MAX_CHARS"`
    (this replaces step 6's validate/expand block; after `put-merged`, run
    `logtype-cache get "$APP_KEY" > /tmp/logtype-classification.json` and
    continue at step 7).
-   Report the reduction to the user (`TEMPLATES=N` → `CLUSTERS=M`).
+   Report the reduction to the user (`TEMPLATES=N` → `EMBEDDED=K` → `CLUSTERS=M`).
 
 6. **Classify the clusters (GROWTH / NEW only) — inline, ids only.** Tell the
    user you are classifying the M representatives (the longest step) before
@@ -165,7 +176,9 @@ the user sees no progress at all.
 
    Then validate, expand ids to every member template (byte-exact by
    construction), and store — GROWTH merges into the base entry, NEW stores
-   fresh. Use `MODE`/`APP_KEY`/`BASE_KEY` from the bootstrap output:
+   fresh. Use `MODE`/`APP_KEY`/`BASE_KEY`/`MAX_CHARS` from the bootstrap output
+   (`--max-chars` must match the bootstrap's, or the stored fingerprint won't
+   match the next run):
    ```bash
    BIN=~/.codex/marketplaces/yscope/plugins/clp/bin
    # Fields must be ARRAYS (a bare `.assignments` test passes for a scalar,
@@ -179,9 +192,9 @@ the user sees no progress at all.
    if [[ "$MODE" == "GROWTH" ]]; then
      # Guard: an empty BASE_KEY would silently store ONLY the new templates.
      [[ -n "$BASE_KEY" ]] || { echo "error: GROWTH with empty BASE_KEY" >&2; exit 1; }
-     "$BIN"/logtype-cache put-merged --base-key "$BASE_KEY" --key "$APP_KEY" < /tmp/logtype-expanded.json
+     "$BIN"/logtype-cache put-merged --max-chars "$MAX_CHARS" --base-key "$BASE_KEY" --key "$APP_KEY" < /tmp/logtype-expanded.json
    else
-     "$BIN"/logtype-cache put-merged --key "$APP_KEY" < /tmp/logtype-expanded.json
+     "$BIN"/logtype-cache put-merged --max-chars "$MAX_CHARS" --key "$APP_KEY" < /tmp/logtype-expanded.json
    fi
    "$BIN"/logtype-cache get "$APP_KEY" > /tmp/logtype-classification.json   # full plan for step 7
    ```
@@ -279,15 +292,21 @@ for precision).
 
 ## Classification cache notes
 
-- `app_key = sha256(sorted set of distinct logtype strings)`; cache dir
+- `app_key = sha256(sorted set of distinct logtype strings, each capped at
+  `MAX_CHARS` characters)` — the fingerprint of the *embedded* vocabulary, since
+  the same limit is applied before embedding; cache dir
   `~/.config/yscope-clp-plugin/logtype-cache/` (`$CLP_LOGTYPE_CACHE_DIR` or
-  `--cache-dir` to override). Entries store `schema`, `taxonomy`, `templates`,
-  `query_plan`, plus `classified_at` and `grown_from` lineage.
+  `--cache-dir` to override). Entries store `schema`, `taxonomy`, `templates`
+  (FULL, byte-exact), `query_plan`, plus `max_chars`, `classified_at`, and
+  `grown_from` lineage.
 - `diff` modes: **UPTODATE** (reuse, no classifying — but verify the cached
-  schema), **GROWTH** (classify only the new templates, `put-merged` unions
-  them into the base entry), **NEW** (classify all, store fresh). The
-  bootstrap runs `diff` for you and fetches the relevant entries.
-- GROWTH matching needs byte-exact logtype strings — guaranteed when you go
-  through `logtype-cluster expand` (it copies members verbatim); on the
-  no-clusterer path, paste logtypes verbatim from the normalized NDJSON.
+  schema; a full template differing only past the character limit is appended
+  with the category of the truncated form it shares), **GROWTH** (classify only
+  the new templates, `put-merged` unions them into the base entry), **NEW**
+  (classify all, store fresh). The bootstrap runs `diff` for you and fetches the
+  relevant entries.
+- GROWTH matching compares byte-exact full templates; the subset test behind it
+  uses the truncated sets. Byte-exactness is guaranteed when you go through
+  `logtype-cluster expand` (it copies members verbatim); on the no-clusterer
+  path, paste logtypes verbatim from the normalized NDJSON.
 - Inspect: `logtype-cache list` (shows lineage), `logtype-cache show <APP_KEY>`.

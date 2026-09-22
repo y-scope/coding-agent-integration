@@ -210,9 +210,38 @@ clp-core 0.13+ one call suffices, on older builds it prints
 # Needs a reachable endpoint — the built-in remote default is used unless
 # CLP_SEMANTIC_ENDPOINT or the semantic-endpoint config file says otherwise:
 ./plugins/clp/bin/logtype-cluster cluster \
-  --input /tmp/smoke-bootstrap/logtypes.ndjson
-# Expect CLUSTERS<=TEMPLATES and one {"id","count","representative"} line per
-# cluster; /tmp/logtype-clusters.json holds the memberships for `expand`.
+  --max-chars 512 --input /tmp/smoke-bootstrap/logtypes.ndjson
+# Expect CLUSTERS<=EMBEDDED<=TEMPLATES and one {"id","count","representative"}
+# line per cluster; /tmp/logtype-clusters.json holds the memberships for
+# `expand`. Representatives/members are FULL templates.
+```
+
+Truncation and fingerprinting (no embedding server needed). The cache key is
+computed over templates capped at `MAX_CHARS` characters and de-duplicated, so a
+change that only affects a template's tail past the limit must NOT register as
+growth, while a change within the limit must:
+
+```bash
+LC=./plugins/clp/bin/logtype-cache
+D=/tmp/smoke-trunc; mkdir -p "$D"; export CLP_LOGTYPE_CACHE_DIR="$D/cache"
+P="$(python3 -c 'print("P"*512)')"
+printf '{"logtype":"%sAAA"}\n' "$P" > "$D/base.ndjson"
+printf '{"logtype":"%sBBB"}\n' "$P" > "$D/other.ndjson"   # differs only past 512
+printf '{"logtype":"%sAAA"}\n{"logtype":"new within limit"}\n' "$P" > "$D/grown.ndjson"
+
+# Same key despite the post-limit tail change; count stays the FULL count:
+[ "$("$LC" key --logtypes-file "$D/base.ndjson")" \
+  = "$("$LC" key --logtypes-file "$D/other.ndjson")" ] && echo "key OK"
+"$LC" count --logtypes-file "$D/base.ndjson"        # -> 1
+
+jq -s '{schema:{message:"message"},taxonomy:[{category:"other",description:"x"}],
+        templates:[.[]|{logtype:.logtype,category:"other"}],query_plan:[]}' \
+  "$D/base.ndjson" | "$LC" put-merged --max-chars 512 --key "$("$LC" key --logtypes-file "$D/base.ndjson")"
+
+"$LC" diff --logtypes-file "$D/other.ndjson" | head -1   # -> UPTODATE
+# The post-limit variant is now present in the stored entry (inherited category):
+"$LC" get "$("$LC" key --logtypes-file "$D/other.ndjson")" | jq -r '.templates[].logtype[-3:]'
+"$LC" diff --logtypes-file "$D/grown.ndjson" | head -1   # -> GROWTH ... 1
 ```
 
 Note that the message field is a CLP-string: `message:term` returns 0 by
