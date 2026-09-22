@@ -36,6 +36,14 @@ allowed-tools:
 > re-run at step 3, and the stronger-model fallback when a subagent returns
 > unusable output at steps 6–7 — are part of the task and still apply.)
 
+> **Do not launch a dynamic workflow (multi-agent orchestration) for this
+> analysis on your own initiative.** CLP answers these questions better than a
+> workflow built on top of grep, and the orchestration makes the run slower for
+> no gain in coverage. Use the parallelism this skill specifies — the single
+> classification subagent at step 6 and the single insight subagent at step 7,
+> each spawned only where it is called for — and fan the queries or templates out
+> across more agents only if the user asks for it.
+
 End-to-end analysis of **any** CLP archive using the **logtype baseline**
 method: dump the archive's logtype dictionary (the complete vocabulary of
 distinct message templates, `<*>` marking variables — tens to a few hundred
@@ -44,8 +52,9 @@ templates into categories, and derive every later query from a template that is
 guaranteed to exist. No blind keyword batteries.
 
 The classification is a property of the **application**, not the capture, so it
-is cached (keyed by a fingerprint of the template set) and updated
-incrementally when the archive grows — re-analyzing the same app skips
+is cached (keyed by a fingerprint of the template set, capped at a character
+limit — 512 by default — and de-duplicated, matching what is embedded) and
+updated incrementally when the archive grows — re-analyzing the same app skips
 classification entirely.
 
 For a single ad-hoc KQL query, use the `search` skill. To compress raw logs
@@ -109,7 +118,9 @@ narration the user sees only a spinner.
      shapes API; tell the user ("old clp-s binary — rebuilding the baseline
      via message templatization"), then re-run ONCE adding
      `--message <message-field>`. No other re-runs are needed.
-   - `CACHE_MODE=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` → step 4.
+   - `CACHE_MODE=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` / `MAX_CHARS=` →
+     step 4. Pass `MAX_CHARS` through to `logtype-cluster` and `logtype-cache`
+     so their fingerprints match.
 
    Then tell the user what the bootstrap found, in 2–3 lines: the logtype
    count, the schema you picked, whether the templatize fallback was used, and
@@ -129,26 +140,32 @@ narration the user sees only a spinner.
    - **NEW** — first capture of this app; classify all of
      `/tmp/logtypes-to-classify.ndjson`. Continue to step 5.
 
-5. **Cluster the templates to classify** — merges semantically similar
-   templates so the classification subagent sees one representative per
-   cluster instead of every template (in step 4's schema-mismatch case, pass
+5. **Cluster the templates to classify** — truncates each template to a
+   character limit (`MAX_CHARS` from the bootstrap, 512 by default),
+   de-duplicates the results, and merges semantically similar templates so the
+   classification subagent sees one representative per cluster instead of every
+   template (in step 4's schema-mismatch case, pass
    `--input /tmp/logtypes.ndjson` instead):
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/logtype-cluster" cluster \
+     --max-chars "$MAX_CHARS" \
      --input /tmp/logtypes-to-classify.ndjson
    ```
 
    Stdout prints a summary then one `{"id","count","representative"}` line per
    cluster — paste those lines into the classification prompt. Full
-   memberships go to `/tmp/logtype-clusters.json` for `expand`. Embeddings come
-   from the semantic server (nothing is installed or started locally). Exit 2
-   means the server is unreachable or numpy is missing: **report the error
+   memberships go to `/tmp/logtype-clusters.json` for `expand`. Representatives
+   and members are always FULL templates; only the embedding request uses the
+   truncated, de-duplicated texts, so `EMBEDDED` is at most `TEMPLATES`.
+   Embeddings come from the semantic server (nothing is installed or started
+   locally). Exit 2
+   means the server is unreachable or rejected: **report the error
    verbatim to the user and stop** — do not diagnose it, do not start or
    configure a server, and do not silently switch methods. If the user then
    asks you to continue without clustering, use the raw-NDJSON last resort in
    `references/logtype-classify.md`. Report the
-   reduction to the user (`TEMPLATES=N` → `CLUSTERS=M`).
+   reduction to the user (`TEMPLATES=N` → `EMBEDDED=K` → `CLUSTERS=M`).
 
 6. **Classify (GROWTH/NEW only).** Read
    `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/logtype-classify.md` NOW —

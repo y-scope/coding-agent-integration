@@ -220,14 +220,21 @@ Expected (top entry):
 Analyzing an archive means classifying its templates — expensive the first
 time, but the same application emits the same templates every run, so the
 plugin caches the classification, keyed by a fingerprint (SHA-256 of the
-sorted template set). `diff` compares your archive's templates against the
+sorted template set, each template capped at a character limit — 512 by default
+— and de-duplicated, matching what is sent for embedding). Stored templates stay
+full and byte-exact. `diff` compares your archive's templates against the
 cache and prints a tab-separated status header:
 
 - `NEW <key> <count>` — never seen this app; all `<count>` templates need classifying.
-- `UPTODATE <key> <count>` — exact cache hit; nothing to do.
+- `UPTODATE <key> <count>` — fingerprint hit; nothing to do. (A template whose
+  tail changed only past the character limit is appended to the entry with the
+  category of the truncated form it shares.)
 - `GROWTH <key> <base_key> <count> <new_count>` — a superset of cached entry
   `<base_key>`; only the `<new_count>` new templates (listed as NDJSON after
   the header) need classifying.
+
+`<count>` is the true full template count. The GROWTH subset test uses the
+truncated sets, so a tail-only change reports UPTODATE rather than GROWTH.
 
 (`logtype-cache --help` documents all subcommands.)
 
@@ -409,6 +416,6 @@ rm -rf release-testing/workdir
 | `logtype-insights-bootstrap` prints `LOGTYPE_COUNT=0` and `FALLBACK=TEMPLATIZE_NEEDS_MESSAGE` | Same 0.12.x cause as above, handled gracefully: re-run the bootstrap adding `--message message` and it builds an approximate templatized baseline (`FALLBACK=TEMPLATIZE_USED`) that feeds the cache probe normally. Template strings/counts may differ slightly from the shapes-API numbers in this doc. |
 | `error: stats.logtypes was renamed to stats.log_shapes` | You ran the legacy query spelling; use `stats.log_shapes` as shown in Step 5. |
 | Semantic search: endpoint error | The embedding server is unreachable. Check the endpoint (`--semantic-endpoint`, `CLP_SEMANTIC_ENDPOINT`, or `~/.config/yscope-clp-plugin/semantic-endpoint`); the plugin never starts a server itself. Keyword/logtype steps are unaffected. |
-| `logtype-cluster` exits 2 | Either the embedding server is unreachable (same fix as above) or numpy is missing (`python3 -m pip install numpy`). `setup` no longer exists — clustering uses the server, not a local model. |
+| `logtype-cluster` exits 2 | The embedding server is unreachable or rejected (same fix as above). Clustering is pure Python standard library, so there is no dependency to install. `setup` no longer exists — clustering uses the server, not a local model. |
 | `warning: clp-s does not support --semantic-cache-dir` | Your `clp-s` build lacks the local semantic cache; the search falls back to remote-only scoring and still works. |
 | Numbers differ slightly from this doc | Byte counts vary with clp-s version; record/template counts (250 / 100 / 96 / 4 / 35 / 18) should match exactly. |

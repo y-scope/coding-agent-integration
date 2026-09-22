@@ -331,7 +331,7 @@ distributions, dumps + normalizes the dictionary (falling back to
 templatization on binaries that predate the shapes API — re-run with
 `--message <field>` when it asks), probes the classification cache, and prints
 a grep-able `KEY=VALUE` summary (`LOGTYPE_COUNT=`, `FALLBACK=`, `CACHE_MODE=`,
-`TO_CLASSIFY=`, output-file paths).
+`TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths).
 
 Note that the message field is stored as a CLP-string, so KQL **cannot** match
 message content: `message:term` and `message:*term*` always return 0. Retrieve
@@ -346,8 +346,14 @@ Classifying templates into categories and deriving a query plan is the
 expensive step, and it is a property of the *application*, not the individual
 capture — the same build emits the same templates every run. `bin/logtype-cache`
 persists that classification, keyed by `sha256` of the sorted distinct logtype
-strings (the placeholder-rendered form, so fingerprints are stable across
-binary generations):
+strings **capped at a character limit** (default 512, `--max-chars` /
+`$CLP_LOGTYPE_MAX_CHARS`) and de-duplicated — the same treatment the templates
+get before they are embedded, so the key fingerprints the *embedded* vocabulary.
+The placeholder-rendered form is hashed, so fingerprints are stable across
+binary generations. Stored `templates[].logtype` are always the full, byte-exact
+strings; the character limit affects only the fingerprint and the embedding
+request. (Consequence: a template whose tail changes beyond the limit does not
+change the fingerprint, so it does not register as growth.)
 
 ```bash
 LC=./plugins/clp/bin/logtype-cache
@@ -369,9 +375,13 @@ around the normalized form so every tool sees identical strings.)
 
 | Header | Meaning |
 | --- | --- |
-| `UPTODATE\t<app_key>\t<count>` | Template set unchanged — reuse the cached classification, nothing to classify. |
+| `UPTODATE\t<app_key>\t<count>` | Fingerprint unchanged — reuse the cached classification, nothing to classify. A full template that differs only past the character limit is appended with the category of the truncated form it shares, so the entry stays complete. |
 | `GROWTH\t<app_key>\t<base_key>\t<count>\t<new_count>` | Archive grew from `<base_key>` — only the `<new_count>` new templates follow and need classifying. |
 | `NEW\t<app_key>\t<count>` | No compatible base — all `<count>` templates follow. |
+
+`<count>` is always the TRUE full template count, not the de-duplicated one. The
+GROWTH subset test is performed on the truncated template sets, so a change that
+only affects bytes past the character limit reports UPTODATE rather than GROWTH.
 
 On GROWTH the new classification is merged into the base entry with
 `put-merged --base-key BK --key NK` (templates, taxonomy, and query plan are
@@ -382,28 +392,37 @@ Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with
 `$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands
 that read or write the cache (`diff`, `get`, `put`, `put-merged`, `list`,
 `show`). `normalize`, `count`, and `key` only transform/hash the input and do
-not accept it.
+not accept it. `--max-chars` (default 512, or `$CLP_LOGTYPE_MAX_CHARS`) is
+accepted by the subcommands that compute or stamp the fingerprint (`key`,
+`diff`, `put`, `put-merged`); it must match the limit given to
+`logtype-cluster`, or embedding and cache fingerprints diverge.
 
 ### Logtype Cluster
 
 Classification cost scales with the number of templates the LLM must label.
-`bin/logtype-cluster` shrinks that: it embeds the to-classify logtypes through
+`bin/logtype-cluster` shrinks that two ways: it truncates each template to a
+character limit and de-duplicates the results, so identical prefixes are only
+embedded once, then embeds the distinct texts through
 the semantic server's `/v1/embeddings` endpoint and greedily groups
 them at a cosine-similarity threshold, so the LLM classifies one
 representative per cluster (by cluster id) and `expand` propagates the
 category to every member mechanically — byte-exact, because the LLM never
-echoes logtype strings.
+echoes logtype strings. Representatives and members are always the FULL
+templates; truncation applies only to what is embedded.
 
 Embeddings come from the same already-running server that powers semantic
-search. Nothing is installed, downloaded, or started locally — the only
-dependency is numpy.
+search. Nothing is installed, downloaded, or started locally — the clustering is
+pure Python standard library, with no third-party dependency.
 
 ```bash
 LTC=./plugins/clp/bin/logtype-cluster
-"$LTC" cluster --input /tmp/logtypes-to-classify.ndjson
+"$LTC" cluster --max-chars 512 --input /tmp/logtypes-to-classify.ndjson
 "$LTC" expand --clusters /tmp/logtype-clusters.json \
   --classification /tmp/logtype-class.json     # id-based assignments from the LLM
 ```
+
+`cluster` prints `CLUSTERS=`, `TEMPLATES=` (full count), `EMBEDDED=` (distinct
+truncated texts actually sent), and `MAX_CHARS=`.
 
 - Endpoint: `--semantic-endpoint`, then `$CLP_SEMANTIC_ENDPOINT`, then the
   `semantic-endpoint` config file, then the built-in remote endpoint — the
@@ -413,13 +432,17 @@ LTC=./plugins/clp/bin/logtype-cluster
   advertises, so both hit the same server-side cache. Threshold: cosine 0.80
   (override with `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to
   0.85–0.90 to split more, lower to merge more). `--batch-size` sets texts per
-  request (default 256).
+  request (default 256); `--max-request-bytes` (`$CLP_LOGTYPE_MAX_REQUEST_BYTES`,
+  default 100 000 000) caps the encoded size of any single request body.
+- Truncation: `--max-chars` (`$CLP_LOGTYPE_MAX_CHARS`, default 512) caps each
+  template at that many UTF-8 characters before embedding; it must match the
+  value used by `logtype-cache`, which fingerprints the same truncated set.
 - `expand` is stdlib-only and fully offline — it needs no endpoint — and
   validates that every cluster id
   is assigned exactly once before writing anything (exit 2 otherwise), which
   protects the logtype cache from partial classifications.
 - Exit codes for `cluster`: 0 ok, 1 input problem, 2 the embedding server is
-  unreachable/rejected or numpy is missing, 3 usage error. `--help` and
+  unreachable/rejected, 3 usage error. `--help` and
   `expand` never touch the network.
 - `setup` has been removed; it now exits 2 with a pointer to the endpoint
   settings. Existing venvs under

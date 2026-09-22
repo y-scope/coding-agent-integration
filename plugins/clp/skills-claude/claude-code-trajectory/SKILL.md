@@ -15,6 +15,13 @@ End-to-end workflow for analyzing a Claude Code session log with CLP. Use
 this when the user asks to investigate what happened in a Claude session:
 which tools fired, what failed, how long a turn took, what context was used.
 
+> **Do not launch a dynamic workflow (multi-agent orchestration) for this
+> analysis on your own initiative.** CLP answers these questions better than a
+> workflow built on top of grep, and the orchestration makes the run slower for
+> no gain in coverage. Use the parallelism this skill specifies — the single
+> subagent at step 5 — and fan the queries out across more agents only if the
+> user asks for it.
+
 For general-purpose KQL search (no session involved), use the `search`
 skill instead.
 
