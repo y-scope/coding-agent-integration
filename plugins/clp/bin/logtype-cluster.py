@@ -4,24 +4,33 @@
 Invoked via the `logtype-cluster` bash launcher, which resolves the embedding
 server URL and exports it as CLP_SEMANTIC_ENDPOINT. Two subcommands:
 
-  cluster  Embed the input logtypes via the semantic server's /v1/embeddings
-           endpoint and group them by greedy leader clustering at a cosine
-           threshold. The LLM then classifies only the cluster
-           representatives, by cluster id.
+  cluster  Truncate each logtype to a character limit (default 512, UTF-8
+           characters), de-duplicate the results, embed the distinct texts
+           via the semantic server's /v1/embeddings endpoint, and group them by
+           greedy leader clustering at a cosine threshold. The LLM then
+           classifies only the cluster representatives, by cluster id.
   expand   Propagate the LLM's per-cluster category assignments to every member
            logtype verbatim (stdlib-only; never re-generates logtype strings,
            so cache GROWTH matching stays byte-exact by construction).
 
+Truncation and de-duplication concern only what is POSTed for embedding. `members`
+and `representative` are always FULL logtype strings, so `expand` and the
+classification cache keep full templates; the character limit is also the cache
+fingerprint (see logtype-cache, which duplicates truncate_chars).
+
 Embeddings come from an already-running server; this tool never starts one and
 never downloads a model. Point it at a server with --semantic-endpoint,
-CLP_SEMANTIC_ENDPOINT, or the semantic-endpoint config file.
+CLP_SEMANTIC_ENDPOINT, or the semantic-endpoint config file. Clustering itself
+is pure standard library — there is no third-party dependency (numpy is not
+needed).
 
-Exit codes: 0 ok, 1 input problem, 2 missing dependency / unreachable or
-rejected embedding server, 3 usage error.
+Exit codes: 0 ok, 1 input problem, 2 unreachable or rejected embedding server,
+3 usage error.
 """
 
 import argparse
 import json
+import math
 import os
 import signal
 import struct
@@ -57,6 +66,18 @@ def _positive_env_int(name, default):
 
 DEFAULT_BATCH = _positive_env_int("CLP_SEMANTIC_EMBED_BATCH", 256)
 REQUEST_TIMEOUT_S = _positive_env_int("CLP_SEMANTIC_TIMEOUT_S", 120)
+
+# Templates are truncated to this many UTF-8 characters before embedding, then
+# de-duplicated, so a long template cannot bloat a request and templates sharing
+# a prefix are only ever embedded once. Configurable per session. The SAME limit
+# is the classification-cache fingerprint (logtype-cache duplicates
+# truncate_chars and reads the same env var), so changing it deliberately
+# re-keys the cache.
+DEFAULT_MAX_CHARS = _positive_env_int("CLP_LOGTYPE_MAX_CHARS", 512)
+# Hard ceiling on the encoded size of one /v1/embeddings request body, applied
+# independently of the batch count. Decimal MB so it is under 100 MB however the
+# limit is read.
+DEFAULT_MAX_REQUEST_BYTES = _positive_env_int("CLP_LOGTYPE_MAX_REQUEST_BYTES", 100_000_000)
 
 
 class Parser(argparse.ArgumentParser):
@@ -100,6 +121,32 @@ def load_logtypes(path):
     if not logtypes:
         fail(1, f"no logtypes found in {path}")
     return sorted(logtypes)
+
+
+def truncate_chars(text, max_chars):
+    """Return `text` capped at max_chars UTF-8 characters (code points).
+
+    Python str slicing is by code point, so this cannot split a character and
+    the result is always valid UTF-8. Mirrored in logtype-cache, which must agree
+    exactly or the cache fingerprint diverges.
+    """
+    return text if len(text) <= max_chars else text[:max_chars]
+
+
+def dedup_truncated(templates, max_chars):
+    """Map full templates onto the distinct texts to embed.
+
+    Returns (unique_texts, index_of): `unique_texts` is the sorted distinct
+    truncate_chars(t, max_chars) values, each embedded exactly once, and
+    `index_of[i]` is the position of templates[i]'s truncated form in it. That
+    lets the caller realign the embeddings back onto the full-template list, so
+    clustering membership, representatives and `expand` all stay full-template
+    indexed. Templates sharing a prefix share one embedding, exactly.
+    """
+    truncated = [truncate_chars(t, max_chars) for t in templates]
+    unique_texts = sorted(set(truncated))
+    position = {text: i for i, text in enumerate(unique_texts)}
+    return unique_texts, [position[text] for text in truncated]
 
 
 def require_secure_url(url):
@@ -221,19 +268,64 @@ def embed_batch(url, texts):
     return vectors
 
 
-def embed_texts(np, url, texts, batch_size):
-    """Embeds all texts in batches; returns an L2-normalized float64 matrix."""
+def chunk_texts(texts, batch_size, max_request_bytes):
+    """Yield (start_index, chunk) respecting both the count and byte caps.
+
+    Body size matches what embed_batch builds: a u32 length prefix per text plus
+    its UTF-8 payload. A text that cannot fit the cap on its own is a usage
+    error — truncation normally makes that unreachable.
+    """
+    start = 0
+    total = len(texts)
+    while start < total:
+        size = 0
+        end = start
+        while end < total and (end - start) < batch_size:
+            text_size = 4 + len(texts[end].encode("utf-8"))
+            if size + text_size > max_request_bytes:
+                break
+            size += text_size
+            end += 1
+        if end == start:
+            single = 4 + len(texts[start].encode("utf-8"))
+            fail(3, f"a single truncated text ({single} bytes) exceeds "
+                    f"--max-request-bytes ({max_request_bytes})",
+                 "lower --max-chars, or raise --max-request-bytes")
+        yield start, texts[start:end]
+        start = end
+
+
+if hasattr(math, "sumprod"):
+    # C-implemented dot product (Python 3.12+).
+    def dot(a, b):
+        return math.sumprod(a, b)
+else:
+    from operator import mul
+
+    def dot(a, b):
+        return sum(map(mul, a, b))
+
+
+def l2_normalize(vector):
+    """Scale `vector` to unit length; a zero vector is returned unchanged."""
+    norm = math.sqrt(dot(vector, vector))
+    return vector if norm == 0.0 else [v / norm for v in vector]
+
+
+def embed_texts(url, texts, batch_size, max_request_bytes):
+    """Embeds all texts in batches; returns L2-normalized float vectors.
+
+    Pure stdlib: the clustering below only needs dot products and norms, so
+    there is no numpy (or any other third-party) dependency.
+    """
     vectors = []
-    for start in range(0, len(texts), batch_size):
-        chunk = texts[start:start + batch_size]
+    total = len(texts)
+    for start, chunk in chunk_texts(texts, batch_size, max_request_bytes):
         vectors.extend(embed_batch(url, chunk))
-        if len(texts) > batch_size:
-            print(f"embedded {min(start + batch_size, len(texts))}/{len(texts)}",
-                  file=sys.stderr)
-    embeddings = np.asarray(vectors, dtype=np.float64)
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return embeddings / norms
+        done = start + len(chunk)
+        if done < total:
+            print(f"embedded {done}/{total}", file=sys.stderr)
+    return [l2_normalize([float(x) for x in vector]) for vector in vectors]
 
 
 def cmd_cluster(args):
@@ -245,42 +337,53 @@ def cmd_cluster(args):
         fail(3, f"--threshold must be in (0, 1], got: {threshold}")
     if args.batch_size < 1:
         fail(3, f"--batch-size must be a positive integer, got: {args.batch_size}")
+    if args.max_chars < 1:
+        fail(3, f"--max-chars must be a positive integer, got: {args.max_chars}")
+    if args.max_request_bytes < 1:
+        fail(3, f"--max-request-bytes must be a positive integer, got: "
+                f"{args.max_request_bytes}")
 
     templates = load_logtypes(args.input)
 
-    try:
-        import numpy as np
-    except ImportError:
-        fail(2, "missing dependency (numpy)",
-             "install it with:  python3 -m pip install numpy")
-
     url = embeddings_url(resolve_endpoint(args.semantic_endpoint))
-    embeddings = embed_texts(np, url, templates, args.batch_size)
+    # Embed each distinct truncated text once, then realign onto the full
+    # template list, so everything below stays full-template indexed.
+    unique_texts, index_of = dedup_truncated(templates, args.max_chars)
+    unique_embeddings = embed_texts(url, unique_texts, args.batch_size,
+                                    args.max_request_bytes)
+    embeddings = [unique_embeddings[k] for k in index_of]
 
-    # Greedy leader clustering against running centroids. Input order is the
-    # sorted template list, so cluster contents are deterministic.
-    sums, counts, members = [], [], []
+    # Greedy leader clustering against running centroids. Vectors are already
+    # unit-length, so a centroid's norm is all that is needed to turn a raw dot
+    # product into a cosine. Input order is the sorted template list, so cluster
+    # contents are deterministic. Strictly-greater comparison keeps the first
+    # maximum, matching the previous argmax tie-break.
+    sums, members = [], []
     for i, vec in enumerate(embeddings):
-        if sums:
-            centroids = np.stack(sums)
-            centroid_norms = np.linalg.norm(centroids, axis=1)
-            centroid_norms[centroid_norms == 0] = 1.0
-            sims = (centroids @ vec) / centroid_norms
-            best = int(np.argmax(sims))
-            if sims[best] >= threshold:
-                sums[best] = sums[best] + vec
-                counts[best] += 1
-                members[best].append(i)
-                continue
-        sums.append(vec.copy())
-        counts.append(1)
+        best = -1
+        best_sim = -1.0
+        for c, total in enumerate(sums):
+            norm = math.sqrt(dot(total, total))
+            sim = dot(total, vec) / norm if norm else 0.0
+            if sim > best_sim:
+                best_sim, best = sim, c
+        if best >= 0 and best_sim >= threshold:
+            sums[best] = [a + b for a, b in zip(sums[best], vec)]
+            members[best].append(i)
+            continue
+        sums.append(list(vec))
         members.append([i])
 
     clusters = []
     for total, idxs in zip(sums, members):
-        centroid = total / np.linalg.norm(total) if np.linalg.norm(total) else total
-        sims = embeddings[idxs] @ centroid
-        rep = idxs[int(np.argmax(sims))]
+        norm = math.sqrt(dot(total, total))
+        centroid = [v / norm for v in total] if norm else total
+        rep = idxs[0]
+        best_sim = -1.0
+        for idx in idxs:
+            sim = dot(embeddings[idx], centroid)
+            if sim > best_sim:
+                best_sim, rep = sim, idx
         clusters.append({
             "representative": templates[rep],
             "members": [templates[i] for i in idxs],
@@ -295,6 +398,8 @@ def cmd_cluster(args):
         "endpoint": url,
         "threshold": threshold,
         "template_count": len(templates),
+        "embedded_count": len(unique_texts),
+        "max_chars": args.max_chars,
         "clusters": [
             {"id": c["id"], "representative": c["representative"],
              "members": c["members"], "count": c["count"]}
@@ -307,6 +412,8 @@ def cmd_cluster(args):
 
     print(f"CLUSTERS={len(clusters)}")
     print(f"TEMPLATES={len(templates)}")
+    print(f"EMBEDDED={len(unique_texts)}")
+    print(f"MAX_CHARS={args.max_chars}")
     print(f"MODEL={MODEL_NAME}")
     print(f"ENDPOINT={url}")
     print(f"THRESHOLD={threshold}")
@@ -420,6 +527,15 @@ def main():
                            help=f"texts per embedding request (default: {DEFAULT_BATCH})")
     p_cluster.add_argument("--threshold", default=DEFAULT_THRESHOLD,
                            help=f"cosine similarity threshold in (0,1] (default: {DEFAULT_THRESHOLD})")
+    p_cluster.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS,
+                           help=f"truncate each template to this many UTF-8 "
+                                f"characters before embedding (default: "
+                                f"{DEFAULT_MAX_CHARS}, or $CLP_LOGTYPE_MAX_CHARS)")
+    p_cluster.add_argument("--max-request-bytes", type=int,
+                           default=DEFAULT_MAX_REQUEST_BYTES,
+                           help=f"ceiling on one embedding request body "
+                                f"(default: {DEFAULT_MAX_REQUEST_BYTES}, or "
+                                f"$CLP_LOGTYPE_MAX_REQUEST_BYTES)")
     p_cluster.add_argument("--output", default="/tmp/logtype-clusters.json",
                            help="clusters JSON path (default: /tmp/logtype-clusters.json)")
     p_cluster.set_defaults(func=cmd_cluster)

@@ -14,11 +14,19 @@ instead of reclassifying the whole archive.
 
 Cache key (the "app fingerprint") is sha256 of the sorted set of distinct
 logtype strings from the archive's dictionary dump
-(`clp-s-search-kql ARCHIVE 'stats.log_shapes'`, rendered by `normalize`).
-Same template set -> same key -> cache hit -> classification reused. When the
-template set grows, the key changes; `diff` finds the previous entry whose
-templates are a subset of the new set (the archive grew from it) so only the
-new templates need classifying.
+(`clp-s-search-kql ARCHIVE 'stats.log_shapes'`, rendered by `normalize`), each
+TRUNCATED to a character limit first (default 512, `--max-chars` /
+`$CLP_LOGTYPE_MAX_CHARS`) and de-duplicated. Truncation mirrors what
+logtype-cluster sends to the embedding server, so the key identifies the
+*embedded* vocabulary. Same embedded vocabulary -> same key -> cache hit ->
+classification reused. When it grows, the key changes; `diff` finds the
+previous entry whose truncated template set is a subset of the new one (the
+archive grew from it) so only the new templates need classifying.
+
+Stored `templates[].logtype` are always the FULL, byte-exact strings — the
+character limit is an embedding/fingerprint concern only. Note the deliberate
+consequence: a change to a template's tail beyond the limit does not change the
+fingerprint, so it does not register as growth.
 
 Cache layout:
     <cache-dir>/<KEY>.json
@@ -30,6 +38,7 @@ where each entry is the classification JSON, e.g.:
       "templates": [{"logtype": "...", "category": "errors"}],
       "query_plan": [{"label": "Errors", "kql": "s:E OR s:F", "method": "count"}],
       "classified_at": "2026-08-07T...",
+      "max_chars": 512,                    # limit the key was computed at
       "grown_from": "<previous app_key>"   # present only when incrementally grown
     }
 
@@ -54,6 +63,13 @@ Subcommands:
                                   then NDJSON template lines ({"logtype":"..."}):
                                     UPTODATE\\t<app_key>\\t<count>
                                         cache is current; no templates to classify.
+                                        Also reported when the truncated set is
+                                        unchanged but a stored entry is keyed
+                                        differently (e.g. a template's tail moved
+                                        past the character limit); any new full
+                                        templates then inherit the category of the
+                                        truncated form they share, and the entry
+                                        is re-stored under the canonical key.
                                     GROWTH\\t<app_key>\\t<base_key>\\t<count>\\t<new_count>
                                         archive grew from <base_key>; the
                                         following <new_count> templates are NEW
@@ -61,6 +77,8 @@ Subcommands:
                                     NEW\\t<app_key>\\t<count>
                                         no base found; all <count> templates
                                         follow and need classifying.
+                                  <count> is always the TRUE full template count;
+                                  subset matching is done on truncated sets.
     get   KEY [--cache-dir D]      Print cached JSON to stdout (exit 0); exit 1
                                   on miss.
     put   KEY [--cache-dir D]      Read classification JSON from stdin and store
@@ -93,6 +111,59 @@ from datetime import datetime, timezone
 
 # Cache keys are sha256 hex digests; anything else is rejected by entry_path.
 _KEY_RE = re.compile(r"\A[0-9a-f]{64}\Z")
+
+# Templates are capped at this many UTF-8 characters before fingerprinting — the
+# same limit logtype-cluster applies before embedding (truncate_chars is
+# duplicated there; the two MUST agree or the embedding and the cache diverge).
+# Changing it deliberately re-keys the cache.
+DEFAULT_MAX_CHARS = 512
+
+
+def default_max_chars():
+    try:
+        value = int(os.environ.get("CLP_LOGTYPE_MAX_CHARS", DEFAULT_MAX_CHARS))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_CHARS
+    return value if value > 0 else DEFAULT_MAX_CHARS
+
+
+def resolve_max_chars(value):
+    """Resolve a --max-chars value (None -> env/default). Returns 0 on a
+    non-positive explicit value, which the caller reports as a usage error."""
+    if value is None:
+        return default_max_chars()
+    return value if value > 0 else 0
+
+
+def truncate_chars(text, max_chars):
+    """Cap `text` at max_chars UTF-8 characters (code points).
+
+    Python str slicing is by code point, so this cannot split a character and
+    the result is always valid UTF-8. Must stay identical to logtype-cluster.py's
+    copy.
+    """
+    return text if len(text) <= max_chars else text[:max_chars]
+
+
+def truncated_set(logtypes, max_chars):
+    """The deduplicated set of truncated forms — the cache's fingerprint input."""
+    return {truncate_chars(lt, max_chars) for lt in logtypes}
+
+
+def entry_max_chars(obj, fallback):
+    """The character limit a stored entry's key was computed at, or `fallback`."""
+    value = obj.get("max_chars") if isinstance(obj, dict) else None
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return fallback
+
+
+def entry_truncated_set(obj, fallback):
+    """(truncated set, limit) for a stored entry, recomputed from its byte-exact
+    full templates at the limit the entry recorded. The stored templates remain
+    the single source of truth — no truncated list is trusted from disk."""
+    limit = entry_max_chars(obj, fallback)
+    return {truncate_chars(t, limit) for t in entry_template_set(obj)}, limit
 
 # Raw CLP shape strings come in TWO encodings, depending on how the archive
 # was compressed:
@@ -235,9 +306,9 @@ def load_logtypes(path):
     return logtypes
 
 
-def app_key_for_logtypes(logtypes):
+def app_key_for_logtypes(logtypes, max_chars):
     h = hashlib.sha256()
-    for lt in sorted(logtypes):
+    for lt in sorted(truncated_set(logtypes, max_chars)):
         h.update(lt.encode("utf-8"))
         h.update(b"\n")
     return h.hexdigest()
@@ -305,18 +376,25 @@ def entry_template_set(obj):
     }
 
 
-def find_best_base(cache_dir, current_templates):
-    """Return (base_key, base_template_set) for the cached entry whose templates
-    are the largest subset of current_templates (i.e. the archive grew from
-    it). Returns (None, set()) if no cached entry is a subset."""
-    best_key = None
-    best_set = set()
+def scan_cache(cache_dir, current_templates, fallback_max_chars):
+    """One pass over the cache, comparing truncated template sets.
+
+    Returns (exact, best):
+      exact = (key, obj, limit) for the first entry whose truncated set equals
+              the probe's (both taken at that entry's recorded limit), or None.
+      best  = (key, obj, truncated_set, limit) for the entry whose truncated set
+              is the largest PROPER subset of the probe's, or None. Requiring a
+              proper subset means a GROWTH report always has new_count > 0.
+    """
+    exact = None
+    best = None
     if not os.path.isdir(cache_dir):
-        return None, set()
+        return exact, best
     for name in sorted(os.listdir(cache_dir)):
         if not name.endswith(".json") or not _KEY_RE.match(name[:-5]):
             continue
-        obj = load_entry(cache_dir, name[:-5])
+        key = name[:-5]
+        obj = load_entry(cache_dir, key)
         if not obj:
             continue
         if not isinstance(obj, dict) or not isinstance(obj.get("templates"), list):
@@ -326,10 +404,40 @@ def find_best_base(cache_dir, current_templates):
                 file=sys.stderr,
             )
             continue
-        tset = entry_template_set(obj)
-        if tset and tset <= current_templates and len(tset) > len(best_set):
-            best_key, best_set = name[:-5], tset
-    return best_key, best_set
+        eset, limit = entry_truncated_set(obj, fallback_max_chars)
+        if not eset:
+            continue
+        probe = {truncate_chars(t, limit) for t in current_templates}
+        if exact is None and eset == probe:
+            exact = (key, obj, limit)
+        if eset < probe and (best is None or len(eset) > len(best[2])):
+            best = (key, obj, eset, limit)
+    return exact, best
+
+
+def backfill_entry(entry, missing, limit):
+    """Copy of `entry` with `missing` full templates appended, each inheriting
+    the category of a stored template that shares its truncated form.
+
+    Keeps a UPTODATE entry complete after a full-set change that left the
+    truncated vocabulary untouched — no model call, because two templates with
+    the same truncated form were embedded identically. Returns None when nothing
+    could be inherited."""
+    category_by_trunc = {}
+    for t in dict_list(entry, "templates"):
+        logtype, category = t.get("logtype"), t.get("category")
+        if isinstance(logtype, str) and isinstance(category, str):
+            category_by_trunc.setdefault(truncate_chars(logtype, limit), category)
+    added = []
+    for logtype in missing:
+        category = category_by_trunc.get(truncate_chars(logtype, limit))
+        if category is not None:
+            added.append({"logtype": logtype, "category": category})
+    if not added:
+        return None
+    extended = dict(entry)
+    extended["templates"] = list(dict_list(entry, "templates")) + added
+    return extended
 
 
 def cmd_normalize(args):
@@ -381,7 +489,11 @@ def cmd_key(args):
     if not logtypes:
         print("error: no logtype entries found in file", file=sys.stderr)
         return 1
-    print(app_key_for_logtypes(logtypes))
+    max_chars = resolve_max_chars(args.max_chars)
+    if max_chars == 0:
+        print("error: --max-chars must be a positive integer", file=sys.stderr)
+        return 2
+    print(app_key_for_logtypes(logtypes, max_chars))
     return 0
 
 
@@ -394,6 +506,25 @@ def cmd_count(args):
     return 0
 
 
+def extend_if_incomplete(cache_dir, canonical_key, entry, logtypes, max_chars):
+    """Store `entry` under `canonical_key` with any full template missing from it
+    appended, inheriting the category of a stored template that shares its
+    truncated form. Returns True when an extended entry was written.
+
+    This is what keeps a UPTODATE entry complete when the full set changed
+    without changing the truncated vocabulary — a tail moved past the limit.
+    """
+    stored = entry_template_set(entry)
+    missing = sorted(lt for lt in logtypes if lt not in stored)
+    if not missing:
+        return False
+    extended = backfill_entry(entry, missing, max_chars)
+    if extended is None:
+        return False
+    atomic_store(cache_dir, canonical_key, extended, max_chars)
+    return True
+
+
 def cmd_diff(args):
     if not os.path.exists(args.logtypes_file):
         print(f"error: logtypes file not found: {args.logtypes_file}", file=sys.stderr)
@@ -402,19 +533,49 @@ def cmd_diff(args):
     if not logtypes:
         print("error: no logtype entries found in file", file=sys.stderr)
         return 1
-    app_key = app_key_for_logtypes(logtypes)
-    # Exact hit: archive unchanged since last classification.
-    if load_entry(args.cache_dir, app_key) is not None:
+    max_chars = resolve_max_chars(args.max_chars)
+    if max_chars == 0:
+        print("error: --max-chars must be a positive integer", file=sys.stderr)
+        return 2
+    app_key = app_key_for_logtypes(logtypes, max_chars)
+
+    # Canonical hit: the embedded vocabulary is unchanged since last
+    # classification. Still reconcile any full templates that appeared only in
+    # their tail past the limit.
+    entry = load_entry(args.cache_dir, app_key)
+    if entry is not None:
+        extend_if_incomplete(args.cache_dir, app_key, entry, logtypes, max_chars)
         print(f"UPTODATE\t{app_key}\t{len(logtypes)}")
         return 0
-    # Archive grew? Find a cached entry that is a subset of the current set.
-    base_key, base_set = find_best_base(args.cache_dir, logtypes)
-    if base_key:
-        new_templates = sorted(logtypes - base_set)
-        print(f"GROWTH\t{app_key}\t{base_key}\t{len(logtypes)}\t{len(new_templates)}")
-        for lt in new_templates:
-            print(json.dumps({"logtype": lt}, ensure_ascii=False))
+
+    exact, best = scan_cache(args.cache_dir, logtypes, max_chars)
+
+    # Same truncated vocabulary under a different key — an entry written before
+    # this fingerprint. Adopt it: optionally canonicalize it under the current
+    # key (only when it was compared at the current limit), then report UPTODATE.
+    if exact is not None:
+        key, obj, limit = exact
+        if limit == max_chars:
+            if extend_if_incomplete(args.cache_dir, app_key, obj, logtypes,
+                                    max_chars):
+                key = app_key
+        print(f"UPTODATE\t{key}\t{len(logtypes)}")
         return 0
+
+    if best is not None:
+        key, obj, _eset, _limit = best
+        base_full = entry_template_set(obj)
+        new_templates = sorted(lt for lt in logtypes if lt not in base_full)
+        if new_templates:
+            print(f"GROWTH\t{app_key}\t{key}\t{len(logtypes)}\t{len(new_templates)}")
+            for lt in new_templates:
+                print(json.dumps({"logtype": lt}, ensure_ascii=False))
+            return 0
+        # scan_cache only returns proper subsets, so this is unreachable; never
+        # emit a GROWTH that has nothing to classify.
+        print(f"UPTODATE\t{key}\t{len(logtypes)}")
+        return 0
+
     # No base: first classification of this application.
     print(f"NEW\t{app_key}\t{len(logtypes)}")
     for lt in sorted(logtypes):
@@ -431,9 +592,11 @@ def cmd_get(args):
     return 0
 
 
-def atomic_store(cache_dir, key, obj):
+def atomic_store(cache_dir, key, obj, max_chars=None):
     obj["app_key"] = key
     obj["classified_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if max_chars is not None:
+        obj["max_chars"] = max_chars
     atomic_write(cache_dir, key, obj)
     print(f"Stored classification for app_key {key} -> {entry_path(cache_dir, key)}", file=sys.stderr)
 
@@ -452,7 +615,11 @@ def cmd_put(args):
         if field in obj and not isinstance(obj[field], list):
             print(f"error: '{field}' must be a JSON array", file=sys.stderr)
             return 2
-    atomic_store(args.cache_dir, args.key, obj)
+    max_chars = resolve_max_chars(args.max_chars)
+    if max_chars == 0:
+        print("error: --max-chars must be a positive integer", file=sys.stderr)
+        return 2
+    atomic_store(args.cache_dir, args.key, obj, max_chars)
     return 0
 
 
@@ -476,6 +643,15 @@ def cmd_put_merged(args):
         base = load_entry(args.cache_dir, args.base_key)
         if base is None and args.base_key:
             print(f"warning: base key not found: {args.base_key}; storing as a fresh entry", file=sys.stderr)
+
+    # Stamp the limit the caller's key was computed at: explicit flag, else the
+    # base entry's recorded limit, else the default.
+    max_chars = args.max_chars
+    if max_chars is None:
+        max_chars = entry_max_chars(base, default_max_chars())
+    elif max_chars < 1:
+        print("error: --max-chars must be a positive integer", file=sys.stderr)
+        return 2
 
     if base:
         # Merge templates by logtype (base first, new overrides/extends).
@@ -513,7 +689,7 @@ def cmd_put_merged(args):
             new["schema"] = base["schema"]
         new["grown_from"] = args.base_key
 
-    atomic_store(args.cache_dir, args.key, new)
+    atomic_store(args.cache_dir, args.key, new, max_chars)
     return 0
 
 
@@ -606,6 +782,18 @@ def main(argv=None):
             "--cache-dir",
             default=default_cache_dir(),
             help="Cache directory (default: %(default)s, or $CLP_LOGTYPE_CACHE_DIR).",
+        )
+
+    # Shared --max-chars for the subcommands that compute or stamp the
+    # fingerprint (key/diff/put/put-merged). count/get/list/show do not.
+    for subp in (pk, pd, pp, pm):
+        subp.add_argument(
+            "--max-chars",
+            type=int,
+            default=None,
+            help=f"cap each template at this many UTF-8 characters before "
+                 f"fingerprinting (default: {DEFAULT_MAX_CHARS}, or "
+                 f"$CLP_LOGTYPE_MAX_CHARS)",
         )
 
     args = p.parse_args(argv)
