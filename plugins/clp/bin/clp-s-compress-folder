@@ -42,6 +42,10 @@ Options:
   --dry-run                  Print the planned compression operation only.
   -h, --help                 Show this help.
 
+Without --structurize, a file whose first lines are JSON objects but whose name
+is not .json/.jsonl/.ndjson is handed to clp-s as a staged *.jsonl copy: clp-s
+picks its parser by file name and would otherwise compress it as text.
+
 Examples:
   clp-s-compress-folder --folder /var/log/myapp
   clp-s-compress-folder --folder ./logs --extensions log,txt
@@ -72,6 +76,8 @@ print_archive_stats=0
 dry_run=0
 structurize=0
 structurize_tmpdir=""
+jsonl_stage_dir=""
+jsonl_staged=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -240,6 +246,9 @@ fi
 
 folder_real="$(realpath "$folder")"
 folder_name="$(basename "$folder_real")"
+# folder_real is repointed at a staging directory by --structurize and by the
+# JSONL sniff below; keep the folder the user named for the report.
+input_folder="$folder_real"
 
 # --- Validate extensions ---
 
@@ -297,7 +306,7 @@ fi
 # --- Discover files ---
 
 file_list="$(mktemp "${TMPDIR:-/tmp}/clp-s-files.XXXXXX")"
-trap 'rm -f "$file_list"; [[ -n "${structurize_tmpdir:-}" ]] && rm -rf "${structurize_tmpdir}"' EXIT
+trap 'rm -f "$file_list"; [[ -n "${structurize_tmpdir:-}" ]] && rm -rf "${structurize_tmpdir}"; [[ -n "${jsonl_stage_dir:-}" ]] && rm -rf "${jsonl_stage_dir}"' EXIT
 
 if [[ "$all_files" -eq 1 ]]; then
   if [[ "$recursive" -eq 1 ]]; then
@@ -335,6 +344,71 @@ if [[ "$file_count" -eq 0 ]]; then
     echo "  (extensions: $extensions, recursive=$recursive)" >&2
   fi
   exit 1
+fi
+
+# --- Give JSONL content a .jsonl name ---
+#
+# clp-s picks its parser from the file name, so JSONL records in app.log or
+# logs.txt are compressed as unstructured text and their fields stay
+# unsearchable. Sniff the first lines; when they are JSON objects, hand clp-s a
+# staged *.jsonl link instead. Nothing is staged unless a matched file needs it,
+# and --structurize rewrites every file under a JSON name anyway.
+looks_like_jsonl() {
+  local line seen=0
+  while IFS= read -r line; do
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+    seen=$((seen + 1))
+    # Only the start of a line: a single record can exceed the sniff window, so
+    # its closing brace need not be in the sample.
+    [[ "$line" =~ ^[[:space:]]*\{.*\"[^\"]*\"[[:space:]]*: ]] || return 1
+    [[ "$seen" -ge 2 ]] && return 0
+  done < <(head -c 2097152 -- "$1" 2>/dev/null || true)
+  [[ "$seen" -ge 1 ]]
+}
+
+needs_jsonl_name() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    *.json|*.jsonl|*.ndjson) return 1 ;;
+    *) looks_like_jsonl "$1" ;;
+  esac
+}
+
+stage_jsonl_inputs() {
+  local src rel dst
+  jsonl_stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/clp-s-jsonl.XXXXXX")"
+  staged_list="$(mktemp "${TMPDIR:-/tmp}/clp-s-files.XXXXXX")"
+  while IFS= read -r -d '' src; do
+    # Mirror the source tree, as --structurize does, so same-named files in
+    # different subdirectories stay distinct.
+    rel="${src#"${folder_real}"/}"
+    dst="${jsonl_stage_dir}/${rel}"
+    if needs_jsonl_name "$src"; then
+      dst="${dst}.jsonl"
+      jsonl_staged=$((jsonl_staged + 1))
+    fi
+    while [[ -e "$dst" ]]; do dst="${dst}.dup"; done
+    mkdir -p "$(dirname -- "$dst")"
+    # A hard link costs nothing; fall back to a copy when the staging dir is on
+    # another filesystem (TMPDIR on tmpfs, for instance).
+    ln -- "$src" "$dst" 2>/dev/null || cp -p -- "$src" "$dst"
+    printf '%s\0' "$dst" >> "$staged_list"
+  done < "$file_list"
+  rm -f "$file_list"
+  file_list="$staged_list"
+  folder_real="$jsonl_stage_dir"
+}
+
+if [[ "$structurize" -eq 0 ]]; then
+  stage_needed=0
+  while IFS= read -r -d '' src_path; do
+    if needs_jsonl_name "$src_path"; then
+      stage_needed=1
+      break
+    fi
+  done < "$file_list"
+  if [[ "$stage_needed" -eq 1 ]]; then
+    stage_jsonl_inputs
+  fi
 fi
 
 # --- Structurize unstructured logs ---
@@ -450,7 +524,7 @@ cmd+=(-f "$file_list" "$output_dir")
 
 # --- Plan / dry-run output ---
 
-echo "Folder: $folder_real"
+echo "Folder: $input_folder"
 echo "Extensions: $extensions"
 echo "Recursive: $([ "$recursive" -eq 1 ] && echo 'yes' || echo 'no')"
 echo "Input files: $file_count"
@@ -462,6 +536,9 @@ fi
 echo "Archives dir: $output_dir"
 echo "Timestamp key: ${timestamp_key:-none}"
 echo "Structurize: $([ "$structurize" -eq 1 ] && echo 'yes' || echo 'no')"
+if [[ "$jsonl_staged" -gt 0 ]]; then
+  echo "JSONL staged: $jsonl_staged file(s) renamed to .jsonl (content did not match the extension)"
+fi
 echo "Archive mode: regular directory archive (--single-file-archive disabled)"
 printf 'Command:'
 printf ' %q' "${cmd[@]}"

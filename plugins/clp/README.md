@@ -159,6 +159,10 @@ Defaults:
 
 - extensions: `log,jsonl,json,txt,ndjson,out,err` (override with `--extensions`,
   or use `--extensions '*'` to include every regular file).
+- jsonl detection: on. A file whose first lines are JSON objects but whose name
+  is not `.json`/`.jsonl`/`.ndjson` is handed to `clp-s` as a staged `*.jsonl`
+  copy, because `clp-s` picks its parser by file name. Not applied with
+  `--structurize`, which rewrites every file under a JSON name anyway.
 - recursive: yes (use `--no-recursive` for top-level only).
 - structurize: off (pass `--structurize` for unstructured text logs — see below).
 - timestamp key: none (pass `--timestamp-key KEY` if your logs have a known
