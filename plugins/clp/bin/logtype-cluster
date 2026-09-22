@@ -9,8 +9,9 @@ set -euo pipefail
 # remote endpoints — and exports it for logtype-cluster.py, which embeds the
 # logtype templates via the server's /v1/embeddings endpoint.
 #
-# No venv, no model download, no server of our own: embeddings always come from
-# an already-running server. The only local dependency is numpy.
+# No venv, no model download, no server of our own, and no third-party
+# dependency: embeddings always come from an already-running server, and the
+# clustering is pure Python standard library (numpy is not required).
 
 CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck disable=SC1091
@@ -28,7 +29,7 @@ at one (highest precedence first):
   echo URL > $(semantic_endpoint_config_file)
 Otherwise the built-in remote endpoints are used automatically.
 
-The only local dependency is numpy (python3 -m pip install numpy).
+There is no local dependency: clustering is pure Python standard library.
 EOF
   exit 2
 fi
