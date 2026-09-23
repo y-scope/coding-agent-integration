@@ -48,42 +48,55 @@ of the *same* binary, but need not match byte-exactly the shapes-API logtypes
 a newer binary would produce, so a cache entry built on the fallback path may
 not GROWTH-match one built on the shapes path (it will re-classify as NEW).
 
-## Known limitation: the message field is a CLP-string
+## The message field needs the same wildcard rule as any field
 
 The message field (`message` structurized, `msg` native Mongo, …) is stored as
 a CLP-string (logtype template + encoded variables — what makes
-`stats.log_shapes` and the compression work). Consequence: **KQL cannot search
-message content** — `<message>:term` and `<message>:*term*` always return 0;
-only existence (`<message>:*`) matches. The scalar fields (severity, logger,
-payload leaf paths) ARE KQL-searchable. This is exactly why the
-logtype-baseline approach matters: the dictionary dump bypasses KQL and gives
-the full template vocabulary. Semantic search (`semantic("…")`) also searches
-the logtypes directly and is the one KQL construct that reaches message
-content.
+`stats.log_shapes` and the compression work). That storage is irrelevant to
+searching it: `<message>:term` is an exact match, same as `<field>:term` on
+any field per `shared-search.md`, so it correctly returns 0 unless a message
+equals exactly `term`. Exact match is faster, so prefer it whenever you know
+the full field value (e.g. a scalar like severity or logger); wildcard only
+when you need a substring match — `<message>:*term*` — which is what message
+content almost always needs, since it's free text, not an enumerable value.
+The logtype-baseline approach still
+matters even with wildcard search available: the dictionary dump gives the
+full template vocabulary up front, so queries can be built from real
+templates instead of guessed keywords. Semantic search (`semantic("…")`) also
+searches the logtypes directly and is a good complement to wildcard search
+for concept-shaped questions.
 
 ## Retrieve & count records of a template
 
-Project the message field and grep/jq-filter for the template's distinctive
-static text (substitute the discovered field names):
+Prefer a direct KQL wildcard search on the message field for the template's
+distinctive static text — it's fast, not a full-archive project+grep pass:
 
 ```bash
 ARCHIVE=<archive-dir>
 SEARCH="${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql"
 MSG=<message-field>
 # records of one template, with timestamp + severity:
+"$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '<message>:*DistinctiveStaticText*'
+# count of that template:
+"$SEARCH" --projection $MSG "$ARCHIVE" '<message>:*DistinctiveStaticText*' | grep -c '^{'
+```
+
+Fall back to project + grep/jq only when the distinctive text has characters
+KQL's wildcard syntax can't express cleanly (e.g. it needs a regex, not a
+substring):
+
+```bash
 "$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '*' \
   | grep '^{' | jq -rc --arg f "$MSG" 'select(.[$f]|test("DistinctiveStaticText";"i"))'
-# count of that template:
-"$SEARCH" --projection $MSG "$ARCHIVE" '*' \
-  | grep '^{' | jq -r --arg f "$MSG" '.[$f]' | grep -c 'DistinctiveStaticText'
 ```
 
 Narrow with a working scalar field first when you can — `<severity>:` and
-`<logger>:` ARE searchable, so slice before grepping:
+`<logger>:` are also searchable, and combine with the message wildcard in one
+compound query:
 
 ```bash
-"$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '<severity>:WARNING' \
-  | grep '^{' | jq -rc --arg f "$MSG" 'select(.[$f]|test("StaticText";"i"))'
+"$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
+  '<severity>:WARNING AND <message>:*StaticText*'
 ```
 
 Rules of thumb: pick the rarest distinctive static text (never a variable or a
