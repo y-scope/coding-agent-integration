@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""
+kql-build - render structured JSON filters into clp-s KQL, and validate
+logtype-insights query plans before they are stored or run.
+
+A filter written as JSON cannot produce an unquoted wildcard value or an
+ungrouped AND/OR: every string value is quoted and escaped, and every nested
+group is parenthesized. The grammar is documented in lib/kql_build.py.
+
+Usage:
+  kql-build render [FILTER_JSON]
+      Print the KQL for one filter (the argument, or stdin when omitted).
+      Example:
+        kql-build render '{"all":[{"field":"severity","eq":"WARNING"},
+                                  {"field":"message","contains":"SQL txn"}]}'
+        -> severity:"WARNING" AND message:"*SQL txn*"
+
+  kql-build check-plan FILE
+      Validate every query_plan entry in FILE: a classification JSON object
+      with a "query_plan" array, a bare JSON array of entries, or NDJSON with
+      one entry per line. Each entry needs a valid "match" filter and a known
+      "method"; a hand-written "kql" string is not accepted. Prints one line
+      per entry, then PLAN_CHECK entries=N ok=K invalid=M:
+        [i] OK <kql>              valid; <kql> is what the entry runs
+        [i] ERROR <label>: <why>  cannot run; <why> says what to fix
+
+Exit codes: 0 every entry OK, 1 any entry ERROR (or an empty plan), 2 usage or
+unreadable input.
+"""
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+import kql_build  # noqa: E402
+
+
+def usage(stream):
+    print(__doc__.split("Usage:", 1)[1].split("Exit codes:", 1)[0].rstrip(), file=stream)
+
+
+def load_plan(path):
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        # Not one JSON document: read it as NDJSON.
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+    if isinstance(obj, dict):
+        plan = obj.get("query_plan")
+        if not isinstance(plan, list):
+            raise ValueError("the JSON object has no 'query_plan' array")
+        return plan
+    if isinstance(obj, list):
+        return obj
+    raise ValueError("expected a JSON object with 'query_plan', a JSON array, or NDJSON")
+
+
+def cmd_render(argv):
+    if len(argv) > 1:
+        usage(sys.stderr)
+        return 2
+    raw = argv[0] if argv else sys.stdin.read()
+    try:
+        node = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"error: filter is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    try:
+        print(kql_build.render(node))
+    except kql_build.FilterError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_check_plan(argv):
+    if len(argv) != 1:
+        usage(sys.stderr)
+        return 2
+    try:
+        plan = load_plan(argv[0])
+    except (OSError, ValueError) as exc:
+        print(f"error: failed to read {argv[0]}: {exc}", file=sys.stderr)
+        return 2
+
+    invalid = 0
+    for i, entry in enumerate(plan, 1):
+        label = entry.get("label", "") if isinstance(entry, dict) else ""
+        try:
+            print(f"[{i}] OK {kql_build.check_entry(entry)}")
+        except kql_build.FilterError as exc:
+            invalid += 1
+            print(f"[{i}] ERROR {label}: {exc}")
+    print(f"PLAN_CHECK entries={len(plan)} ok={len(plan) - invalid} invalid={invalid}")
+    return 0 if plan and not invalid else 1
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        usage(sys.stdout if argv else sys.stderr)
+        return 0 if argv else 2
+    cmd, rest = argv[0], argv[1:]
+    if cmd == "render":
+        return cmd_render(rest)
+    if cmd == "check-plan":
+        return cmd_check_plan(rest)
+    print(f"error: unknown command: {cmd}", file=sys.stderr)
+    usage(sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

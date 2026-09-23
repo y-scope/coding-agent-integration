@@ -103,7 +103,7 @@ For broad trajectory debugging, suggest using a subagent and ask it to return on
 | Claude edits | `message.content.name:Edit OR message.content.name:MultiEdit OR message.content.name:Write` |
 | Claude tool results | `message.content.type:tool_result OR toolUseResult:*` |
 | Claude failures | `toolUseResult.success:false OR toolUseResult.stderr:* OR level:error` |
-| Claude API/transport errors | `isApiErrorMessage:true OR subtype:api_error OR cause:*ECONNRESET*` |
+| Claude API/transport errors | `isApiErrorMessage:true OR subtype:api_error OR cause:"*ECONNRESET*"` |
 | Claude long turns | `subtype:turn_duration AND durationMs >= 30000` |
 | Claude compaction | `subtype:compact_boundary` |
 | Harness runs | `"swebench.harness.run_evaluation" OR "run_evaluation"` |
@@ -138,7 +138,7 @@ CLP searches the compressed archive — unmatched records are never decompressed
 # Long turns only
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'subtype:turn_duration AND durationMs >= 30000'
 # Bash calls matching a keyword
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'message.content.name:Bash AND message.content.input.command:*cargo*'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'message.content.name:Bash AND message.content.input.command:"*cargo*"'
 # Failures with stderr output
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'toolUseResult.success:false AND toolUseResult.stderr:*'
 ```

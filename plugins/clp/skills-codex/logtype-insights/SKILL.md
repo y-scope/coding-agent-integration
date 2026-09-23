@@ -71,7 +71,7 @@ Stdout prints a summary then one `{"id","count","representative"}` line per clus
    - security / auth / access
    - other (note but don't deep-search)
 
-Build a QUERY PLAN: targeted queries derived from the representatives, expressed in the discovered field names. Per entry: `label`, the KQL `kql` (any field, including message, is KQL-searchable — `<message>:term` is an exact match and correctly returns 0 unless a message equals exactly `term`; exact match is faster, so prefer it for scalar fields whose full value is known, and wildcard as `<message>:*term*` only when the filter needs a substring match against message content), the `project` columns, and the `method` (`count` (run with `--count`) / `project+grep` (fold the text into `kql` as `message:*text*` wildcards, OR'd for an alternation; set `grep` only for real regex features) / `project+jq` (with `jq`) / `semantic`). For GROWTH, add entries only for genuinely new signals. Example (Mongo): `{"label":"Slow queries","kql":"attr.durationMillis:*","project":"t.$date,attr.durationMillis,msg","jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}`. Example (vLLM): `{"label":"Memory or OOM warnings","kql":"level:WARNING AND (message:*memory* OR message:*OOM* OR message:*oom-killer*)","project":"timestamp,level,message","method":"project+grep"}`.
+Build a QUERY PLAN: targeted queries derived from the representatives, expressed in the discovered field names. Per entry: `label`, the filter as a structured `match` object, the `project` columns, and the `method`. Never write a KQL string: the plan runner renders `match` to KQL itself, quoting and escaping every value and parenthesizing every group, and an entry carrying a `kql` key is rejected. `match` grammar (nest freely): `{"all":[F,...]}` (AND), `{"any":[F,...]}` (OR), `{"not":F}`, `{"field":"<f>","eq":V}` (exact value — fastest, for a scalar field whose full value is known; on the message field it matches only a message equal to V, so it correctly returns 0 otherwise), `{"field":"<f>","contains":"text"}` (substring — what message content almost always needs; the text is literal, spaces and quotes included), `{"field":"<f>","contains":["a","b"]}` (substrings in order, e.g. a template's static fragments around its `<*>`), `{"field":"<f>","prefix":"text"}`, `{"field":"<f>","exists":true}`, `{"field":"<f>","gt":N}` (also `gte`/`lt`/`lte`), and `{"semantic":"text"}` (only inside an `all` beside a concrete filter; never alone, never under `not`). Methods: `count` (run with `--count`) / `project+grep` (fold the text into `match` as an `any` of `contains` nodes; set `grep` only for real regex features) / `project+jq` (with `jq`) / `semantic`. For GROWTH, add entries only for genuinely new signals. Example (Mongo): `{"label":"Slow queries","match":{"field":"attr.durationMillis","exists":true},"project":"t.$date,attr.durationMillis,msg","jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}`. Example (vLLM): `{"label":"Memory or OOM warnings","match":{"all":[{"field":"level","eq":"WARNING"},{"any":[{"field":"message","contains":"memory"},{"field":"message","contains":"OOM"},{"field":"message","contains":"oom-killer"}]}]},"project":"timestamp,level,message","method":"project+grep"}`.
 
 Write `/tmp/logtype-class.json` with this shape — `assignments` must contain EVERY cluster id exactly once, with ONLY ids, never logtype text (members are re-attached mechanically); omit `schema` for GROWTH:
    ```
@@ -79,7 +79,7 @@ Write `/tmp/logtype-class.json` with this shape — `assignments` must contain E
      "schema": {"timestamp":"<TS>","severity":"<SEV>","logger":"<LOGGER>","message":"<MSG>","payload":["<leaf>",...]},
      "taxonomy": [{"category":"<name>","description":"<one line>"}],
      "assignments": [{"id":"c1","category":"<name>"}],
-     "query_plan": [{"label":"...","kql":"...","project":"...","grep":"...","jq":"...","method":"..."}]
+     "query_plan": [{"label":"...","match":{...},"project":"...","grep":"...","jq":"...","method":"..."}]
    }
    ```
 
@@ -90,6 +90,10 @@ Then validate, expand ids to every member template (byte-exact by construction),
    # which would poison the cache entry):
    jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_plan|type=="array")' \
      /tmp/logtype-class.json >/dev/null || exit 1
+   # Every query_plan entry needs a valid `match` filter: one "[i] OK <kql>" or
+   # "[i] ERROR <label>: <why>" line per entry, exit 1 on any ERROR — fix
+   # those entries and re-run; do NOT store in that case:
+   "$BIN"/kql-build check-plan /tmp/logtype-class.json || exit 1
    # Exits 2 and writes NOTHING on missing/unknown/duplicate ids — fix the
    # assignments and re-run; do NOT store in that case:
    "$BIN"/logtype-cluster expand --clusters /tmp/logtype-clusters.json \
@@ -106,18 +110,36 @@ Then validate, expand ids to every member template (byte-exact by construction),
 
 After storing, report the taxonomy you produced and that the classification is now cached for future runs.
 
-7. **Run the insight pass** (inline, from `/tmp/logtype-classification.json`). Announce it first ("running the insight pass — executing the K planned queries; may take a few minutes"). As you go, give one-line updates: the count after each query-plan entry (or small group of entries), one line with the top templates by frequency, and "queries done, writing the report" before step 8. Execute every `query_plan` entry:
+7. **Run the insight pass** (inline, from `/tmp/logtype-classification.json`). Announce it first ("running the insight pass — executing the K planned queries in batches of 5"). Extract the plan with the bounded extractor, which writes `/tmp/logtype-query-plan.txt` and `/tmp/logtype-templates-by-category.txt` (the top templates per category by frequency). A raw `jq` over the classification file can take minutes when an app logs large near-duplicate blobs. Then execute the plan with the plan runner in batches of at most 5 entries, one command per batch:
+
+   ```bash
+   BIN=~/.codex/marketplaces/yscope/plugins/clp/bin
+   "$BIN"/logtype-insight-extract          # add --no-freqs when FREQS=UNAVAILABLE
+   # Only when the extract printed QUERY_PLAN_INVALID= above zero — see below:
+   "$BIN"/kql-build check-plan /tmp/logtype-query-plan.txt | grep ERROR
+   "$BIN"/kql-build check-plan /tmp/logtype-query-plan-repaired.json || exit 1
+   "$BIN"/logtype-cache set-plan --key "$APP_KEY" < /tmp/logtype-query-plan-repaired.json
+   jq -c '.query_plan[]' /tmp/logtype-query-plan-repaired.json > /tmp/logtype-query-plan.txt
+   # Then run the plan:
+   "$BIN"/logtype-query-plan-run --entries 1-5 <archive-dir>
+   "$BIN"/logtype-query-plan-run --entries 6-10 <archive-dir>
+   "$BIN"/logtype-query-plan-run --print-table
+   ```
+
+   `QUERY_PLAN_INVALID=` above zero means entries without a valid `match` filter — typically a plan cached before plans used `match`, whose entries carry hand-written `kql` strings (`QUERY_PLAN_INVALID_ENTRIES=` lists them). Repair them once before running the plan: tell the user, list the reasons with `check-plan ... | grep ERROR`, and write `/tmp/logtype-query-plan-repaired.json` as `{"query_plan":[...]}` holding every entry in order — the valid ones unchanged, each invalid one with the same label, method, project, grep, and jq, its filter rewritten as an equivalent `match` (for a `kql` string that mixes AND and OR without parentheses, the grouping its label means), and no `kql` key. Validate it with `check-plan`, store it with `set-plan` (it replaces only the plan; templates and taxonomy stay), and refresh `/tmp/logtype-query-plan.txt` as shown. The next run reads the repaired plan from the cache.
+
+   The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in `/tmp/logtype-query-results.ndjson`; the first batch also records the archive's total record count. After each batch, give one line per entry: its number, label, result or status, and elapsed time. When the plan is done, show the `--print-table` output verbatim and call out the entries that failed, matched nothing, or matched nearly everything. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give one line with the top templates by frequency, and "queries done, writing the report" before step 8. For the queries you run yourself, pick the method that fits:
    - `count`: run the KQL with `--count` (in-engine; cannot be combined with `--projection`), never `--projection ... | grep -c '^{'`. It prints one `{"archive_id":...,"count":N}` line per archive and nothing when zero records match; treat empty output as a real zero.
-   - `project+grep`: fold the target into the KQL as `<message>:*text*`, and OR the wildcards for a keyword alternation (`<message>:*a* OR <message>:*b*`). Only when the target needs real regex features (anchors, character classes, backreferences), run the KQL with `--projection`, then `grep '^{' | jq -r '.<message>' | grep -Ei '<grep>'`. Add `--limit N` when a few example records are enough.
+   - `project+grep`: fold the target into the KQL as `<message>:"*text*"`, and OR the wildcards for a keyword alternation (`<message>:"*a*" OR <message>:"*b*"`). Only when the target needs real regex features (anchors, character classes, backreferences), run the KQL with `--projection`, then `grep '^{' | jq -r '.<message>' | grep -Ei '<grep>'`. Add `--limit N` when a few example records are enough.
    - `project+jq`: run the KQL with `--projection`, then `grep '^{' | jq -r '<jq>'`.
    - `semantic`: run `semantic("...") AND <kql>` with `--projection`.
 
-MANDATORY semantic pass — in addition to any query_plan entries whose method is `semantic`, always run at least one scoped `semantic()` query derived from the goal or the dominant templates, e.g. `semantic("...") AND <severity>:<value>` or `semantic("...") AND <logger>:*<substr>*`. Never run an unscoped `semantic()`. Discard any query that returns nothing or only generic/meaningless logtypes — do not include it in the report.
+MANDATORY semantic pass — in addition to any query_plan entries whose method is `semantic`, always run at least one scoped `semantic()` query derived from the goal or the dominant templates, e.g. `semantic("...") AND <severity>:<value>` or `semantic("...") AND <logger>:"*<substr>*"`. Never run an unscoped `semantic()`. Discard any query that returns nothing or only generic/meaningless logtypes — do not include it in the report.
 
 Then:
    - **Per-template frequencies** (the count baseline): read the bootstrap's `FREQS_FILE`, already sorted most frequent first — `head -20 /tmp/logtype-freqs.ndjson`. Never recompute them by projecting and counting messages. With `FREQS=UNAVAILABLE`, say so in the Logtype Baseline section and omit counts.
-   - **Total records**: `'*' --count`. **Severity/logger breakdowns**: the bootstrap DIST lines cover only the sampled records; for exact totals run `--count` per value, including the dominant one (it costs the same as a rare one). List unknown values first with `--unique <field>` (it still scans the matching records). **Group totals**: sum `count` over the matching templates in `/tmp/logtype-freqs.ndjson` instead of scanning records. **Time span**: project the timestamp field and use `head`/`tail` (chronological; do NOT sort), or `--tge`/`--tle` if the timestamp is a real epoch.
-   - `<message>:term` is an exact match, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so use it when you know a field's full value; message content is free text and almost always needs a substring wildcard — `<message>:*term*`. Combine with a scalar filter in one compound query when you can (`<severity>:<value> AND <message>:*term*`, `<logger>:*<substr>* AND <message>:*term*`). Fall back to projecting message + grep only when the match needs real regex features, never for a plain keyword alternation.
+   - **Total records**: `total_records` in `/tmp/logtype-query-results.ndjson` (already counted; do not recount). **Severity/logger breakdowns**: the bootstrap DIST lines cover only the sampled records; for exact totals run `--count` per value, including the dominant one (it costs the same as a rare one). List unknown values first with `--unique <field>` (it still scans the matching records). **Group totals**: sum `count` over the matching templates in `/tmp/logtype-freqs.ndjson` instead of scanning records. **Time span**: project the timestamp field and use `head`/`tail` (chronological; do NOT sort), or `--tge`/`--tle` if the timestamp is a real epoch.
+   - `<message>:term` is an exact match, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so use it when you know a field's full value; message content is free text and almost always needs a substring wildcard — `<message>:"*term*"`. Combine with a scalar filter in one compound query when you can (`<severity>:<value> AND <message>:"*term*"`, `<logger>:"*<substr>*" AND <message>:"*term*"`). Fall back to projecting message + grep only when the match needs real regex features, never for a plain keyword alternation.
 
 8. Present a Markdown Logtype Insights Report:
    1. **Summary** — total records, severity counts, time span, top logger/component.
@@ -128,17 +150,18 @@ Then:
    6. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
    7. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
    8. **Follow-up queries** — 2–3 concrete queries derived from templates.
+   9. **Query Log** — every query you ran beyond the plan (exact KQL + flags), its result, and whether the report uses it, including empty ones and corrected re-runs of failed plan entries. The plan's own entries are not repeated; their table was shown when the plan finished.
 
 9. Offer to drill deeper on a finding, note that re-running on the same application skips classification (cached plan reused), or decompress: `~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-decompress <archives-dir> <out-dir>`.
 
 ## The message field needs the same wildcard rule as any field
 
-The message field (`message` structurized, `msg` native Mongo, …) is stored as a CLP-string (logtype template + encoded variables — what makes `stats.log_shapes` and the compression work). That storage is irrelevant to searching it: `<message>:term` is an exact match, same as `<field>:term` on any field, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so prefer it whenever you know the full field value; wildcard only for a substring match — `<message>:*term*` — which is what message content almost always needs, since it's free text. Prefer a direct wildcard search on the message field over project+grep:
+The message field (`message` structurized, `msg` native Mongo, …) is stored as a CLP-string (logtype template + encoded variables — what makes `stats.log_shapes` and the compression work). That storage is irrelevant to searching it: `<message>:term` is an exact match, same as `<field>:term` on any field, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so prefer it whenever you know the full field value; wildcard only for a substring match — `<message>:"*term*"` — which is what message content almost always needs, since it's free text. Prefer a direct wildcard search on the message field over project+grep:
 
 ```bash
 S=~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql
 "$S" --projection <timestamp>,<severity>,<message> <archive-dir> \
-  '<severity>:WARNING AND <message>:*StaticText*'
+  '<severity>:WARNING AND <message>:"*StaticText*"'
 ```
 
 Fall back to projecting the message field and grepping/jq-filtering only when the distinctive text needs a regex the wildcard syntax can't express:

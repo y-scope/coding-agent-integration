@@ -17,8 +17,7 @@ For session-log workflows (list → compress → search), use the `claude-code-t
 | Concept | Syntax |
 | --- | --- |
 | String match | `field:value` |
-| Wildcard (single word) | `field:*value*` |
-| Wildcard (multi-word) | `field:"*multi word value*"` |
+| Wildcard (substring) | `field:"*value*"` — quote it, even for one word |
 | Numeric compare | `durationMs >= 30000` |
 | Boolean | `A AND B`, `A OR B`, `NOT A` |
 | Phrase | `"multi word phrase"` |
@@ -27,8 +26,8 @@ For session-log workflows (list → compress → search), use the `claude-code-t
 
 A literal term matches only the **entire** field value. To match a substring, add explicit wildcards:
 
-- `message:*hello*` — match `hello` anywhere in the message.
-- `message:"*SQL txn*"` — multi-word substring: **quote the whole wildcard value** when it contains a space.
+- `message:"*hello*"` — match `hello` anywhere in the message.
+- `message:"*SQL txn*"` — multi-word substring. **Always quote the whole wildcard value**: an unquoted one with a space is read as natural language, and the search wrapper rejects it.
 
 A bare `INFO` (no wildcards) returns 0 even when `INFO` appears in the data — correct, not a bug. Always add `*` around the substring.
 
@@ -57,5 +56,5 @@ Use `semantic("natural language query")` in KQL to find log events whose logtype
   ```
 - List a field's distinct values among matches with `--unique FIELD` instead of projecting and running `sort | uniq`. It still scans the matching records (measured ~84s for a low-cardinality field over 16.5M records), so get per-value totals with one `--count` query per value.
 - `--count`, `--unique`, and `--limit` are mutually exclusive, and `--count`/`--unique` cannot be combined with `--projection`.
-- Prefer one compound KQL query over several: `'field1:value AND field2 >= 1000'`. A keyword alternation is not a reason to grep: OR the wildcards in the query itself, `message:*a* OR message:*b* OR message:*c*`, which still runs inside the search engine. Pipe to `grep`/`jq` only when the match needs real regex features (anchors, character classes, backreferences).
+- Prefer one compound KQL query over several: `'field1:value AND field2 >= 1000'`. A keyword alternation is not a reason to grep: OR the wildcards in the query itself, `message:"*a*" OR message:"*b*" OR message:"*c*"`, which still runs inside the search engine. Pipe to `grep`/`jq` only when the match needs real regex features (anchors, character classes, backreferences).
 - Point at a local build with `--clp-s-bin PATH` or `CLP_S_BIN` (see the `dev` skill).

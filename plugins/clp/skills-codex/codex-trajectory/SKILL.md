@@ -129,7 +129,7 @@ CLP searches the compressed archive — unmatched records are never decompressed
 # Failed tool calls only
 ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'payload.type:function_call_output AND payload.success:false'
 # Shell calls matching a keyword
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'payload.name:exec_command AND payload.cmd:*cargo*'
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'payload.name:exec_command AND payload.cmd:"*cargo*"'
 # Failures with stderr
 ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'payload.success:false AND payload.stderr:*'
 ```

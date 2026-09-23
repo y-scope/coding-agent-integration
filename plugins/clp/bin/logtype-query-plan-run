@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""
+logtype-query-plan-run - execute a logtype-insights query plan and report each
+entry's result as it completes (logtype-insights skill, step 7).
+
+The insight subagent used to execute the plan itself, out of sight: the user
+saw a spinner for minutes, and nobody could tell afterwards which KQL had run,
+what it returned, how long it took, or whether it failed. This tool runs each
+entry through clp-s-search-kql, prints one block per entry as soon as it
+finishes, and records every entry in a results file that the insight subagent
+reads instead of re-running the plan.
+
+An entry's filter is its structured `match`, rendered to KQL by
+lib/kql_build.py, so its values are quoted and its groups parenthesized by
+construction. An entry without a valid `match` (a malformed filter, or a
+hand-written `kql` string) is recorded as an error without running.
+
+Usage:
+  logtype-query-plan-run [options] ARCHIVES_DIR
+  logtype-query-plan-run --print-table [--results-file F]
+
+Options:
+  --query-plan-file F   One query_plan entry per line as compact JSON
+                        (default: /tmp/logtype-query-plan.txt, written by
+                        logtype-insight-extract)
+  --results-file F      Where results accumulate as NDJSON, one line per plan
+                        entry (default: /tmp/logtype-query-results.ndjson)
+  --entries RANGES      1-based plan entries to run, e.g. 1-5, 7, or 1-3,9
+                        (default: all). Results already recorded for other
+                        entries of the same archive and plan are kept, so the
+                        plan can run in batches and a single entry can be
+                        re-run after a fix.
+  --timeout SECONDS     Wall-clock limit per query (default: 100). A query
+                        that hits it is killed and recorded as "timeout".
+  --samples N           Example output lines kept per projecting entry
+                        (default: 3)
+  --sample-chars N      Truncate each example to N characters (default: 200)
+  --search-wrapper P    Search wrapper to run (default: clp-s-search-kql next
+                        to this script)
+  --print-table         Print the recorded results as a Markdown table and
+                        run nothing.
+
+Methods, as defined by the classification contract (KQL is the rendered
+`match`):
+  count          wrapper --count ARCHIVES_DIR KQL; the per-archive counts are
+                 summed.
+  project+grep   wrapper --projection P ARCHIVES_DIR KQL | grep '^{'
+                 [| grep -Ei GREP]; matching lines are counted.
+  project+jq     wrapper --projection P ARCHIVES_DIR KQL | grep '^{'
+                 | jq -c JQ; output lines are counted.
+  semantic       wrapper --projection P ARCHIVES_DIR KQL | grep '^{'; the
+                 match carries the semantic node itself.
+
+Each entry gets a status: ok, zero (ran and matched nothing -- suspicious,
+since every entry is derived from a template that exists), error (a stage
+exited non-zero; its stderr is kept), or timeout. An entry matching at least
+90% of the archive's records is also flagged non-selective: either its filter
+is too broad to isolate its category, or that category makes up most of the
+log -- worth a look either way.
+
+Stdout: TOTAL_RECORDS=, then one block per entry run, then a PLAN_STATUS
+line (over every recorded entry, not just this batch) and RESULTS_FILE=.
+
+Exit codes: 0 the requested entries ran (failed entries are results, not
+tool failures), 1 input problem.
+"""
+
+import argparse
+import datetime
+import json
+import os
+import shlex
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from kql_build import METHODS, FilterError, entry_kql  # noqa: E402
+
+DEFAULT_QUERY_PLAN_FILE = "/tmp/logtype-query-plan.txt"
+DEFAULT_RESULTS_FILE = "/tmp/logtype-query-results.ndjson"
+NON_SELECTIVE_PCT = 90.0
+
+
+def parse_ranges(spec: str, n: int) -> list:
+    picked = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        lo, sep, hi = part.partition("-")
+        start = int(lo)
+        end = int(hi) if sep else start
+        if start < 1 or end > n or start > end:
+            raise ValueError(f"entry range {part!r} is outside 1-{n}")
+        picked.update(range(start, end + 1))
+    return sorted(picked)
+
+
+def first_lines(data: bytes, limit: int = 5) -> str:
+    lines = [ln.strip() for ln in data.decode("utf-8", "replace").splitlines() if ln.strip()]
+    text = " | ".join(lines[:limit])
+    return text[:500]
+
+
+def run_pipeline(stages, timeout, on_line):
+    """Run stages as a pipeline, feed each stdout line of the last stage to
+    on_line, and return (exit codes, stderr per stage, timed_out)."""
+    procs, errs = [], []
+    for i, argv in enumerate(stages):
+        err = tempfile.TemporaryFile()
+        proc = subprocess.Popen(
+            argv,
+            stdin=procs[-1].stdout if procs else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=err,
+            # The wrapper is a shell script that spawns clp-s; give it its own
+            # process group so a timeout kills clp-s too.
+            start_new_session=(i == 0),
+        )
+        if procs:
+            procs[-1].stdout.close()
+        procs.append(proc)
+        errs.append(err)
+
+    timed_out = threading.Event()
+
+    def kill_all():
+        timed_out.set()
+        try:
+            os.killpg(procs[0].pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for proc in procs[1:]:
+            proc.kill()
+
+    timer = threading.Timer(timeout, kill_all)
+    timer.start()
+    try:
+        for raw in procs[-1].stdout:
+            on_line(raw.decode("utf-8", "replace").rstrip("\n"))
+        codes = [proc.wait() for proc in procs]
+    finally:
+        timer.cancel()
+    stderr = []
+    for err in errs:
+        err.seek(0)
+        stderr.append(err.read())
+        err.close()
+    return codes, stderr, timed_out.is_set()
+
+
+def count_lines_into(acc):
+    def on_line(line):
+        line = line.strip()
+        if not line.startswith("{"):
+            return
+        try:
+            acc["count"] += int(json.loads(line).get("count", 0))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    return on_line
+
+
+def build_stages(entry, kql, wrapper, archive):
+    method = entry.get("method", "")
+    if method == "count":
+        return [[wrapper, "--count", archive, kql]]
+    search = [wrapper]
+    if entry.get("project"):
+        search += ["--projection", entry["project"]]
+    search += [archive, kql]
+    stages = [search, ["grep", "^{"]]
+    if method == "project+grep" and entry.get("grep"):
+        stages.append(["grep", "-Ei", entry["grep"]])
+    elif method == "project+jq":
+        stages.append(["jq", "-c", entry.get("jq") or "."])
+    return stages
+
+
+def stage_failed(argv, code):
+    # grep exits 1 when nothing matched; that is a zero result, not a failure.
+    if argv[0] == "grep":
+        return code >= 2
+    return code != 0
+
+
+def plan_kql(entry):
+    """The KQL an entry runs, or None when its match does not render."""
+    try:
+        return entry_kql(entry)
+    except FilterError:
+        return None
+
+
+def run_entry(entry, index, n, args, total):
+    method = entry.get("method", "")
+    label = entry.get("label", f"entry {index}")
+    print(f"[{index}/{n}] {label}", flush=True)
+
+    result = {
+        "index": index,
+        "label": label,
+        "method": method,
+        "archive": args.archive,
+        "total_records": total,
+        "ran_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    }
+    for key in ("match", "project", "grep", "jq"):
+        if entry.get(key):
+            result[key] = entry[key]
+
+    try:
+        kql = entry_kql(entry)
+    except FilterError as exc:
+        result.update(kql="", status="error", count=None, elapsed_s=0.0, command="",
+                      error=f"invalid plan entry: {exc}")
+        print(f"       -> ERROR: {result['error']}", flush=True)
+        return result
+    result["kql"] = kql
+    print(f"       {method or '?'}  {kql}", flush=True)
+
+    if method not in METHODS:
+        result.update(status="error", count=None, elapsed_s=0.0,
+                      error=f"unknown method {method!r} (expected one of {', '.join(METHODS)})")
+        result["command"] = ""
+        print(f"       -> ERROR: {result['error']}", flush=True)
+        return result
+
+    stages = build_stages(entry, kql, args.search_wrapper, args.archive)
+    result["command"] = " | ".join(shlex.join(argv) for argv in stages)
+
+    acc = {"count": 0}
+    samples = []
+    if method == "count":
+        on_line = count_lines_into(acc)
+    else:
+        def on_line(line):
+            acc["count"] += 1
+            if len(samples) < args.samples:
+                samples.append(line[: args.sample_chars])
+
+    start = time.monotonic()
+    codes, stderr, timed_out = run_pipeline(stages, args.timeout, on_line)
+    elapsed = round(time.monotonic() - start, 1)
+    count = acc["count"]
+    result.update(count=count, elapsed_s=elapsed)
+    if samples:
+        result["samples"] = samples
+
+    failed = [(argv, code, err) for argv, code, err in zip(stages, codes, stderr)
+              if stage_failed(argv, code)]
+    if timed_out:
+        result["status"] = "timeout"
+        print(f"       -> TIMEOUT after {args.timeout}s (partial: {count:,} rows)", flush=True)
+        return result
+    if failed:
+        argv, code, err = failed[0]
+        stage = "search" if argv is stages[0] else argv[0]
+        result["status"] = "error"
+        result["error"] = f"{stage} exited {code}: {first_lines(err) or '(no stderr)'}"
+        print(f"       -> ERROR in {elapsed}s: {result['error']}", flush=True)
+        return result
+
+    unit = "records" if method == "count" else "rows"
+    line = f"       -> {count:,} {unit}"
+    if total:
+        pct = round(100.0 * count / total, 6)
+        result["pct"] = pct
+        line += f" ({fmt_pct(pct)} of {total:,})"
+        if pct >= NON_SELECTIVE_PCT:
+            result["non_selective"] = True
+    line += f" in {elapsed}s"
+    if count == 0:
+        result["status"] = "zero"
+        line += "  [ZERO: matched nothing]"
+    else:
+        result["status"] = "ok"
+        if result.get("non_selective"):
+            line += f"  [NON-SELECTIVE: >= {NON_SELECTIVE_PCT:g}% of records]"
+    print(line, flush=True)
+    for sample in samples:
+        print(f"          e.g. {sample}", flush=True)
+    return result
+
+
+def load_results(path):
+    results = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec.get("index"), int):
+                    results[rec["index"]] = rec
+    except FileNotFoundError:
+        pass
+    return results
+
+
+def plan_status(results, n):
+    statuses = [r.get("status") for r in results.values()]
+    return (
+        f"PLAN_STATUS ran={len(results)}/{n} ok={statuses.count('ok')} "
+        f"zero={statuses.count('zero')} error={statuses.count('error')} "
+        f"timeout={statuses.count('timeout')} "
+        f"non_selective={sum(1 for r in results.values() if r.get('non_selective'))}"
+    )
+
+
+def fmt_pct(pct: float) -> str:
+    if pct == 0:
+        return "0%"
+    return "<0.01%" if pct < 0.01 else f"{pct:.2f}%"
+
+
+def md_cell(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def print_table(results):
+    if not results:
+        print("(no recorded results)")
+        return
+    print("| # | Query | Method | KQL | Result | Time |")
+    print("|---|---|---|---|---|---|")
+    for index in sorted(results):
+        r = results[index]
+        status = r.get("status")
+        count = r.get("count")
+        if status == "error":
+            outcome = f"**error**: {r.get('error', '')[:300]}"
+        elif status == "timeout":
+            outcome = f"**timeout** (partial: {count:,})"
+        else:
+            outcome = f"{count:,}"
+            if r.get("total_records"):
+                outcome += f" ({fmt_pct(100.0 * count / r['total_records'])})"
+            if status == "zero":
+                outcome += " **zero**"
+            if r.get("non_selective"):
+                outcome += " **non-selective**"
+        kql = r.get("kql", "")
+        print(
+            f"| {index} | {md_cell(r.get('label', ''))} | {r.get('method', '')} "
+            f"| `{md_cell(kql)}` | {md_cell(outcome)} | {r.get('elapsed_s', '')}s |"
+        )
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Execute a logtype-insights query plan, printing and "
+        "recording each entry's result as it completes."
+    )
+    parser.add_argument("archive", nargs="?", help="archives directory")
+    parser.add_argument("--query-plan-file", default=DEFAULT_QUERY_PLAN_FILE)
+    parser.add_argument("--results-file", default=DEFAULT_RESULTS_FILE)
+    parser.add_argument("--entries", default="")
+    parser.add_argument("--timeout", type=int, default=100)
+    parser.add_argument("--samples", type=int, default=3)
+    parser.add_argument("--sample-chars", type=int, default=200)
+    parser.add_argument(
+        "--search-wrapper",
+        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"),
+    )
+    parser.add_argument("--print-table", action="store_true")
+    args = parser.parse_args(argv)
+
+    if args.print_table:
+        print_table(load_results(args.results_file))
+        return 0
+    if not args.archive:
+        parser.error("ARCHIVES_DIR is required unless --print-table is given")
+    args.archive = os.path.abspath(args.archive)
+
+    try:
+        with open(args.query_plan_file, "r", encoding="utf-8") as f:
+            plan = [json.loads(line) for line in f if line.strip()]
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: failed to read {args.query_plan_file}: {exc}", file=sys.stderr)
+        return 1
+    n = len(plan)
+    if n == 0:
+        print(f"error: {args.query_plan_file} has no query plan entries", file=sys.stderr)
+        return 1
+    try:
+        picked = parse_ranges(args.entries, n) if args.entries else list(range(1, n + 1))
+    except ValueError as exc:
+        print(f"error: --entries: {exc}", file=sys.stderr)
+        return 1
+
+    # Keep earlier results only when they describe this archive and this plan.
+    results = {
+        i: r for i, r in load_results(args.results_file).items()
+        if r.get("archive") == args.archive and 1 <= i <= n
+        and r.get("kql") == plan_kql(plan[i - 1]) and r.get("label") == plan[i - 1].get("label")
+    }
+
+    total = next((r["total_records"] for r in results.values() if r.get("total_records")), None)
+    if total is None:
+        acc = {"count": 0}
+        start = time.monotonic()
+        codes, stderr, timed_out = run_pipeline(
+            [[args.search_wrapper, "--count", args.archive, "*"]], args.timeout, count_lines_into(acc)
+        )
+        elapsed = round(time.monotonic() - start, 1)
+        if timed_out or codes[0] != 0:
+            reason = "timeout" if timed_out else first_lines(stderr[0]) or f"exit {codes[0]}"
+            print(f"TOTAL_RECORDS=unknown ({reason}; percentages omitted)", flush=True)
+        else:
+            total = acc["count"]
+            print(f"TOTAL_RECORDS={total} ({elapsed}s)", flush=True)
+    else:
+        print(f"TOTAL_RECORDS={total} (recorded)", flush=True)
+
+    for index in picked:
+        results[index] = run_entry(plan[index - 1], index, n, args, total)
+        # Rewrite after every entry so an interrupted batch keeps what finished.
+        tmp = args.results_file + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            for i in sorted(results):
+                f.write(json.dumps(results[i], ensure_ascii=False) + "\n")
+        os.replace(tmp, args.results_file)
+
+    print(plan_status(results, n))
+    print(f"RESULTS_FILE={args.results_file}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -70,51 +70,78 @@ Method:
      - security / auth / access
      - other (note but don't deep-search)
 2. Build a QUERY PLAN: targeted queries derived from the representatives,
-   expressed in the discovered field names. Per entry: label, the KQL filter
-   (any field, including message, is KQL-searchable — `message:term` is an
-   exact match and correctly returns 0 unless a message equals exactly
-   `term`; exact match is faster, so prefer it for scalar fields whose full
-   value is known, and wildcard as `message:*term*` only when the filter
-   needs a substring match against message content), the columns to
-   --projection, and the method:
+   expressed in the discovered field names. Per entry: label, the filter as
+   a structured `match` object, the columns to --projection, and the method.
+   Never write a KQL string: the plan runner renders `match` to KQL itself,
+   quoting and escaping every value and parenthesizing every group, and an
+   entry carrying a "kql" key is rejected. `match` grammar (nest freely):
+     {"all": [F, ...]}                  every child matches (AND)
+     {"any": [F, ...]}                  at least one child matches (OR)
+     {"not": F}                         F does not match
+     {"field": "<f>", "eq": V}          exact value; fastest, so use it for
+                                        a scalar field whose full value is
+                                        known (severity, logger, a payload
+                                        leaf)
+     {"field": "<f>", "contains": "text"}
+                                        substring -- what message content
+                                        almost always needs. The text is
+                                        literal: spaces, quotes, `*` and `?`
+                                        need no escaping
+     {"field": "<f>", "contains": ["a", "b"]}
+                                        substrings in this order, e.g. a
+                                        template's static fragments around
+                                        its <*> variables
+     {"field": "<f>", "prefix": "text"}  starts with
+     {"field": "<f>", "exists": true}   the field is present
+     {"field": "<f>", "gt": N}          numeric comparison (also gte, lt, lte)
+     {"semantic": "text"}               semantic search; only inside an
+                                        "all" beside a concrete filter, never
+                                        alone and never under "not"
+   Methods:
      - "count"        -> count matches via native `--count` (in-engine
                          aggregation, mutually exclusive with --projection;
-                         runs in ~constant time regardless of match volume —
+                         runs in ~constant time regardless of match volume --
                          use it even for a filter matching most of the
                          archive). Do NOT use `--projection ... | grep -c
-                         '^{'` for a plain count — that's much slower once
+                         '^{'` for a plain count -- that's much slower once
                          the match set is large. When the filter is
                          expressible purely as message text, summing
                          `count` over the matching templates in the
                          bootstrap's /tmp/logtype-freqs.ndjson is an
                          alternative that's O(distinct templates) instead
                          of O(records).
-     - "project+grep" -> fold the static text into the KQL as OR'd wildcards,
-                         `message:*a* OR message:*b* OR message:*c*`, even for
-                         a keyword alternation — that still runs inside the
-                         search engine, not as a post-filter. Only add a real
-                         `grep`/`jq` pipe stage when the text needs a genuine
-                         regex feature (anchors, character classes,
-                         backreferences) that OR'd wildcards can't express;
-                         never use grep merely to implement `a|b|c` matching.
+     - "project+grep" -> fold the static text into `match` as an "any" of
+                         "contains" nodes, even for a keyword alternation --
+                         that still runs inside the search engine, not as a
+                         post-filter. Only add a real `grep` pipe stage when
+                         the text needs a genuine regex feature (anchors,
+                         character classes, backreferences) that "contains"
+                         can't express; never use grep merely to implement
+                         `a|b|c` matching.
      - "project+jq"   -> project message/payload, jq-filter (e.g. a numeric
                          threshold on a payload leaf)
-     - "semantic"     -> semantic("...") AND <scalar filter>, ONLY for an
-                         ambiguous template or to group similar ones
-   Example (Mongo): {"label":"Slow queries","kql":"attr.durationMillis:*",
+     - "semantic"     -> a "semantic" node inside an "all" beside a scalar
+                         filter, ONLY for an ambiguous template or to group
+                         similar ones
+   Example (Mongo): {"label":"Slow queries",
+     "match":{"field":"attr.durationMillis","exists":true},
      "project":"t.$date,attr.durationMillis,msg",
      "jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}
-   Example (vLLM):  {"label":"Memory or OOM warnings","kql":"level:WARNING AND (message:*memory* OR message:*OOM* OR message:*oom-killer*)",
+   Example (vLLM):  {"label":"Memory or OOM warnings",
+     "match":{"all":[{"field":"level","eq":"WARNING"},
+                     {"any":[{"field":"message","contains":"memory"},
+                             {"field":"message","contains":"OOM"},
+                             {"field":"message","contains":"oom-killer"}]}]},
      "project":"timestamp,level,message",
      "method":"project+grep"}
    For GROWTH, add new plan entries only for genuinely new signals.
-3. Remember: `message:term` is an exact match, so it correctly returns 0
-   unless a message equals exactly `term` — it is not a sign that message
-   content is unsearchable. Use exact match when a field's full value is
-   known (it's faster); `message:*term*` (wildcarded) is for substring
-   matches, which message content almost always needs. Combine a scalar
-   filter (severity, logger, payload leaves) with the message wildcard in
-   one compound query when both apply.
+3. Remember: {"field":"<message>","eq":"term"} is an exact match against the
+   whole message, so it correctly returns 0 unless a message equals exactly
+   `term` -- it is not a sign that message content is unsearchable. Use "eq"
+   when a field's full value is known (it's faster); "contains" is for
+   substring matches, which message content almost always needs. Combine a
+   scalar filter (severity, logger, payload leaves) with the message
+   "contains" in one "all" when both apply.
 
 Write the result as valid JSON to /tmp/logtype-class.json with EXACTLY this
 shape, then print "DONE" and nothing else:
@@ -122,19 +149,22 @@ shape, then print "DONE" and nothing else:
     "schema": {"timestamp":"<TS>","severity":"<SEV>","logger":"<LOGGER>","message":"<MSG>","payload":["<leaf>",...]},
     "taxonomy": [{"category":"<name>","description":"<one line>"}],
     "assignments": [{"id":"c1","category":"<name>"}],
-    "query_plan": [{"label":"<...>","kql":"<...>","project":"<...>","grep":"<...>","jq":"<...>","method":"<count|project+grep|project+jq|semantic>"}]
+    "query_plan": [{"label":"<...>","match":{<filter>},"project":"<...>","grep":"<...>","jq":"<...>","method":"<count|project+grep|project+jq|semantic>"}]
   }
 Rules:
 - `assignments` must contain EVERY cluster id above exactly once, with ONLY
   ids — never logtype text; the member templates are re-attached mechanically.
 - Omit "schema" for GROWTH (the base entry already has it); include it for NEW.
 - Use only the keys each query_plan entry needs (omit null/empty keys).
-- Use the discovered field names verbatim in `kql` and `project`.
+- Write every filter as `match`; never add a "kql" key.
+- Use the discovered field names verbatim in `match` and `project`.
 ```
 
 ## After the subagent returns: validate → expand → store
 
 Tell the user the classifier returned and you are validating and storing the plan; after `put-merged` succeeds, report the taxonomy and that the classification is now cached.
+
+The subagent never writes KQL: each query_plan entry carries a `match` filter that `kql-build` renders, so an unquoted wildcard or an ungrouped AND/OR cannot reach the cache. `put-merged` refuses to store an entry without a valid `match` too, as a backstop.
 
 ```bash
 # 1. Shape-validate — the fields must be ARRAYS (a bare `.assignments` test
@@ -142,7 +172,14 @@ Tell the user the classifier returned and you are validating and storing the pla
 jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_plan|type=="array")' \
   /tmp/logtype-class.json >/dev/null || exit 1
 
-# 2. Expand id-based assignments to every member template. Exits 2 and writes
+# 2. Plan-validate -- every query_plan entry needs a valid `match` filter and
+#    method. check-plan prints one "[i] OK <kql>" or "[i] ERROR <label>: <why>"
+#    line per entry and exits 1 on any ERROR -- in that case do NOT store;
+#    announce the retry to the user and re-run the subagent (sonnet fallback)
+#    with the ERROR lines appended to its prompt:
+"${CLAUDE_PLUGIN_ROOT}/bin/kql-build" check-plan /tmp/logtype-class.json || exit 1
+
+# 3. Expand id-based assignments to every member template. Exits 2 and writes
 #    NOTHING on missing/unknown/duplicate ids — in that case do NOT store;
 #    announce the retry to the user, re-run the subagent (sonnet fallback),
 #    and expand again:
@@ -151,7 +188,7 @@ jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_pl
   --classification /tmp/logtype-class.json \
   --output /tmp/logtype-expanded.json
 
-# 3. Store. Use MODE/APP_KEY/BASE_KEY/MAX_CHARS from the bootstrap output
+# 4. Store. Use MODE/APP_KEY/BASE_KEY/MAX_CHARS from the bootstrap output
 #    (re-declare — fresh shell). --max-chars must match the bootstrap's, or the
 #    stored fingerprint won't match the next run. GROWTH merges into the base
 #    entry (templates/taxonomy/query_plan unioned, grown_from recorded); NEW
