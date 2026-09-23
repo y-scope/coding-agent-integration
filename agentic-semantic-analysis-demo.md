@@ -38,7 +38,6 @@ DEMO_LOGS=/absolute/path/to/prepared-jsonl-logs
 DEMO_ARCHIVE="$DEMO_RUN/archive"
 export CLP_SEMANTIC_ENDPOINT=http://localhost:8080
 export CLP_LOGTYPE_CACHE_DIR="$DEMO_RUN/classification-cache"
-export CLP_SEMANTIC_CACHE_DIR="$DEMO_RUN/semantic-cache"
 git rev-parse HEAD
 ```
 
@@ -157,7 +156,7 @@ On a second capture of the service, inspect the template-set difference. A stric
 
 Use increasing data volumes in two series: captures dominated by repeated occurrences of known templates, and captures that introduce additional template diversity. Record the actual template counts in both. Keep the question, filter selectivity, retrieval settings, hardware, embedding model, and output policy comparable, and record any differences. Controlled repetition can illustrate the mechanism but must be labeled synthetic; representative service data is needed to judge the intended workload.
 
-For each capture, measure a run with a fresh semantic cache and a repeat using the same cache. Record any endpoint-side cache state too; a fresh local directory alone does not prove all embedding work was cold. Capture embedding requests/items, candidate-template counts, cache size, resource use, and semantic-stage versus record-retrieval time where instrumentation permits. If only end-to-end timing is available, report that explicitly rather than estimating internal timings. Classification-cache reuse is a separate measurement.
+For each capture, measure a first run and a repeat run. Record any endpoint-side cache state; a first run alone does not prove all embedding work was cold. Capture embedding requests/items, candidate-template counts, cache size, resource use, and semantic-stage versus record-retrieval time where instrumentation permits. If only end-to-end timing is available, report that explicitly rather than estimating internal timings. Classification-cache reuse is a separate measurement.
 
 The hypothesis is that repeated events increase record volume much faster than semantic representation size, while new templates add embedding and matching work. Validate that relationship alongside retrieval quality. A small demo can establish this mechanism; a claim about petabyte-scale throughput, latency, or cost needs a representative large-scale run with stated concurrency and infrastructure.
 

@@ -209,11 +209,7 @@ echo 'https://embeddings.internal.example.com' \
 
 URLs must be HTTPS, a `localhost`/loopback address, or a `*.yscope.ai` host. The same resolution drives `logtype-cluster` (see below), so one setting covers both semantic search and logtype clustering.
 
-Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T` (default 0.3, range 0.0-1.0), `--embedding-batch-size N` (default auto), `--semantic-cache-dir DIR`, and `--semantic-cache-cold-capacity N`.
-
-A local embedded semantic cache is auto-enabled under the plugin config dir (`~/.config/yscope-clp-plugin/semantic-cache`, cold tier of 10 000 000 entries / ~4 GB, matching the clp-s default) so repeated semantic queries score in-process (~sub-ms) instead of round-tripping to the endpoint. The cache is shared across all sessions and archives. Disable with `--semantic-cache-dir none` or `CLP_SEMANTIC_CACHE_DIR=none`; resize with `--semantic-cache-cold-capacity N` or `CLP_SEMANTIC_CACHE_COLD_CAPACITY`.
-
-The local cache requires a `clp-s` that supports `--semantic-cache-dir`. Older builds (e.g. clp-core 0.12.1) do not, and abort with `Unknown OUTPUT_HANDLER` if the flag is passed. The wrapper probes `clp-s s --help` and, when the flag is unsupported, prints a warning and falls back to remote-only scoring — the search still works, without the local cache.
+Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T` (default 0.3, range 0.0-1.0), and `--embedding-batch-size N` (default auto).
 
 ## Decompress
 

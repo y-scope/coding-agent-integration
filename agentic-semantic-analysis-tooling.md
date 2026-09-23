@@ -73,9 +73,9 @@ See the [shared search reference](plugins/clp/skills-claude/references/shared-se
 
 ### Semantic-search controls and measurement
 
-The documented wrapper path matches message-template embeddings and retrieves records satisfying the selected templates and structured predicates. Controls include `--semantic-endpoint`, `--semantic-top-k`, `--semantic-threshold`, and `--semantic-cache-dir`. The broader capability includes semantic matching over record structure; a corresponding invocation is not established by this wrapper's documented logtype-search interface.
+The documented wrapper path matches message-template embeddings and retrieves records satisfying the selected templates and structured predicates. Controls include `--semantic-endpoint`, `--semantic-top-k`, and `--semantic-threshold`. The broader capability includes semantic matching over record structure; a corresponding invocation is not established by this wrapper's documented logtype-search interface.
 
-Pin the endpoint for reproducible runs: without an explicit endpoint, the wrapper can try local and remote endpoints. A compatible binary supports embedding reuse and local scoring through the semantic cache.
+Pin the endpoint for reproducible runs: without an explicit endpoint, the wrapper can try local and remote endpoints.
 
 Measure preparation and matching separately from archive search and result output. Record candidate scope, uncached templates, cache state, and returned records where instrumentation permits. A narrow record filter does not prove that embedding or scoring considered only templates in that selection. The [capabilities overview](agentic-semantic-analysis-capabilities.md#why-semantic-search-can-scale-with-clp) explains the scaling rationale; the wrappers alone do not establish a petabyte-scale performance result.
 
@@ -97,7 +97,7 @@ Group patterns when that helps the question, and reuse applicable work as the in
 |---|---|---|
 | **CLP context cache** | Retrieved records, their structure, and message patterns in CLP format. | Further direct queries, question answering, and evidence retrieval without fetching the same data again. |
 | **Classification cache** | Categories and query plans keyed by a truncated, de-duplicated template fingerprint. | Reuse of applicable labels and incremental classification. |
-| **Semantic cache** | Embeddings used by semantic search. | Reduced repeated embedding work; local scoring on compatible binaries. |
+| **Semantic cache** | Embeddings used by semantic search. | Reduced repeated embedding work. |
 
 Classification-cache states are `NEW` (no compatible entry), `UPTODATE` (matching template set), and `GROWTH` (a cached subset plus additions). For growth, classify additions and merge rather than repeating all classification.
 

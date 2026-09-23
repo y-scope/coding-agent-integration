@@ -58,8 +58,7 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
    - Convert timestamps: python3 -c "from datetime import datetime,timezone; print(int(datetime(Y,M,D,h,m,s,tzinfo=timezone.utc).timestamp()*1000))"
 
    Semantic search: use semantic("query") — the wrapper auto-selects a working
-   endpoint and shares a local cache across sessions, so no endpoint flags are
-   needed.
+   endpoint, so no endpoint flags are needed.
 
    Suggested starting queries:
    - Tool call breakdown: list tool names with --unique payload.name, then --count per name using payload.name:TOOL

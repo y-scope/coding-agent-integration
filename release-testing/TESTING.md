@@ -315,5 +315,4 @@ rm -rf release-testing/workdir
 | `error: stats.logtypes was renamed to stats.log_shapes` | You ran the legacy query spelling; use `stats.log_shapes` as shown in Step 5. |
 | Semantic search: endpoint error | The embedding server is unreachable. Check the endpoint (`--semantic-endpoint`, `CLP_SEMANTIC_ENDPOINT`, or `~/.config/yscope-clp-plugin/semantic-endpoint`); the plugin never starts a server itself. Keyword/logtype steps are unaffected. |
 | `logtype-cluster` exits 2 | The embedding server is unreachable or rejected (same fix as above). Clustering is pure Python standard library, so there is no dependency to install. `setup` no longer exists — clustering uses the server, not a local model. |
-| `warning: clp-s does not support --semantic-cache-dir` | Your `clp-s` build lacks the local semantic cache; the search falls back to remote-only scoring and still works. |
 | Numbers differ slightly from this doc | Byte counts vary with clp-s version; record/template counts (250 / 100 / 96 / 4 / 35 / 18) should match exactly. |

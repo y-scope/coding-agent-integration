@@ -85,7 +85,7 @@ With a logtype baseline, semantic search is not the default exploratory tool —
 | The user's question is conceptual, not template-shaped | "anything about reliability?" |
 | Confirming a template-classification miss | run semantic, diff vs the baseline |
 
-Combine with a scalar KQL field for precision: `semantic("…") AND <severity>:<value>`. Semantic flags (only active when the query contains `semantic()`; the wrapper auto-selects endpoint + local cache):
+Combine with a scalar KQL field for precision: `semantic("…") AND <severity>:<value>`. Semantic flags (only active when the query contains `semantic()`; the wrapper auto-selects the endpoint):
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
