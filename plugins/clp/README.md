@@ -1,11 +1,8 @@
 # YScope CLP Plugin
 
-Plugin for compressing, searching, and decompressing coding-agent session
-log archives with [CLP](https://github.com/y-scope/clp) (Compressed Log
-Processor).
+Plugin for compressing, searching, and decompressing coding-agent session log archives with [CLP](https://github.com/y-scope/clp) (Compressed Log Processor).
 
-CLP is the open-source platform for log archive storage, search, and
-analytics. Pre-release builds may also include licensed YScope extensions.
+CLP is the open-source platform for log archive storage, search, and analytics. Pre-release builds may also include licensed YScope extensions.
 
 ## API Surface
 
@@ -18,9 +15,7 @@ The plugin exposes only:
 - dump an archive's logtype dictionary with the `stats.log_shapes` query.
 - decompress a local CLP archive directory.
 
-It does not expose full-project compression, reducers, network/file output
-handlers, results-cache writes, indexing, conversion, remote decompression,
-metadata sinks, or arbitrary `clp-s` option passthrough.
+It does not expose full-project compression, reducers, network/file output handlers, results-cache writes, indexing, conversion, remote decompression, metadata sinks, or arbitrary `clp-s` option passthrough.
 
 ## Skills
 
@@ -34,8 +29,7 @@ metadata sinks, or arbitrary `clp-s` option passthrough.
 | `claude-code-trajectory` | End-to-end Claude Code session analysis: list → compress → search → decompress, plus Claude-specific query starters. |
 | `codex-trajectory` | Same workflow for Codex session logs, plus Codex-specific query starters. |
 
-Future use-cases will add their own skill directories under `skills-claude/`
-(or `skills-codex/` if the use-case is agent-specific).
+Future use-cases will add their own skill directories under `skills-claude/` (or `skills-codex/` if the use-case is agent-specific).
 
 ## Install
 
@@ -67,8 +61,7 @@ claude --plugin-dir ./plugins/clp
 
 ## Wrappers
 
-Restricted-passthrough wrappers around `clp-s` — these are the security
-boundary (flag allowlist, path validation, env hardening):
+Restricted-passthrough wrappers around `clp-s` — these are the security boundary (flag allowlist, path validation, env hardening):
 
 - `bin/clp-s-list-sessions`
 - `bin/clp-s-compress-session`
@@ -76,25 +69,14 @@ boundary (flag allowlist, path validation, env hardening):
 - `bin/clp-s-search-kql`
 - `bin/clp-s-decompress`
 
-The wrappers prefer `CLP_S_BIN`, then plugin-local `bin/clp-s`, then
-plugin-local `.clp-core/bin/clp-s`, then `clp-s` on `PATH`.
+The wrappers prefer `CLP_S_BIN`, then plugin-local `bin/clp-s`, then plugin-local `.clp-core/bin/clp-s`, then `clp-s` on `PATH`.
 
-Local helpers (not `clp-s` passthroughs — they invoke `clp-s` only through
-the wrappers above, or not at all):
+Local helpers (not `clp-s` passthroughs — they invoke `clp-s` only through the wrappers above, or not at all):
 
-- `bin/structurize.py` — converts unstructured text logs to structured JSONL.
-  Used by `clp-s-compress-folder --structurize`; not called directly.
-- `bin/logtype-cache` — persistent cache of the `logtype-insights`
-  classification, with incremental update when an archive grows. See
-  [Logtype Cache](#logtype-cache).
-- `bin/logtype-insights-bootstrap` — one-command bootstrap for the
-  `logtype-insights` skill: schema-discovery sample, per-field value
-  distributions, logtype dictionary dump (with the templatize fallback for
-  binaries that predate the shapes API), and the classification-cache probe,
-  summarized as grep-able `KEY=VALUE` lines.
-- `bin/logtype-cluster` (+ `logtype-cluster.py`) — groups semantically similar
-  logtypes using embeddings from the semantic server so the LLM classifies one
-  representative per cluster. See [Logtype Cluster](#logtype-cluster).
+- `bin/structurize.py` — converts unstructured text logs to structured JSONL. Used by `clp-s-compress-folder --structurize`; not called directly.
+- `bin/logtype-cache` — persistent cache of the `logtype-insights` classification, with incremental update when an archive grows. See [Logtype Cache](#logtype-cache).
+- `bin/logtype-insights-bootstrap` — one-command bootstrap for the `logtype-insights` skill: schema-discovery sample, per-field value distributions, logtype dictionary dump (with the templatize fallback for binaries that predate the shapes API), and the classification-cache probe, summarized as grep-able `KEY=VALUE` lines.
+- `bin/logtype-cluster` (+ `logtype-cluster.py`) — groups semantically similar logtypes using embeddings from the semantic server so the LLM classifies one representative per cluster. See [Logtype Cluster](#logtype-cluster).
 
 ## Session Workflow
 
@@ -111,8 +93,7 @@ Defaults:
 - Claude subagents: excluded unless `--include-subagents`.
 - manifest: written to `/tmp`.
 
-When presenting choices, always include `IDX`, `AGENT`, modified timestamp,
-raw bytes, human size, session name, project/cwd, and session ID.
+When presenting choices, always include `IDX`, `AGENT`, modified timestamp, raw bytes, human size, session name, project/cwd, and session ID.
 
 Check archive root:
 
@@ -120,8 +101,7 @@ Check archive root:
 ./plugins/clp/bin/clp-s-compress-session --show-archives-root
 ```
 
-Default archive root is `${TMPDIR:-/tmp}/yscope-clp-archives`. Use it without
-asking. Ask only when the user wants persistent storage or a different root.
+Default archive root is `${TMPDIR:-/tmp}/yscope-clp-archives`. Use it without asking. Ask only when the user wants persistent storage or a different root.
 
 Compress the selected row:
 
@@ -142,10 +122,7 @@ After compression, report these lines:
 - `Selected session`
 - `Archive metadata`
 
-Use the printed top-level `Archives dir` for search and decompression. The
-wrappers resolve the inner `clp-s` archive directory automatically. Metadata in
-`.yscope-clp-archive.json` maps archive to session file, agent, roots,
-timestamp key, SHA-256, compression stats, command, and resolved inner archive.
+Use the printed top-level `Archives dir` for search and decompression. The wrappers resolve the inner `clp-s` archive directory automatically. Metadata in `.yscope-clp-archive.json` maps archive to session file, agent, roots, timestamp key, SHA-256, compression stats, command, and resolved inner archive.
 
 ## Folder Logs
 
@@ -157,33 +134,22 @@ Compress log files from an arbitrary folder:
 
 Defaults:
 
-- extensions: `log,jsonl,json,txt,ndjson,out,err` (override with `--extensions`,
-  or use `--extensions '*'` to include every regular file).
-- jsonl detection: on. A file whose first lines are JSON objects but whose name
-  is not `.json`/`.jsonl`/`.ndjson` is handed to `clp-s` as a staged `*.jsonl`
-  copy, because `clp-s` picks its parser by file name. Not applied with
-  `--structurize`, which rewrites every file under a JSON name anyway.
+- extensions: `log,jsonl,json,txt,ndjson,out,err` (override with `--extensions`, or use `--extensions '*'` to include every regular file).
+- jsonl detection: on. A file whose first lines are JSON objects but whose name is not `.json`/`.jsonl`/`.ndjson` is handed to `clp-s` as a staged `*.jsonl` copy, because `clp-s` picks its parser by file name. Not applied with `--structurize`, which rewrites every file under a JSON name anyway.
 - recursive: yes (use `--no-recursive` for top-level only).
 - structurize: off (pass `--structurize` for unstructured text logs — see below).
-- timestamp key: none (pass `--timestamp-key KEY` if your logs have a known
-  timestamp field; required for time-range search).
-- archive root: `${TMPDIR:-/tmp}/yscope-clp-archives` (override per-run with
-  `--archives-root DIR`). Ask only when the user wants persistent storage or a
-  different root.
+- timestamp key: none (pass `--timestamp-key KEY` if your logs have a known timestamp field; required for time-range search).
+- archive root: `${TMPDIR:-/tmp}/yscope-clp-archives` (override per-run with `--archives-root DIR`). Ask only when the user wants persistent storage or a different root.
 
 ### Unstructured text logs
 
-Plain-text logs (interleaved timestamp, logger, level, message) have no field
-structure for `clp-s` to index. `--structurize` runs each file through
-`bin/structurize.py` first, producing JSONL with `timestamp/logger/level/message`
-and setting `--timestamp-key timestamp` automatically:
+Plain-text logs (interleaved timestamp, logger, level, message) have no field structure for `clp-s` to index. `--structurize` runs each file through `bin/structurize.py` first, producing JSONL with `timestamp/logger/level/message` and setting `--timestamp-key timestamp` automatically:
 
 ```bash
 ./plugins/clp/bin/clp-s-compress-folder --folder /var/log/vllm --structurize
 ```
 
-Files that cannot be parsed are skipped with a warning. Do not use it on logs
-that are already JSON/JSONL/NDJSON.
+Files that cannot be parsed are skipped with a warning. Do not use it on logs that are already JSON/JSONL/NDJSON.
 
 After compression, report:
 
@@ -195,11 +161,7 @@ After compression, report:
 - `Archives dir`
 - `Archive metadata`
 
-The resulting archive is compatible with `clp-s-search-kql` and
-`clp-s-decompress`. Use the printed top-level `Archives dir` for search and
-decompression. Metadata in `.yscope-clp-archive.json` records the source
-folder, extensions, file count, compression stats, command, and resolved inner
-archive.
+The resulting archive is compatible with `clp-s-search-kql` and `clp-s-decompress`. Use the printed top-level `Archives dir` for search and decompression. Metadata in `.yscope-clp-archive.json` records the source folder, extensions, file count, compression stats, command, and resolved inner archive.
 
 Useful commands:
 
@@ -216,12 +178,9 @@ Useful commands:
 ./plugins/clp/bin/clp-s-search-kql /tmp/session-archive 'level:error'
 ```
 
-Allowed controls: `--tge`, `--tle`, `--ignore-case`, `--archive-id`,
-`--projection`, `--semantic-endpoint`, `--semantic-top-k`,
-`--semantic-threshold`, `--embedding-batch-size`.
+Allowed controls: `--tge`, `--tle`, `--ignore-case`, `--archive-id`, `--projection`, `--semantic-endpoint`, `--semantic-top-k`, `--semantic-threshold`, `--embedding-batch-size`.
 
-Use single quotes around KQL in shell commands. Numeric comparisons use infix
-syntax, for example `durationMs >= 30000`.
+Use single quotes around KQL in shell commands. Numeric comparisons use infix syntax, for example `durationMs >= 30000`.
 
 ## Semantic Search
 
@@ -229,33 +188,18 @@ syntax, for example `durationMs >= 30000`.
 ./plugins/clp/bin/clp-s-search-kql /tmp/session-archive 'semantic("slow database queries")'
 ```
 
-Semantic search finds log events whose logtype is semantically similar to a
-natural language query, even when exact keywords differ. Use `semantic("query")`
-in KQL and combine with regular KQL using `AND`, e.g.
-`'semantic("errors") AND level:error'`.
+Semantic search finds log events whose logtype is semantically similar to a natural language query, even when exact keywords differ. Use `semantic("query")` in KQL and combine with regular KQL using `AND`, e.g. `'semantic("errors") AND level:error'`.
 
-Semantic search requires an embedding server that is **already running**. The
-plugin never starts one — no Docker container is spun up and no embedding model
-is downloaded locally. The wrapper health-checks the endpoint before running a
-semantic search; if it is unavailable, the search fails with a clear error.
+Semantic search requires an embedding server that is **already running**. The plugin never starts one — no Docker container is spun up and no embedding model is downloaded locally. The wrapper health-checks the endpoint before running a semantic search; if it is unavailable, the search fails with a clear error.
 
 Endpoint resolution, highest precedence first:
 
 1. `--semantic-endpoint URL` (inline)
 2. `CLP_SEMANTIC_ENDPOINT`
-3. the `semantic-endpoint` config file —
-   `~/.config/yscope-clp-plugin/semantic-endpoint`, one URL per line, blank
-   lines and `#comments` ignored (override the path with
-   `CLP_SEMANTIC_ENDPOINT_FILE`)
-4. the built-in remote endpoint —
-   `https://ca-central-semantic-cache.yscope.ai`, used if it passes the
-   health check
+3. the `semantic-endpoint` config file — `~/.config/yscope-clp-plugin/semantic-endpoint`, one URL per line, blank lines and `#comments` ignored (override the path with `CLP_SEMANTIC_ENDPOINT_FILE`)
+4. the built-in remote endpoint — `https://ca-central-semantic-cache.yscope.ai`, used if it passes the health check
 
-An endpoint named by 1–3 that fails its health check is a hard error: the
-wrapper will not silently fall back to a different host, since that would send
-log text somewhere the user did not choose. Only the built-in defaults in 4 are
-probed and skipped on failure. A server you host yourself (including one on
-`localhost`) must be named explicitly; it is not auto-detected.
+An endpoint named by 1–3 that fails its health check is a hard error: the wrapper will not silently fall back to a different host, since that would send log text somewhere the user did not choose. Only the built-in defaults in 4 are probed and skipped on failure. A server you host yourself (including one on `localhost`) must be named explicitly; it is not auto-detected.
 
 ```bash
 # Pin an endpoint once, for every wrapper and session:
@@ -263,27 +207,13 @@ echo 'https://embeddings.internal.example.com' \
   > ~/.config/yscope-clp-plugin/semantic-endpoint
 ```
 
-URLs must be HTTPS, a `localhost`/loopback address, or a `*.yscope.ai` host.
-The same resolution drives `logtype-cluster` (see below), so one setting covers
-both semantic search and logtype clustering.
+URLs must be HTTPS, a `localhost`/loopback address, or a `*.yscope.ai` host. The same resolution drives `logtype-cluster` (see below), so one setting covers both semantic search and logtype clustering.
 
-Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T`
-(default 0.3, range 0.0-1.0), `--embedding-batch-size N` (default auto),
-`--semantic-cache-dir DIR`, and `--semantic-cache-cold-capacity N`.
+Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T` (default 0.3, range 0.0-1.0), `--embedding-batch-size N` (default auto), `--semantic-cache-dir DIR`, and `--semantic-cache-cold-capacity N`.
 
-A local embedded semantic cache is auto-enabled under the plugin config dir
-(`~/.config/yscope-clp-plugin/semantic-cache`, cold tier of 10 000 000 entries
-/ ~4 GB, matching the clp-s default) so repeated semantic queries score
-in-process (~sub-ms) instead of round-tripping to the endpoint. The cache is
-shared across all sessions and archives. Disable with `--semantic-cache-dir
-none` or `CLP_SEMANTIC_CACHE_DIR=none`; resize with
-`--semantic-cache-cold-capacity N` or `CLP_SEMANTIC_CACHE_COLD_CAPACITY`.
+A local embedded semantic cache is auto-enabled under the plugin config dir (`~/.config/yscope-clp-plugin/semantic-cache`, cold tier of 10 000 000 entries / ~4 GB, matching the clp-s default) so repeated semantic queries score in-process (~sub-ms) instead of round-tripping to the endpoint. The cache is shared across all sessions and archives. Disable with `--semantic-cache-dir none` or `CLP_SEMANTIC_CACHE_DIR=none`; resize with `--semantic-cache-cold-capacity N` or `CLP_SEMANTIC_CACHE_COLD_CAPACITY`.
 
-The local cache requires a `clp-s` that supports `--semantic-cache-dir`. Older
-builds (e.g. clp-core 0.12.1) do not, and abort with `Unknown OUTPUT_HANDLER`
-if the flag is passed. The wrapper probes `clp-s s --help` and, when the flag
-is unsupported, prints a warning and falls back to remote-only scoring — the
-search still works, without the local cache.
+The local cache requires a `clp-s` that supports `--semantic-cache-dir`. Older builds (e.g. clp-core 0.12.1) do not, and abort with `Unknown OUTPUT_HANDLER` if the flag is passed. The wrapper probes `clp-s s --help` and, when the flag is unsupported, prints a warning and falls back to remote-only scoring — the search still works, without the local cache.
 
 ## Decompress
 
@@ -295,9 +225,7 @@ search still works, without the local cache.
 
 ## Logtype Insights
 
-`logtype-insights` analyzes an archive by first dumping its **logtype
-dictionary** — the complete vocabulary of distinct message templates, with
-variables replaced by `<*>`:
+`logtype-insights` analyzes an archive by first dumping its **logtype dictionary** — the complete vocabulary of distinct message templates, with variables replaced by `<*>`:
 
 ```bash
 # stats.log_shapes (shapes API, clp-core >= 0.13) dumps the dictionary as raw
@@ -315,14 +243,9 @@ variables replaced by `<*>`:
 jq -s 'length' /tmp/logtypes.ndjson
 ```
 
-This reads the dictionary rather than every record, so it is cheap regardless
-of archive size: a run with millions of records typically has tens to a few
-hundred templates. Every subsequent query is derived from a template that is
-known to exist, instead of guessing keywords that may not appear at all.
+This reads the dictionary rather than every record, so it is cheap regardless of archive size: a run with millions of records typically has tens to a few hundred templates. Every subsequent query is derived from a template that is known to exist, instead of guessing keywords that may not appear at all.
 
-The skill is app-agnostic — it discovers the schema (timestamp/severity/logger/
-message field names) from a sample record, so it works on structurized text
-archives and native-JSON archives alike.
+The skill is app-agnostic — it discovers the schema (timestamp/severity/logger/ message field names) from a sample record, so it works on structurized text archives and native-JSON archives alike.
 
 The skill's mechanical preamble is packaged as one command:
 
@@ -330,37 +253,13 @@ The skill's mechanical preamble is packaged as one command:
 ./plugins/clp/bin/logtype-insights-bootstrap /tmp/archive
 ```
 
-It samples records for schema discovery, prints per-field value
-distributions, dumps + normalizes the dictionary (falling back to
-templatization on binaries that predate the shapes API — re-run with
-`--message <field>` when it asks), probes the classification cache, and prints
-a grep-able `KEY=VALUE` summary (`LOGTYPE_COUNT=`, `FALLBACK=`, `CACHE_MODE=`,
-`TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths).
+It samples records for schema discovery, prints per-field value distributions, dumps + normalizes the dictionary (falling back to templatization on binaries that predate the shapes API — re-run with `--message <field>` when it asks), probes the classification cache, and prints a grep-able `KEY=VALUE` summary (`LOGTYPE_COUNT=`, `FALLBACK=`, `CACHE_MODE=`, `TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths).
 
-Note that `message:term` is an exact match against the whole field value,
-same as `field:term` on any field, so it correctly returns 0 unless a
-message equals exactly `term` — the message field being stored as a
-CLP-string doesn't change that. Exact match is faster, so prefer it
-whenever you know a field's full value; **wildcard** only for a substring
-match — `message:*term*` works and returns real hits, and message content
-almost always needs it, since it's free text. `semantic("…")` also
-searches the logtypes directly and is a good complement to wildcard search
-for concept-shaped questions.
+Note that `message:term` is an exact match against the whole field value, same as `field:term` on any field, so it correctly returns 0 unless a message equals exactly `term` — the message field being stored as a CLP-string doesn't change that. Exact match is faster, so prefer it whenever you know a field's full value; **wildcard** only for a substring match — `message:*term*` works and returns real hits, and message content almost always needs it, since it's free text. `semantic("…")` also searches the logtypes directly and is a good complement to wildcard search for concept-shaped questions.
 
 ### Logtype Cache
 
-Classifying templates into categories and deriving a query plan is the
-expensive step, and it is a property of the *application*, not the individual
-capture — the same build emits the same templates every run. `bin/logtype-cache`
-persists that classification, keyed by `sha256` of the sorted distinct logtype
-strings **capped at a character limit** (default 512, `--max-chars` /
-`$CLP_LOGTYPE_MAX_CHARS`) and de-duplicated — the same treatment the templates
-get before they are embedded, so the key fingerprints the *embedded* vocabulary.
-The placeholder-rendered form is hashed, so fingerprints are stable across
-binary generations. Stored `templates[].logtype` are always the full, byte-exact
-strings; the character limit affects only the fingerprint and the embedding
-request. (Consequence: a template whose tail changes beyond the limit does not
-change the fingerprint, so it does not register as growth.)
+Classifying templates into categories and deriving a query plan is the expensive step, and it is a property of the *application*, not the individual capture — the same build emits the same templates every run. `bin/logtype-cache` persists that classification, keyed by `sha256` of the sorted distinct logtype strings **capped at a character limit** (default 512, `--max-chars` / `$CLP_LOGTYPE_MAX_CHARS`) and de-duplicated — the same treatment the templates get before they are embedded, so the key fingerprints the *embedded* vocabulary. The placeholder-rendered form is hashed, so fingerprints are stable across binary generations. Stored `templates[].logtype` are always the full, byte-exact strings; the character limit affects only the fingerprint and the embedding request. (Consequence: a template whose tail changes beyond the limit does not change the fingerprint, so it does not register as growth.)
 
 ```bash
 LC=./plugins/clp/bin/logtype-cache
@@ -373,12 +272,9 @@ LC=./plugins/clp/bin/logtype-cache
 "$LC" show <APP_KEY>
 ```
 
-(`key`, `count`, and `diff` also accept a raw `stats.log_shapes` dump directly
-— lines carrying a `shape` field are rendered on the fly — but store and pass
-around the normalized form so every tool sees identical strings.)
+(`key`, `count`, and `diff` also accept a raw `stats.log_shapes` dump directly — lines carrying a `shape` field are rendered on the fly — but store and pass around the normalized form so every tool sees identical strings.)
 
-`diff` prints one tab-separated header line, followed by NDJSON
-`{"logtype":"…"}` lines for the templates that still need classifying:
+`diff` prints one tab-separated header line, followed by NDJSON `{"logtype":"…"}` lines for the templates that still need classifying:
 
 | Header | Meaning |
 | --- | --- |
@@ -386,40 +282,17 @@ around the normalized form so every tool sees identical strings.)
 | `GROWTH\t<app_key>\t<base_key>\t<count>\t<new_count>` | Archive grew from `<base_key>` — only the `<new_count>` new templates follow and need classifying. |
 | `NEW\t<app_key>\t<count>` | No compatible base — all `<count>` templates follow. |
 
-`<count>` is always the TRUE full template count, not the de-duplicated one. The
-GROWTH subset test is performed on the truncated template sets, so a change that
-only affects bytes past the character limit reports UPTODATE rather than GROWTH.
+`<count>` is always the TRUE full template count, not the de-duplicated one. The GROWTH subset test is performed on the truncated template sets, so a change that only affects bytes past the character limit reports UPTODATE rather than GROWTH.
 
-On GROWTH the new classification is merged into the base entry with
-`put-merged --base-key BK --key NK` (templates, taxonomy, and query plan are
-unioned; `grown_from` records the lineage), so a growing archive only ever
-costs the classification of its newly-added templates.
+On GROWTH the new classification is merged into the base entry with `put-merged --base-key BK --key NK` (templates, taxonomy, and query plan are unioned; `grown_from` records the lineage), so a growing archive only ever costs the classification of its newly-added templates.
 
-Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with
-`$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands
-that read or write the cache (`diff`, `get`, `put`, `put-merged`, `list`,
-`show`). `normalize`, `count`, and `key` only transform/hash the input and do
-not accept it. `--max-chars` (default 512, or `$CLP_LOGTYPE_MAX_CHARS`) is
-accepted by the subcommands that compute or stamp the fingerprint (`key`,
-`diff`, `put`, `put-merged`); it must match the limit given to
-`logtype-cluster`, or embedding and cache fingerprints diverge.
+Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with `$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`diff`, `get`, `put`, `put-merged`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 512, or `$CLP_LOGTYPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint (`key`, `diff`, `put`, `put-merged`); it must match the limit given to `logtype-cluster`, or embedding and cache fingerprints diverge.
 
 ### Logtype Cluster
 
-Classification cost scales with the number of templates the LLM must label.
-`bin/logtype-cluster` shrinks that two ways: it truncates each template to a
-character limit and de-duplicates the results, so identical prefixes are only
-embedded once, then embeds the distinct texts through
-the semantic server's `/v1/embeddings` endpoint and greedily groups
-them at a cosine-similarity threshold, so the LLM classifies one
-representative per cluster (by cluster id) and `expand` propagates the
-category to every member mechanically — byte-exact, because the LLM never
-echoes logtype strings. Representatives and members are always the FULL
-templates; truncation applies only to what is embedded.
+Classification cost scales with the number of templates the LLM must label. `bin/logtype-cluster` shrinks that two ways: it truncates each template to a character limit and de-duplicates the results, so identical prefixes are only embedded once, then embeds the distinct texts through the semantic server's `/v1/embeddings` endpoint and greedily groups them at a cosine-similarity threshold, so the LLM classifies one representative per cluster (by cluster id) and `expand` propagates the category to every member mechanically — byte-exact, because the LLM never echoes logtype strings. Representatives and members are always the FULL templates; truncation applies only to what is embedded.
 
-Embeddings come from the same already-running server that powers semantic
-search. Nothing is installed, downloaded, or started locally — the clustering is
-pure Python standard library, with no third-party dependency.
+Embeddings come from the same already-running server that powers semantic search. Nothing is installed, downloaded, or started locally — the clustering is pure Python standard library, with no third-party dependency.
 
 ```bash
 LTC=./plugins/clp/bin/logtype-cluster
@@ -428,49 +301,24 @@ LTC=./plugins/clp/bin/logtype-cluster
   --classification /tmp/logtype-class.json     # id-based assignments from the LLM
 ```
 
-`cluster` prints `CLUSTERS=`, `TEMPLATES=` (full count), `EMBEDDED=` (distinct
-truncated texts actually sent), and `MAX_CHARS=`.
+`cluster` prints `CLUSTERS=`, `TEMPLATES=` (full count), `EMBEDDED=` (distinct truncated texts actually sent), and `MAX_CHARS=`.
 
-- Endpoint: `--semantic-endpoint`, then `$CLP_SEMANTIC_ENDPOINT`, then the
-  `semantic-endpoint` config file, then the built-in remote endpoint — the
-  same chain as [Semantic search](#semantic-search). The launcher resolves and
-  health-checks it, then passes it down.
-- Model contract: `BAAI/bge-base-en-v1.5`, int8[768] — matching what `clp-s`
-  advertises, so both hit the same server-side cache. Threshold: cosine 0.80
-  (override with `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to
-  0.85–0.90 to split more, lower to merge more). `--batch-size` sets texts per
-  request (default 256); `--max-request-bytes` (`$CLP_LOGTYPE_MAX_REQUEST_BYTES`,
-  default 100 000 000) caps the encoded size of any single request body.
-- Truncation: `--max-chars` (`$CLP_LOGTYPE_MAX_CHARS`, default 512) caps each
-  template at that many UTF-8 characters before embedding; it must match the
-  value used by `logtype-cache`, which fingerprints the same truncated set.
-- `expand` is stdlib-only and fully offline — it needs no endpoint — and
-  validates that every cluster id
-  is assigned exactly once before writing anything (exit 2 otherwise), which
-  protects the logtype cache from partial classifications.
-- Exit codes for `cluster`: 0 ok, 1 input problem, 2 the embedding server is
-  unreachable/rejected, 3 usage error. `--help` and
-  `expand` never touch the network.
-- `setup` has been removed; it now exits 2 with a pointer to the endpoint
-  settings. Existing venvs under
-  `~/.config/yscope-clp-plugin/venvs/logtype-cluster` are no longer used and
-  can be deleted.
+- Endpoint: `--semantic-endpoint`, then `$CLP_SEMANTIC_ENDPOINT`, then the `semantic-endpoint` config file, then the built-in remote endpoint — the same chain as [Semantic search](#semantic-search). The launcher resolves and health-checks it, then passes it down.
+- Model contract: `BAAI/bge-base-en-v1.5`, int8[768] — matching what `clp-s` advertises, so both hit the same server-side cache. Threshold: cosine 0.80 (override with `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to 0.85–0.90 to split more, lower to merge more). `--batch-size` sets texts per request (default 256); `--max-request-bytes` (`$CLP_LOGTYPE_MAX_REQUEST_BYTES`, default 100 000 000) caps the encoded size of any single request body.
+- Truncation: `--max-chars` (`$CLP_LOGTYPE_MAX_CHARS`, default 512) caps each template at that many UTF-8 characters before embedding; it must match the value used by `logtype-cache`, which fingerprints the same truncated set.
+- `expand` is stdlib-only and fully offline — it needs no endpoint — and validates that every cluster id is assigned exactly once before writing anything (exit 2 otherwise), which protects the logtype cache from partial classifications.
+- Exit codes for `cluster`: 0 ok, 1 input problem, 2 the embedding server is unreachable/rejected, 3 usage error. `--help` and `expand` never touch the network.
+- `setup` has been removed; it now exits 2 with a pointer to the endpoint settings. Existing venvs under `~/.config/yscope-clp-plugin/venvs/logtype-cluster` are no longer used and can be deleted.
 
 ## Query Starters
 
-For session-log analysis (which tools fired, what failed, how long a turn
-took, what context was used), see the per-use-case trajectory skills:
+For session-log analysis (which tools fired, what failed, how long a turn took, what context was used), see the per-use-case trajectory skills:
 
 - Claude Code: `claude-code-trajectory` skill (in the installed plugin)
 - Codex: `codex-trajectory` skill (in the installed plugin)
 
-For harness/test/patch failures and Docker/resource issues, see the
-`Trajectory` sections in those skills — both have a "Query Starters" table
-covering SWE-bench runs, test failures, patch failures, and Docker issues.
+For harness/test/patch failures and Docker/resource issues, see the `Trajectory` sections in those skills — both have a "Query Starters" table covering SWE-bench runs, test failures, patch failures, and Docker issues.
 
-For semantic search suggestions, see the `Semantic Search` section in the
-`search` skill.
+For semantic search suggestions, see the `Semantic Search` section in the `search` skill.
 
-For broad trajectory debugging, suggest a subagent when available. Ask it to
-run the query sequence and return only the archive path, queries, top
-findings, and next useful queries.
+For broad trajectory debugging, suggest a subagent when available. Ask it to run the query sequence and return only the archive path, queries, top findings, and next useful queries.

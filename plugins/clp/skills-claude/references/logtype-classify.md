@@ -1,32 +1,12 @@
 # Logtype classification reference (logtype-insights step 6)
 
-Read this when the bootstrap reported `CACHE_MODE=GROWTH` or `NEW` (or an
-UPTODATE schema mismatch downgraded to NEW). It covers the cluster → classify →
-expand → store pipeline and the full classification subagent prompt.
+Read this when the bootstrap reported `CACHE_MODE=GROWTH` or `NEW` (or an UPTODATE schema mismatch downgraded to NEW). It covers the cluster → classify → expand → store pipeline and the full classification subagent prompt.
 
 ## Cache design in one paragraph
 
-`app_key = sha256(sorted set of distinct logtype strings, each capped at a
-character limit)` — a fingerprint of the application's *embedded* message
-vocabulary. Use the bootstrap's `MAX_CHARS` (default 512); the same limit is
-applied before embedding, so the key identifies exactly what was embedded. The
-stored `templates[].logtype` are still the FULL, byte-exact strings. The entry
-stores the discovered `schema`,
-`taxonomy`, per-template `templates` classification, and `query_plan` (plus
-`app_key`, `max_chars`, `classified_at`, `grown_from`). `logtype-cache diff` yields
-**UPTODATE** (same fingerprint → reuse, no subagent; a full template that only
-differs past the character limit is appended with the category of the truncated
-form it shares, so the entry stays complete), **GROWTH** (a cached entry's
-truncated set is a proper subset of the current one → classify only the new
-templates, merge into the base via `put-merged`), or **NEW** (no compatible base
-→ classify all, store fresh). Cache dir:
-`~/.config/yscope-clp-plugin/logtype-cache/`
-(override: `$CLP_LOGTYPE_CACHE_DIR` or `--cache-dir`).
+`app_key = sha256(sorted set of distinct logtype strings, each capped at a character limit)` — a fingerprint of the application's *embedded* message vocabulary. Use the bootstrap's `MAX_CHARS` (default 512); the same limit is applied before embedding, so the key identifies exactly what was embedded. The stored `templates[].logtype` are still the FULL, byte-exact strings. The entry stores the discovered `schema`, `taxonomy`, per-template `templates` classification, and `query_plan` (plus `app_key`, `max_chars`, `classified_at`, `grown_from`). `logtype-cache diff` yields **UPTODATE** (same fingerprint → reuse, no subagent; a full template that only differs past the character limit is appended with the category of the truncated form it shares, so the entry stays complete), **GROWTH** (a cached entry's truncated set is a proper subset of the current one → classify only the new templates, merge into the base via `put-merged`), or **NEW** (no compatible base → classify all, store fresh). Cache dir: `~/.config/yscope-clp-plugin/logtype-cache/` (override: `$CLP_LOGTYPE_CACHE_DIR` or `--cache-dir`).
 
-GROWTH matching requires the stored `templates[].logtype` strings to be
-**byte-exact** copies of the normalized NDJSON. The id-based pipeline below
-guarantees this by construction: the LLM only ever returns cluster ids, and
-`expand` re-attaches the member logtypes verbatim from the cluster file.
+GROWTH matching requires the stored `templates[].logtype` strings to be **byte-exact** copies of the normalized NDJSON. The id-based pipeline below guarantees this by construction: the LLM only ever returns cluster ids, and `expand` re-attaches the member logtypes verbatim from the cluster file.
 
 ## Cluster contract (`logtype-cluster`)
 
@@ -41,37 +21,13 @@ guarantees this by construction: the LLM only ever returns cluster ids, and
   --input /tmp/logtypes-to-classify.ndjson
 ```
 
-`cluster` prints `CLUSTERS=`/`TEMPLATES=`/`EMBEDDED=`/`MAX_CHARS=` then one
-`{"id","count","representative"}` line per cluster (ids `c1..cN`, largest
-first; the representative is a real, full template closest to the cluster
-centroid). `TEMPLATES` is the full count, `EMBEDDED` the distinct truncated
-texts actually sent. Full memberships are written to
-`/tmp/logtype-clusters.json`. Tunables:
-`--threshold` / `$CLP_LOG_CLUSTER_THRESHOLD` (cosine, default 0.80 — raise to
-0.85–0.90 if unrelated templates land in one cluster, lower to merge more),
-`--max-chars` / `$CLP_LOGTYPE_MAX_CHARS` (character cap before embedding and
-fingerprinting, default 512), `--semantic-endpoint` / `$CLP_SEMANTIC_ENDPOINT`
-(the embedding server; falls back to the `semantic-endpoint` config file, then
-the built-in remote endpoints), and `--batch-size` (texts per request, default
-256; a separate byte ceiling bounds each request body).
+`cluster` prints `CLUSTERS=`/`TEMPLATES=`/`EMBEDDED=`/`MAX_CHARS=` then one `{"id","count","representative"}` line per cluster (ids `c1..cN`, largest first; the representative is a real, full template closest to the cluster centroid). `TEMPLATES` is the full count, `EMBEDDED` the distinct truncated texts actually sent. Full memberships are written to `/tmp/logtype-clusters.json`. Tunables: `--threshold` / `$CLP_LOG_CLUSTER_THRESHOLD` (cosine, default 0.80 — raise to 0.85–0.90 if unrelated templates land in one cluster, lower to merge more), `--max-chars` / `$CLP_LOGTYPE_MAX_CHARS` (character cap before embedding and fingerprinting, default 512), `--semantic-endpoint` / `$CLP_SEMANTIC_ENDPOINT` (the embedding server; falls back to the `semantic-endpoint` config file, then the built-in remote endpoints), and `--batch-size` (texts per request, default 256; a separate byte ceiling bounds each request body).
 
-**Raw-NDJSON last resort** (only if no embedding server is reachable): skip
-clustering; paste `/tmp/logtypes-to-classify.ndjson` directly into the prompt,
-replace the `assignments` output contract with
-`"templates": [{"logtype":"<verbatim template>","category":"..."}]`, instruct
-the subagent to copy each logtype **byte-exact** from the input, skip `expand`,
-and piped straight into `put-merged --max-chars "$MAX_CHARS"`. Slower and fragile for
-GROWTH — prefer fixing the endpoint.
+**Raw-NDJSON last resort** (only if no embedding server is reachable): skip clustering; paste `/tmp/logtypes-to-classify.ndjson` directly into the prompt, replace the `assignments` output contract with `"templates": [{"logtype":"<verbatim template>","category":"..."}]`, instruct the subagent to copy each logtype **byte-exact** from the input, skip `expand`, and piped straight into `put-merged --max-chars "$MAX_CHARS"`. Slower and fragile for GROWTH — prefer fixing the endpoint.
 
 ## Classification subagent prompt template
 
-Spawn ONE subagent (Agent tool), model **haiku**; if its output fails the
-validation below, tell the user ("first classification attempt failed
-validation — retrying with a stronger model") and retry once with `sonnet`.
-Fill in `ARCHIVE`, the schema
-fields, the severity/logger vocabularies (from the bootstrap DIST lines), and
-paste the cluster lines from `logtype-cluster cluster`; for GROWTH also paste
-the base taxonomy/plan labels:
+Spawn ONE subagent (Agent tool), model **haiku**; if its output fails the validation below, tell the user ("first classification attempt failed validation — retrying with a stronger model") and retry once with `sonnet`. Fill in `ARCHIVE`, the schema fields, the severity/logger vocabularies (from the bootstrap DIST lines), and paste the cluster lines from `logtype-cluster cluster`; for GROWTH also paste the base taxonomy/plan labels:
 
 ```
 You are classifying message-template clusters for a CLP archive, so a later
@@ -162,9 +118,7 @@ Rules:
 
 ## After the subagent returns: validate → expand → store
 
-Tell the user the classifier returned and you are validating and storing the
-plan; after `put-merged` succeeds, report the taxonomy and that the
-classification is now cached.
+Tell the user the classifier returned and you are validating and storing the plan; after `put-merged` succeeds, report the taxonomy and that the classification is now cached.
 
 ```bash
 # 1. Shape-validate — the fields must be ARRAYS (a bare `.assignments` test
@@ -199,9 +153,7 @@ fi
 "$CACHE" get "$APP_KEY" > /tmp/logtype-classification.json   # full plan for step 7
 ```
 
-On the next run, an unchanged archive returns UPTODATE (no subagent); a grown
-archive returns GROWTH and only the newly-added templates go through this file
-again.
+On the next run, an unchanged archive returns UPTODATE (no subagent); a grown archive returns GROWTH and only the newly-added templates go through this file again.
 
 ## Inspecting the cache
 

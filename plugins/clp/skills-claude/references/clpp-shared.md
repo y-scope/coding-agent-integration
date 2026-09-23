@@ -1,29 +1,20 @@
 # clpp (clp+ / `--experimental`) shared reference
 
-clpp is CLP's **experimental** layer — decomposed queries, log-shape
-dictionaries, parent-rule shapes, and the `shape()`/`decompose()` KQL functions.
-It is gated behind the `--experimental` flag on the same wrappers used by the
-stable `compress`/`search` skills. The clpp KQL layer is only active when that
-flag is passed.
+clpp is CLP's **experimental** layer — decomposed queries, log-shape dictionaries, parent-rule shapes, and the `shape()`/`decompose()` KQL functions. It is gated behind the `--experimental` flag on the same wrappers used by the stable `compress`/`search` skills. The clpp KQL layer is only active when that flag is passed.
 
-This file holds the clpp-specific additions shared by `clpp-compress` and
-`clpp-search`. The common compress workflow and KQL syntax live in
-`shared-compress.md` and `shared-search.md` — read those too.
+This file holds the clpp-specific additions shared by `clpp-compress` and `clpp-search`. The common compress workflow and KQL syntax live in `shared-compress.md` and `shared-search.md` — read those too.
 
 Use only the plugin wrappers. Do not call bare `clp-s`.
 
 ## `--experimental` and `--parsing-specification` must be passed together
 
-For **compression**, the clp-s binary requires **both** flags — it rejects either
-one alone with:
+For **compression**, the clp-s binary requires **both** flags — it rejects either one alone with:
 
 > `--experimental and --parsing-specification must both be non-empty to use log-surgeon for compression`
 
-The `clp-s-compress-session` wrapper mirrors that contract: pass both, or pass
-neither (the stable path). It is an error to pass one without the other.
+The `clp-s-compress-session` wrapper mirrors that contract: pass both, or pass neither (the stable path). It is an error to pass one without the other.
 
-For **search**, only `--experimental` is needed — no parsing spec exists at
-search time.
+For **search**, only `--experimental` is needed — no parsing spec exists at search time.
 
 ## Compress (clpp)
 
@@ -35,23 +26,14 @@ search time.
 ```
 
 Notes:
-- The parsing spec **must match the structure of the input**. The benchmark
-  specs under `./benchmark/parsing-specs/` in a CLP source checkout are tuned
-  for the hive dataset, not for Claude/Codex session JSON — supply a
-  session-appropriate spec when compressing sessions.
-- All stable compress options (see `shared-compress.md`) still apply. The
-  wrapper records the full experimental command in the archive metadata JSON.
+- The parsing spec **must match the structure of the input**. The benchmark specs under `./benchmark/parsing-specs/` in a CLP source checkout are tuned for the hive dataset, not for Claude/Codex session JSON — supply a session-appropriate spec when compressing sessions.
+- All stable compress options (see `shared-compress.md`) still apply. The wrapper records the full experimental command in the archive metadata JSON.
 
-After compression, report the same stats as the stable `compress` skill (raw
-input bytes, archive bytes, compression ratio, file size reduction, archives dir,
-archive metadata).
+After compression, report the same stats as the stable `compress` skill (raw input bytes, archive bytes, compression ratio, file size reduction, archives dir, archive metadata).
 
 ## Search (clpp)
 
-Pass `--experimental` to activate the clpp KQL layer. Without it, `shape()` and
-`decompose()` are treated as plain text rather than functions. Stable KQL runs
-unchanged when the flag is added, so it is safe to leave `--experimental` on for a
-clpp archive.
+Pass `--experimental` to activate the clpp KQL layer. Without it, `shape()` and `decompose()` are treated as plain text rather than functions. Stable KQL runs unchanged when the flag is added, so it is safe to leave `--experimental` on for a clpp archive.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental \
@@ -89,34 +71,20 @@ Count matches without fetching full records:
 
 ### Output keys
 
-Projected `shape()` and `decompose()` results nest under the column name:
-`{"message":{"shape":"…","<leaf>":[…]}}` (rendered as the dotted keys
-`message.shape` / `message.decompose` in flat views). The shape string is the
-logtype template (static text + `%var%` placeholders); the leaf arrays are the
-variable values bound to each placeholder for that row.
+Projected `shape()` and `decompose()` results nest under the column name: `{"message":{"shape":"…","<leaf>":[…]}}` (rendered as the dotted keys `message.shape` / `message.decompose` in flat views). The shape string is the logtype template (static text + `%var%` placeholders); the leaf arrays are the variable values bound to each placeholder for that row.
 
 ## Decompress (clpp)
 
-clpp archives require `--experimental` to open, but you do **not** pass it
-yourself: the `clp-s-decompress` wrapper auto-detects clpp archives (by their
-`parsing_specification` / `parent_rule_shapes` marker files) and adds
-`--experimental` for you. So clpp archives are decompressed exactly like stable
-archives:
+clpp archives require `--experimental` to open, but you do **not** pass it yourself: the `clp-s-decompress` wrapper auto-detects clpp archives (by their `parsing_specification` / `parent_rule_shapes` marker files) and adds `--experimental` for you. So clpp archives are decompressed exactly like stable archives:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress" /tmp/archive /tmp/archive-decompressed
 ```
 
-Pass `--no-experimental` only if you need to force stable mode on an archive the
-wrapper misidentifies. See the `decompress` skill.
+Pass `--no-experimental` only if you need to force stable mode on an archive the wrapper misidentifies. See the `decompress` skill.
 
 ## Tips
 
-- Combine experimental filters with stable KQL and time-range flags:
-  `shape(message): "*error*" AND level:error`, plus `--tge`/`--tle` for time
-  windows. Time ranges are flags, never KQL (same gotcha as `shared-search.md`).
-- Use `--clp-s-bin PATH` (or the `CLP_S_BIN` env var) to run against a local
-  clpp-branch build that may be ahead of the installed binary.
-- clpp archives require `--experimental` to open; the search and decompress
-  wrappers handle this for you (search via `--experimental`, decompress via
-  auto-detection).
+- Combine experimental filters with stable KQL and time-range flags: `shape(message): "*error*" AND level:error`, plus `--tge`/`--tle` for time windows. Time ranges are flags, never KQL (same gotcha as `shared-search.md`).
+- Use `--clp-s-bin PATH` (or the `CLP_S_BIN` env var) to run against a local clpp-branch build that may be ahead of the installed binary.
+- clpp archives require `--experimental` to open; the search and decompress wrappers handle this for you (search via `--experimental`, decompress via auto-detection).

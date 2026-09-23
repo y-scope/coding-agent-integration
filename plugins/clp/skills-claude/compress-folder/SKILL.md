@@ -6,31 +6,20 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder:*)"]
 
 # Compress Folder
 
-Use only the plugin wrappers. Do not call bare `clp-s` or expose arbitrary CLP
-commands/options.
+Use only the plugin wrappers. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
 
 ## Rules
 
-- Compress log files from one folder. Do not use this skill for session JSONL
-  files; use `compress` for sessions.
+- Compress log files from one folder. Do not use this skill for session JSONL files; use `compress` for sessions.
 - Do not pass `--single-file-archive`; search uses regular archive directories.
-- `--timestamp-key` has no default. Only pass it when the user says their logs
-  have a known timestamp field. Omit it otherwise — `clp-s` will still
-  compress and search, but time-range flags (`--tge`/`--tle`) will not work.
-- Default file extensions: `log`, `jsonl`, `json`, `txt`, `ndjson`, `out`,
-  `err`. Override with `--extensions`.
+- `--timestamp-key` has no default. Only pass it when the user says their logs have a known timestamp field. Omit it otherwise — `clp-s` will still compress and search, but time-range flags (`--tge`/`--tle`) will not work.
+- Default file extensions: `log`, `jsonl`, `json`, `txt`, `ndjson`, `out`, `err`. Override with `--extensions`.
 - Default archive root: `${TMPDIR:-/tmp}/yscope-clp-archives`.
-- Ask about archive location only if the user wants persistent storage or a
-  change.
+- Ask about archive location only if the user wants persistent storage or a change.
 
 ## Structurize (Unstructured Text Logs)
 
-Use `--structurize` when compressing **unstructured text logs** — plain-text
-log files that lack a regular structured format (e.g. vLLM wrapper logs,
-application logs with interleaved timestamps and messages). The flag runs each
-input file through `bin/structurize.py`, which parses out timestamp, logger,
-level, worker, and message fields and writes structured JSONL. This gives
-`clp-s` proper timestamp extraction and better compression.
+Use `--structurize` when compressing **unstructured text logs** — plain-text log files that lack a regular structured format (e.g. vLLM wrapper logs, application logs with interleaved timestamps and messages). The flag runs each input file through `bin/structurize.py`, which parses out timestamp, logger, level, worker, and message fields and writes structured JSONL. This gives `clp-s` proper timestamp extraction and better compression.
 
 When `--structurize` is active:
 
@@ -39,8 +28,7 @@ When `--structurize` is active:
 - Files that structurize cannot parse are skipped with a warning.
 - The archive's `source.path` metadata still records the original folder path.
 
-Do **not** use `--structurize` for files that are already structured
-(JSON, JSONL, NDJSON) — structurize is designed for unstructured text formats.
+Do **not** use `--structurize` for files that are already structured (JSON, JSONL, NDJSON) — structurize is designed for unstructured text formats.
 
 ## Workflow
 
@@ -52,7 +40,7 @@ Do **not** use `--structurize` for files that are already structured
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" --folder /path/to/logs
    ```
 
-   Override extensions or add a timestamp key as needed:
+Override extensions or add a timestamp key as needed:
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" \
@@ -61,7 +49,7 @@ Do **not** use `--structurize` for files that are already structured
      --timestamp-key ts
    ```
 
-   For unstructured text logs (vLLM logs, plain-text app logs):
+For unstructured text logs (vLLM logs, plain-text app logs):
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" \
@@ -79,8 +67,7 @@ Do **not** use `--structurize` for files that are already structured
    - `Archives dir`
    - `Archive metadata`
 
-4. Use the printed top-level `Archives dir` for search and decompression. The
-   wrappers resolve the inner `clp-s` archive directory automatically.
+4. Use the printed top-level `Archives dir` for search and decompression. The wrappers resolve the inner `clp-s` archive directory automatically.
 
 ## Useful Commands
 

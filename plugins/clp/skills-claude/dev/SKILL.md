@@ -9,20 +9,14 @@ allowed-tools:
 
 Developer workflow for two related tasks:
 
-1. **Build/test/lint/format a local CLP source tree** (e.g. the `clp` / `clp_s` /
-   `clpp` C++ code, plus Rust components).
-2. **Point the plugin wrappers at a locally-built `clp-s` binary** so compress/
-   search/clpp-compress/clpp-search run against the local build instead of the
-   installed plugin binary — primarily for testing in-flight clpp-branch work.
+1. **Build/test/lint/format a local CLP source tree** (e.g. the `clp` / `clp_s` / `clpp` C++ code, plus Rust components).
+2. **Point the plugin wrappers at a locally-built `clp-s` binary** so compress/ search/clpp-compress/clpp-search run against the local build instead of the installed plugin binary — primarily for testing in-flight clpp-branch work.
 
-This skill is for CLP contributors. For end-user compress/search, use the
-`compress`, `search`, `clpp-compress`, and `clpp-search` skills instead.
+This skill is for CLP contributors. For end-user compress/search, use the `compress`, `search`, `clpp-compress`, and `clpp-search` skills instead.
 
 ## Point the wrappers at a local binary
 
-`resolve_clp_s` (in the plugin's `bin/lib/clp-common.sh`) honors the **`CLP_S_BIN`
-environment variable**: if set to an executable, every wrapper uses it. This is
-the primary mechanism and needs no wrapper changes.
+`resolve_clp_s` (in the plugin's `bin/lib/clp-common.sh`) honors the **`CLP_S_BIN` environment variable**: if set to an executable, every wrapper uses it. This is the primary mechanism and needs no wrapper changes.
 
 ```bash
 # From a CLP source checkout after building:
@@ -32,9 +26,7 @@ export CLP_S_BIN="$PWD/build/core/clp-s"
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental /tmp/archive '*'
 ```
 
-For a one-off invocation, use the **`--clp-s-bin PATH`** flag that the
-`clp-s-compress-session` and `clp-s-search-kql` wrappers accept. The flag wins
-for that invocation only and composes with `CLP_S_BIN`:
+For a one-off invocation, use the **`--clp-s-bin PATH`** flag that the `clp-s-compress-session` and `clp-s-search-kql` wrappers accept. The flag wins for that invocation only and composes with `CLP_S_BIN`:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
@@ -42,9 +34,7 @@ for that invocation only and composes with `CLP_S_BIN`:
   /tmp/archive 'shape(message): "*"'
 ```
 
-Tip: wrappers can also be run directly from a plugin source checkout
-(`~/yscope/coding-agent-integration`), which is how the plugin's own
-`LOCAL_TESTING.md` smoke-tests them:
+Tip: wrappers can also be run directly from a plugin source checkout (`~/yscope/coding-agent-integration`), which is how the plugin's own `LOCAL_TESTING.md` smoke-tests them:
 
 ```bash
 CLP_S_BIN="$PWD/build/core/clp-s" \
@@ -83,9 +73,7 @@ task clean
 cargo test --all
 ```
 
-**clpp-branch constraint:** on the `clpp` branch the C++ unit tests do **not**
-link. Verify changes with the binary targets (`clp-s`) plus the regression suite
-instead:
+**clpp-branch constraint:** on the `clpp` branch the C++ unit tests do **not** link. Verify changes with the binary targets (`clp-s`) plus the regression suite instead:
 
 ```bash
 # 34-case regression suite; default archive ./benchmark/archives/hive-24hr-best.cached
@@ -123,8 +111,7 @@ task lint:fix-rust
 
 ## Plugin preflight
 
-When changing the plugin wrappers or skills (in the
-`~/yscope/coding-agent-integration` checkout), validate before installing:
+When changing the plugin wrappers or skills (in the `~/yscope/coding-agent-integration` checkout), validate before installing:
 
 ```bash
 cd ~/yscope/coding-agent-integration
@@ -148,8 +135,7 @@ shellcheck \
   plugins/clp/bin/lib/clp-common.sh
 ```
 
-To activate edited plugin source in the live session, sync it into the plugin
-cache (preserve the installer-generated `bin/clp-s` shim):
+To activate edited plugin source in the live session, sync it into the plugin cache (preserve the installer-generated `bin/clp-s` shim):
 
 ```bash
 rsync -a --exclude='.clp-core' --exclude='.yscope-clp-install.json' \

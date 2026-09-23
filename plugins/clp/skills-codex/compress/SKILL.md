@@ -11,8 +11,7 @@ Use only the plugin wrappers. Standard plugin root:
 ~/.codex/marketplaces/yscope/plugins/clp
 ```
 
-If installed elsewhere, resolve the same `bin/` wrappers from that plugin root.
-Do not call bare `clp-s` or expose arbitrary CLP commands/options.
+If installed elsewhere, resolve the same `bin/` wrappers from that plugin root. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
 
 ## Rules
 
@@ -32,10 +31,9 @@ Do not call bare `clp-s` or expose arbitrary CLP commands/options.
    ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-list-sessions
    ```
 
-   Use `--agent claude` or `--agent codex` if the user asks for one agent.
+Use `--agent claude` or `--agent codex` if the user asks for one agent.
 
-2. Present choices with these columns: `IDX`, `AGENT`, modified timestamp,
-   raw bytes, human size, session name, project/cwd, session ID.
+2. Present choices with these columns: `IDX`, `AGENT`, modified timestamp, raw bytes, human size, session name, project/cwd, session ID.
 
 3. After the user chooses an `IDX`, compress using the printed manifest:
 
@@ -56,8 +54,7 @@ Do not call bare `clp-s` or expose arbitrary CLP commands/options.
    - `Selected session`
    - `Archive metadata`
 
-Use the printed top-level archive directory for search/decompress. Wrappers
-resolve the inner `clp-s` archive directory automatically.
+Use the printed top-level archive directory for search/decompress. Wrappers resolve the inner `clp-s` archive directory automatically.
 
 ## Useful Commands
 

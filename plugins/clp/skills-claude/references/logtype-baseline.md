@@ -1,75 +1,34 @@
 # Logtype baseline reference (logtype-insights)
 
-Read this only when needed: the bootstrap misbehaves (empty dump, fallback
-questions), the user drills into individual templates, or you need the
-retrieval/semantic patterns. The happy path never needs this file — the
-`logtype-insights-bootstrap` script encapsulates the dump and the cache probe.
+Read this only when needed: the bootstrap misbehaves (empty dump, fallback questions), the user drills into individual templates, or you need the retrieval/semantic patterns. The happy path never needs this file — the `logtype-insights-bootstrap` script encapsulates the dump and the cache probe.
 
 ## stats.log_shapes details
 
-- `stats.log_shapes` dumps the logtype dictionary: one raw JSON object per
-  line, `{"archive_id":"...","count":...,"id":N,"shape":"..."}`. The shape
-  string encodes variables in an archive-dependent form — regular archives use
-  raw placeholder bytes (0x11 int, 0x12 str, 0x13 float; `count` is null),
-  clpp/`--experimental` archives use `%rule.name%` TextShape placeholders
-  (`count` is a real integer). `logtype-cache normalize` detects the encoding
-  per line and renders both to the canonical `{"logtype":"...<*>..."}` NDJSON
-  used by this skill and the cache. Works on structurized text archives and
-  native-JSON archives alike (logtypes come from the message field).
-- The search wrapper adds the required `--experimental` flag automatically and
-  rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently
-  return nothing for it). It also prints archive-metadata header lines to
-  stdout — always filter with `grep '^{'` before jq (the repo-wide idiom).
-- You **cannot** filter a stats query by substring (`stats.log_shapes:foo` is
-  not valid); it always dumps the whole dictionary. Filter downstream:
+- `stats.log_shapes` dumps the logtype dictionary: one raw JSON object per line, `{"archive_id":"...","count":...,"id":N,"shape":"..."}`. The shape string encodes variables in an archive-dependent form — regular archives use raw placeholder bytes (0x11 int, 0x12 str, 0x13 float; `count` is null), clpp/`--experimental` archives use `%rule.name%` TextShape placeholders (`count` is a real integer). `logtype-cache normalize` detects the encoding per line and renders both to the canonical `{"logtype":"...<*>..."}` NDJSON used by this skill and the cache. Works on structurized text archives and native-JSON archives alike (logtypes come from the message field).
+- The search wrapper adds the required `--experimental` flag automatically and rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently return nothing for it). It also prints archive-metadata header lines to stdout — always filter with `grep '^{'` before jq (the repo-wide idiom).
+- You **cannot** filter a stats query by substring (`stats.log_shapes:foo` is not valid); it always dumps the whole dictionary. Filter downstream:
   ```bash
   jq -r 'select(.logtype|test("failed";"i")) | .logtype' /tmp/logtypes.ndjson
   ```
-- `stats.log_shapes` gives templates and ids but **not per-template counts on
-  regular archives** (`count` is null there; clpp archives carry real counts).
-  Get counts with the templatize pass (below), which yields `count \t
-  template` in one O(records) scan.
+- `stats.log_shapes` gives templates and ids but **not per-template counts on regular archives** (`count` is null there; clpp archives carry real counts). Get counts with the templatize pass (below), which yields `count \t template` in one O(records) scan.
 
 ## Templatize fallback (binaries that predate the shapes API)
 
-When `stats.log_shapes` emits no NDJSON, the bootstrap (re-run with
-`--message <field>`) builds an approximate baseline by projecting the message
-field and templatizing variable runs:
+When `stats.log_shapes` emits no NDJSON, the bootstrap (re-run with `--message <field>`) builds an approximate baseline by projecting the message field and templatizing variable runs:
 
 ```
 sed -E 's/\{[^}]+\}/<*>/g; s/0x[0-9a-fA-F]+/<*>/g; s/\b[0-9]+\b/<*>/g'
 ```
 
-It writes both `/tmp/logtype-freqs.txt` (`count  template`, most frequent
-first) and the canonical `/tmp/logtypes.ndjson` (via `logtype-cache
-normalize`) so the cache probe and the rest of the workflow work unchanged.
-Caveat: templatized strings are approximations — they are stable across runs
-of the *same* binary, but need not match byte-exactly the shapes-API logtypes
-a newer binary would produce, so a cache entry built on the fallback path may
-not GROWTH-match one built on the shapes path (it will re-classify as NEW).
+It writes both `/tmp/logtype-freqs.txt` (`count  template`, most frequent first) and the canonical `/tmp/logtypes.ndjson` (via `logtype-cache normalize`) so the cache probe and the rest of the workflow work unchanged. Caveat: templatized strings are approximations — they are stable across runs of the *same* binary, but need not match byte-exactly the shapes-API logtypes a newer binary would produce, so a cache entry built on the fallback path may not GROWTH-match one built on the shapes path (it will re-classify as NEW).
 
 ## The message field needs the same wildcard rule as any field
 
-The message field (`message` structurized, `msg` native Mongo, …) is stored as
-a CLP-string (logtype template + encoded variables — what makes
-`stats.log_shapes` and the compression work). That storage is irrelevant to
-searching it: `<message>:term` is an exact match, same as `<field>:term` on
-any field per `shared-search.md`, so it correctly returns 0 unless a message
-equals exactly `term`. Exact match is faster, so prefer it whenever you know
-the full field value (e.g. a scalar like severity or logger); wildcard only
-when you need a substring match — `<message>:*term*` — which is what message
-content almost always needs, since it's free text, not an enumerable value.
-The logtype-baseline approach still
-matters even with wildcard search available: the dictionary dump gives the
-full template vocabulary up front, so queries can be built from real
-templates instead of guessed keywords. Semantic search (`semantic("…")`) also
-searches the logtypes directly and is a good complement to wildcard search
-for concept-shaped questions.
+The message field (`message` structurized, `msg` native Mongo, …) is stored as a CLP-string (logtype template + encoded variables — what makes `stats.log_shapes` and the compression work). That storage is irrelevant to searching it: `<message>:term` is an exact match, same as `<field>:term` on any field per `shared-search.md`, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so prefer it whenever you know the full field value (e.g. a scalar like severity or logger); wildcard only when you need a substring match — `<message>:*term*` — which is what message content almost always needs, since it's free text, not an enumerable value. The logtype-baseline approach still matters even with wildcard search available: the dictionary dump gives the full template vocabulary up front, so queries can be built from real templates instead of guessed keywords. Semantic search (`semantic("…")`) also searches the logtypes directly and is a good complement to wildcard search for concept-shaped questions.
 
 ## Retrieve & count records of a template
 
-Prefer a direct KQL wildcard search on the message field for the template's
-distinctive static text — it's fast, not a full-archive project+grep pass:
+Prefer a direct KQL wildcard search on the message field for the template's distinctive static text — it's fast, not a full-archive project+grep pass:
 
 ```bash
 ARCHIVE=<archive-dir>
@@ -81,27 +40,21 @@ MSG=<message-field>
 "$SEARCH" --projection $MSG "$ARCHIVE" '<message>:*DistinctiveStaticText*' | grep -c '^{'
 ```
 
-Fall back to project + grep/jq only when the distinctive text has characters
-KQL's wildcard syntax can't express cleanly (e.g. it needs a regex, not a
-substring):
+Fall back to project + grep/jq only when the distinctive text has characters KQL's wildcard syntax can't express cleanly (e.g. it needs a regex, not a substring):
 
 ```bash
 "$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '*' \
   | grep '^{' | jq -rc --arg f "$MSG" 'select(.[$f]|test("DistinctiveStaticText";"i"))'
 ```
 
-Narrow with a working scalar field first when you can — `<severity>:` and
-`<logger>:` are also searchable, and combine with the message wildcard in one
-compound query:
+Narrow with a working scalar field first when you can — `<severity>:` and `<logger>:` are also searchable, and combine with the message wildcard in one compound query:
 
 ```bash
 "$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
   '<severity>:WARNING AND <message>:*StaticText*'
 ```
 
-Rules of thumb: pick the rarest distinctive static text (never a variable or a
-stopword); for all-template frequencies use one templatize pass, not
-per-template greps.
+Rules of thumb: pick the rarest distinctive static text (never a variable or a stopword); for all-template frequencies use one templatize pass, not per-template greps.
 
 ## Analysis patterns
 
@@ -111,9 +64,7 @@ per-template greps.
     | grep '^{' | jq -r '.<message>' \
     | sed -E 's/\{[^}]+\}/<*>/g; s/\b[0-9]+\b/<*>/g' | sort | uniq -c | sort -rn
   ```
-- **Time span:** project the timestamp field, `head -n 1` / `tail -n 1`
-  (records are chronological; do NOT sort); `--tge`/`--tle` only if the
-  timestamp is a real epoch (native JSON).
+- **Time span:** project the timestamp field, `head -n 1` / `tail -n 1` (records are chronological; do NOT sort); `--tge`/`--tle` only if the timestamp is a real epoch (native JSON).
 - **Scoped semantic:** `clp-s-search-kql ARCHIVE 'semantic("...") AND <severity>:<value>'`
 - **Filter the baseline with jq:**
   ```bash
@@ -122,11 +73,7 @@ per-template greps.
 
 ## When to still use semantic search
 
-With a logtype baseline, semantic search is not the default exploratory tool —
-the baseline already tells you what exists. The insight pass still runs one
-mandatory scoped semantic cross-check (reported in the "Semantic Search
-Coverage" section, with empty/no-hit or meaningless results dropped). Beyond
-that mandatory pass, use `semantic()` only for:
+With a logtype baseline, semantic search is not the default exploratory tool — the baseline already tells you what exists. The insight pass still runs one mandatory scoped semantic cross-check (reported in the "Semantic Search Coverage" section, with empty/no-hit or meaningless results dropped). Beyond that mandatory pass, use `semantic()` only for:
 
 | Situation | Why |
 | --- | --- |
@@ -135,9 +82,7 @@ that mandatory pass, use `semantic()` only for:
 | The user's question is conceptual, not template-shaped | "anything about reliability?" |
 | Confirming a template-classification miss | run semantic, diff vs the baseline |
 
-Combine with a scalar KQL field for precision:
-`semantic("…") AND <severity>:<value>`. Semantic flags (only active when the
-query contains `semantic()`; the wrapper auto-selects endpoint + local cache):
+Combine with a scalar KQL field for precision: `semantic("…") AND <severity>:<value>`. Semantic flags (only active when the query contains `semantic()`; the wrapper auto-selects endpoint + local cache):
 
 | Flag | Default | Purpose |
 | --- | --- | --- |

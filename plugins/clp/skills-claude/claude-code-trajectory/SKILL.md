@@ -11,19 +11,11 @@ allowed-tools:
 
 # Claude Code Trajectory
 
-End-to-end workflow for analyzing a Claude Code session log with CLP. Use
-this when the user asks to investigate what happened in a Claude session:
-which tools fired, what failed, how long a turn took, what context was used.
+End-to-end workflow for analyzing a Claude Code session log with CLP. Use this when the user asks to investigate what happened in a Claude session: which tools fired, what failed, how long a turn took, what context was used.
 
-> **Do not launch a dynamic workflow (multi-agent orchestration) for this
-> analysis on your own initiative.** CLP answers these questions better than a
-> workflow built on top of grep, and the orchestration makes the run slower for
-> no gain in coverage. Use the parallelism this skill specifies — the single
-> subagent at step 5 — and fan the queries out across more agents only if the
-> user asks for it.
+> **Do not launch a dynamic workflow (multi-agent orchestration) for this analysis on your own initiative.** CLP answers these questions better than a workflow built on top of grep, and the orchestration makes the run slower for no gain in coverage. Use the parallelism this skill specifies — the single subagent at step 5 — and fan the queries out across more agents only if the user asks for it.
 
-For general-purpose KQL search (no session involved), use the `search`
-skill instead.
+For general-purpose KQL search (no session involved), use the `search` skill instead.
 
 ## Workflow
 
@@ -33,10 +25,9 @@ skill instead.
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions"
    ```
 
-   Use `--agent claude` (default) or `--agent codex` if the user asks.
+Use `--agent claude` (default) or `--agent codex` if the user asks.
 
-2. Present choices with these columns: `IDX`, `AGENT`, modified timestamp,
-   raw bytes, human size, session name, project/cwd, session ID.
+2. Present choices with these columns: `IDX`, `AGENT`, modified timestamp, raw bytes, human size, session name, project/cwd, session ID.
 
 3. Compress the selected `IDX`:
 
@@ -47,14 +38,11 @@ skill instead.
      --timestamp-key timestamp
    ```
 
-4. Report compression stats: raw input bytes, archive bytes, compression
-   ratio, file size reduction.
+4. Report compression stats: raw input bytes, archive bytes, compression ratio, file size reduction.
 
-5. **Spawn a subagent to run all searches.** Use the Agent tool with model
-   `haiku` (fall back to `sonnet`). The subagent runs searches, processes raw
-   JSON, and returns only a compact report — keeping the main context clean.
+5. **Spawn a subagent to run all searches.** Use the Agent tool with model `haiku` (fall back to `sonnet`). The subagent runs searches, processes raw JSON, and returns only a compact report — keeping the main context clean.
 
-   Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
+Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
 
    ```
    Analyze this Claude Code CLP session archive: ARCHIVE
@@ -94,8 +82,7 @@ skill instead.
    4. 2–3 follow-up queries worth running
    ```
 
-6. Present the subagent's compact report to the user. Offer to drill deeper
-   with a follow-up subagent or decompress for raw inspection:
+6. Present the subagent's compact report to the user. Offer to drill deeper with a follow-up subagent or decompress for raw inspection:
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress" \
@@ -103,13 +90,11 @@ skill instead.
      /tmp/session-archive-decompressed
    ```
 
-If the user provides an archive path directly, skip listing/compression
-and go straight to step 5.
+If the user provides an archive path directly, skip listing/compression and go straight to step 5.
 
 ## Query Starters
 
-For broad trajectory debugging, suggest using a subagent and ask it to
-return only archive path, queries, top findings, and next queries.
+For broad trajectory debugging, suggest using a subagent and ask it to return only archive path, queries, top findings, and next queries.
 
 | Goal | KQL |
 | --- | --- |
@@ -132,14 +117,11 @@ return only archive path, queries, top findings, and next queries.
 | Semantic: network errors | `semantic("network timeout or connection errors")` |
 | Semantic: combined with KQL | `semantic("errors") AND level:error` |
 
-Combine a user-provided repo, file, command, test, or instance ID with a
-starter query using `AND`.
+Combine a user-provided repo, file, command, test, or instance ID with a starter query using `AND`.
 
 ## Analysis Patterns
 
-CLP searches the compressed archive — unmatched records are never decompressed.
-Push logic into KQL rather than fetching all records and post-filtering in shell
-or Python.
+CLP searches the compressed archive — unmatched records are never decompressed. Push logic into KQL rather than fetching all records and post-filtering in shell or Python.
 
 **For analyses that run 3+ queries, spawn a subagent:**
 - Prefer Haiku model (`haiku`); fall back to Sonnet (`sonnet`) if unavailable.
@@ -162,8 +144,7 @@ or Python.
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'toolUseResult.success:false AND toolUseResult.stderr:*'
 ```
 
-**Reduce payload — project only the fields you need, by default:** full records are
-large; fetch only the columns your analysis uses.
+**Reduce payload — project only the fields you need, by default:** full records are large; fetch only the columns your analysis uses.
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
   --projection timestamp,durationMs \

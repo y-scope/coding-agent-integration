@@ -1,21 +1,10 @@
 # Release Testing: CLP Plugin Walkthrough (vLLM logs)
 
-A step-by-step, copy-paste walkthrough of the CLP coding-agent plugin for
-someone who has **never used CLP** and doesn't know what it is. Every command
-shows its expected output so you can tell immediately whether something is
-wrong. Total time: ~10 minutes.
+A step-by-step, copy-paste walkthrough of the CLP coding-agent plugin for someone who has **never used CLP** and doesn't know what it is. Every command shows its expected output so you can tell immediately whether something is wrong. Total time: ~10 minutes.
 
-**What is CLP?** CLP (Compressed Log Processor) compresses log files into a
-small archive that you can *search without decompressing*. This plugin wraps
-CLP for coding agents (Claude Code / Codex): compress logs, search them with
-KQL queries, ask natural-language ("semantic") questions, and analyze an
-archive by its "logtypes" — the distinct message templates the application
-emits.
+**What is CLP?** CLP (Compressed Log Processor) compresses log files into a small archive that you can *search without decompressing*. This plugin wraps CLP for coding agents (Claude Code / Codex): compress logs, search them with KQL queries, ask natural-language ("semantic") questions, and analyze an archive by its "logtypes" — the distinct message templates the application emits.
 
-**The test data** is three real vLLM server logs in `sample-logs/vllm/`
-(a failed smoke run, a successful one, and a bug-fix run — ~38 KB of plain
-text). vLLM is an LLM inference server; you don't need to know anything about
-it. The logs look like this:
+**The test data** is three real vLLM server logs in `sample-logs/vllm/` (a failed smoke run, a successful one, and a bug-fix run — ~38 KB of plain text). vLLM is an LLM inference server; you don't need to know anything about it. The logs look like this:
 
 ```
 INFO 06-15 03:52:34 [importing.py:81] Triton not installed or not compatible; ...
@@ -31,16 +20,9 @@ INFO 06-15 03:52:34 [importing.py:81] Triton not installed or not compatible; ..
   ./plugins/clp/bin/clp-s --help >/dev/null 2>&1 && echo OK || echo MISSING
   ```
 
-  If `MISSING`: install CLP (the plugin's hosted installer ships the binary,
-  or download a clp-core release), or point the wrappers at an existing
-  binary once per shell with `export CLP_S_BIN=/path/to/clp-s`. Note the
-  check only confirms the binary exists — it cannot read the version. If
-  your build is older than 0.13, Steps 1–4, 7 and 8 still work; Step 5 will
-  fail with `no shape/logtype entries found` (see Troubleshooting — your
-  archive stays valid, only the binary needs updating).
+If `MISSING`: install CLP (the plugin's hosted installer ships the binary, or download a clp-core release), or point the wrappers at an existing binary once per shell with `export CLP_S_BIN=/path/to/clp-s`. Note the check only confirms the binary exists — it cannot read the version. If your build is older than 0.13, Steps 1–4, 7 and 8 still work; Step 5 will fail with `no shape/logtype entries found` (see Troubleshooting — your archive stays valid, only the binary needs updating).
 
-All commands are run **from the repository root**. Outputs go to
-`release-testing/workdir/` (gitignored — safe to delete at any time).
+All commands are run **from the repository root**. Outputs go to `release-testing/workdir/` (gitignored — safe to delete at any time).
 
 ```bash
 rm -rf release-testing/workdir   # start clean so every expected output matches
@@ -48,22 +30,13 @@ mkdir -p release-testing/workdir
 B=./plugins/clp/bin      # the plugin's command wrappers
 ```
 
-> **Keep one shell open for the whole walkthrough.** Later steps reuse
-> variables defined earlier (`B`, `ARCHIVE`, `LC`, `KEY`, `A2`, `K2`,
-> `CLP_LOGTYPE_CACHE_DIR`). If you lose your shell, re-run the Setup block
-> above and the `ARCHIVE=` line in Step 1, then continue where you left off.
+> **Keep one shell open for the whole walkthrough.** Later steps reuse variables defined earlier (`B`, `ARCHIVE`, `LC`, `KEY`, `A2`, `K2`, `CLP_LOGTYPE_CACHE_DIR`). If you lose your shell, re-run the Setup block above and the `ARCHIVE=` line in Step 1, then continue where you left off.
 
-One output convention used throughout: the wrappers print human-readable
-header lines (archive path, metadata, the underlying command) to **stdout**
-before the JSON results. `grep '^{'` keeps only the JSON records — that is
-why it appears in every pipeline below. (The `2>/dev/null` merely silences
-occasional wrapper warnings; it is *not* what removes the headers.)
+One output convention used throughout: the wrappers print human-readable header lines (archive path, metadata, the underlying command) to **stdout** before the JSON results. `grep '^{'` keeps only the JSON records — that is why it appears in every pipeline below. (The `2>/dev/null` merely silences occasional wrapper warnings; it is *not* what removes the headers.)
 
 ## Step 1 — Compress the logs into an archive
 
-These are plain-text logs, so pass `--structurize`: it parses each line into
-`timestamp / logger / level / message` fields first, which is what makes the
-archive searchable by field.
+These are plain-text logs, so pass `--structurize`: it parses each line into `timestamp / logger / level / message` fields first, which is what makes the archive searchable by field.
 
 ```bash
 "$B/clp-s-compress-folder" \
@@ -72,9 +45,7 @@ archive searchable by field.
   --archives-root release-testing/workdir/archives
 ```
 
-Expected output — the run prints ~20 lines (source folder, flags, the
-underlying `clp-s` command, metadata paths); the ones to check are these
-(sizes may vary by a few bytes, and paths are printed absolute):
+Expected output — the run prints ~20 lines (source folder, flags, the underlying `clp-s` command, metadata paths); the ones to check are these (sizes may vary by a few bytes, and paths are printed absolute):
 
 ```
 Structurize: converted 3 file(s) to structured JSONL
@@ -87,10 +58,7 @@ Input files: 3
 Archives dir: /.../release-testing/workdir/archives/folder-vllm-<TIMESTAMP>
 ```
 
-> Note: `Raw input bytes` measures the structurized JSONL handed to `clp-s`
-> (larger than the original text, because parsing adds field structure). The
-> original three files are ~38 KB, so the effective ratio vs. your raw text is
-> even better than the printed number.
+> Note: `Raw input bytes` measures the structurized JSONL handed to `clp-s` (larger than the original text, because parsing adds field structure). The original three files are ~38 KB, so the effective ratio vs. your raw text is even better than the printed number.
 
 Save the archive path — every later step uses it:
 
@@ -101,17 +69,13 @@ echo "$ARCHIVE"
 
 ## Step 2 — See what a record looks like
 
-A search with the query `*` returns every record, one JSON object per line
-(after the `grep '^{'` header filter explained in Setup):
+A search with the query `*` returns every record, one JSON object per line (after the `grep '^{'` header filter explained in Setup):
 
 ```bash
 "$B/clp-s-search-kql" "$ARCHIVE" '*' 2>/dev/null | grep '^{' | head -2
 ```
 
-Expected: two records with exactly these four fields. The first is special —
-`--structurize` preserves the log's pre-timestamp preamble (here, the `vllm
-serve` launch command, newlines escaped as `\n`) as a record with
-`"logger":"preamble"`; the second is a normal parsed line:
+Expected: two records with exactly these four fields. The first is special — `--structurize` preserves the log's pre-timestamp preamble (here, the `vllm serve` launch command, newlines escaped as `\n`) as a record with `"logger":"preamble"`; the second is a normal parsed line:
 
 ```json
 {"timestamp":"2026-06-15 03:52:34,000","logger":"preamble","level":"INFO","message":"python -c \"import vllm; ...\"\n...vllm serve Qwen/Qwen3-0.6B \\"}
@@ -154,10 +118,7 @@ Expected:
 
 ## Step 4 — The one rule you must know: message content is NOT KQL-searchable
 
-The `message` field is stored as a *CLP-string*: instead of the raw text, CLP
-stores a template with the variable parts factored out — this is where the
-compression comes from. The trade-off: a KQL query on message content
-**always returns 0**, even when the text is present:
+The `message` field is stored as a *CLP-string*: instead of the raw text, CLP stores a template with the variable parts factored out — this is where the compression comes from. The trade-off: a KQL query on message content **always returns 0**, even when the text is present:
 
 ```bash
 "$B/clp-s-search-kql" "$ARCHIVE" 'message:Triton' 2>/dev/null | grep -c '^{'
@@ -172,24 +133,13 @@ To search message content, *project* the field and grep it:
   | grep '^{' | jq -r '.message' | grep -c 'Triton'
 ```
 
-Expected: `18` — the text was there all along; you just have to reach it this
-way. Tip: narrow with a searchable field first (`level:WARNING`) and then grep
-the projected messages — cheaper than scanning everything.
+Expected: `18` — the text was there all along; you just have to reach it this way. Tip: narrow with a searchable field first (`level:WARNING`) and then grep the projected messages — cheaper than scanning everything.
 
 ## Step 5 — Dump the logtype dictionary
 
-A *logtype* is a message template with variables replaced by `<*>`. The
-dictionary is the complete vocabulary of distinct messages in the archive —
-the fastest way to learn what an unfamiliar log actually contains, without
-reading every record.
+A *logtype* is a message template with variables replaced by `<*>`. The dictionary is the complete vocabulary of distinct messages in the archive — the fastest way to learn what an unfamiliar log actually contains, without reading every record.
 
-`stats.log_shapes` is **not KQL** — it is a special directive the search
-wrapper recognizes in the query slot. It dumps the archive's internal
-logtype dictionary; each raw line encodes the variable positions as special
-placeholder bytes, so the pipeline below pipes it through
-`logtype-cache normalize`, which renders every placeholder as `<*>` and
-emits one clean `{"logtype":"..."}` JSON line per template. Works on any
-archive (the wrapper adds the required `--experimental` flag itself):
+`stats.log_shapes` is **not KQL** — it is a special directive the search wrapper recognizes in the query slot. It dumps the archive's internal logtype dictionary; each raw line encodes the variable positions as special placeholder bytes, so the pipeline below pipes it through `logtype-cache normalize`, which renders every placeholder as `<*>` and emits one clean `{"logtype":"..."}` JSON line per template. Works on any archive (the wrapper adds the required `--experimental` flag itself):
 
 ```bash
 LC="$B/logtype-cache"
@@ -217,24 +167,13 @@ Expected (top entry):
 
 ## Step 6 — The classification cache (NEW → UPTODATE → GROWTH)
 
-Analyzing an archive means classifying its templates — expensive the first
-time, but the same application emits the same templates every run, so the
-plugin caches the classification, keyed by a fingerprint (SHA-256 of the
-sorted template set, each template capped at a character limit — 512 by default
-— and de-duplicated, matching what is sent for embedding). Stored templates stay
-full and byte-exact. `diff` compares your archive's templates against the
-cache and prints a tab-separated status header:
+Analyzing an archive means classifying its templates — expensive the first time, but the same application emits the same templates every run, so the plugin caches the classification, keyed by a fingerprint (SHA-256 of the sorted template set, each template capped at a character limit — 512 by default — and de-duplicated, matching what is sent for embedding). Stored templates stay full and byte-exact. `diff` compares your archive's templates against the cache and prints a tab-separated status header:
 
 - `NEW <key> <count>` — never seen this app; all `<count>` templates need classifying.
-- `UPTODATE <key> <count>` — fingerprint hit; nothing to do. (A template whose
-  tail changed only past the character limit is appended to the entry with the
-  category of the truncated form it shares.)
-- `GROWTH <key> <base_key> <count> <new_count>` — a superset of cached entry
-  `<base_key>`; only the `<new_count>` new templates (listed as NDJSON after
-  the header) need classifying.
+- `UPTODATE <key> <count>` — fingerprint hit; nothing to do. (A template whose tail changed only past the character limit is appended to the entry with the category of the truncated form it shares.)
+- `GROWTH <key> <base_key> <count> <new_count>` — a superset of cached entry `<base_key>`; only the `<new_count>` new templates (listed as NDJSON after the header) need classifying.
 
-`<count>` is the true full template count. The GROWTH subset test uses the
-truncated sets, so a tail-only change reports UPTODATE rather than GROWTH.
+`<count>` is the true full template count. The GROWTH subset test uses the truncated sets, so a tail-only change reports UPTODATE rather than GROWTH.
 
 (`logtype-cache --help` documents all subcommands.)
 
@@ -246,15 +185,9 @@ LC="$B/logtype-cache"
 "$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | head -1
 ```
 
-Expected: a line starting with `NEW` — first time seeing this app; all 100
-templates would need classifying.
+Expected: a line starting with `NEW` — first time seeing this app; all 100 templates would need classifying.
 
-Normally the *agent* classifies the templates (Step 9); here we store a
-minimal stand-in by hand just to exercise the cache. A stored classification
-is a JSON object with four keys: `schema` (which record field holds the
-message), `taxonomy` (the category list), `templates` (each logtype →
-category), and `query_plan` (suggested follow-up queries). The `jq` below
-builds the simplest valid one — every template categorized as `other`:
+Normally the *agent* classifies the templates (Step 9); here we store a minimal stand-in by hand just to exercise the cache. A stored classification is a JSON object with four keys: `schema` (which record field holds the message), `taxonomy` (the category list), `templates` (each logtype → category), and `query_plan` (suggested follow-up queries). The `jq` below builds the simplest valid one — every template categorized as `other`:
 
 ```bash
 KEY="$("$LC" key --logtypes-file release-testing/workdir/logtypes.ndjson)"
@@ -267,14 +200,9 @@ jq -s '{schema:{message:"message"},
 "$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | head -1
 ```
 
-Expected: `put-merged` confirms with `Stored classification for app_key
-<key> -> ...` (on stderr — not an error), and the second `diff` now prints a
-line starting with `UPTODATE` — cache hit; nothing to classify.
+Expected: `put-merged` confirms with `Stored classification for app_key <key> -> ...` (on stderr — not an error), and the second `diff` now prints a line starting with `UPTODATE` — cache hit; nothing to classify.
 
-Now the incremental part. Compress only **two** of the three logs — as if this
-were an earlier, smaller capture of the same app — and probe with its
-dictionary. First store its classification, then probe with the full 3-file
-dictionary:
+Now the incremental part. Compress only **two** of the three logs — as if this were an earlier, smaller capture of the same app — and probe with its dictionary. First store its classification, then probe with the full 3-file dictionary:
 
 ```bash
 mkdir -p release-testing/workdir/two-files
@@ -307,10 +235,7 @@ jq -s '{schema:{message:"message"},
 "$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | head -1
 ```
 
-Expected: a line starting with `GROWTH`, with `100` and `4` as the last two
-fields (total templates, new templates) — the cache recognized the 96 known
-templates and asks you to classify **only the 4 new ones**, not all 100. The
-NDJSON lines after the header are exactly those 4 templates:
+Expected: a line starting with `GROWTH`, with `100` and `4` as the last two fields (total templates, new templates) — the cache recognized the 96 known templates and asks you to classify **only the 4 new ones**, not all 100. The NDJSON lines after the header are exactly those 4 templates:
 
 ```bash
 "$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | grep -c '^{'
@@ -318,30 +243,20 @@ NDJSON lines after the header are exactly those 4 templates:
 
 Expected: `4`
 
-This is the feature's core value: re-analyzing a growing log costs only the
-classification of what's new.
+This is the feature's core value: re-analyzing a growing log costs only the classification of what's new.
 
-By the way — Steps 2, 5, and the cache probe are what the `logtype-insights`
-skill runs as its first command, via one helper:
+By the way — Steps 2, 5, and the cache probe are what the `logtype-insights` skill runs as its first command, via one helper:
 
 ```bash
 "$B/logtype-insights-bootstrap" --cache-dir release-testing/workdir/lt-cache \
   --out-dir release-testing/workdir/bootstrap "$ARCHIVE"
 ```
 
-Expected: a `SAMPLE=` record, `DIST field=...` value distributions for the
-four fields, `LOGTYPE_COUNT=100`, `FALLBACK=SHAPES_OK`, and
-`CACHE_MODE=UPTODATE` (the classification you stored above is fetched to
-`release-testing/workdir/bootstrap/logtype-classification.json`).
+Expected: a `SAMPLE=` record, `DIST field=...` value distributions for the four fields, `LOGTYPE_COUNT=100`, `FALLBACK=SHAPES_OK`, and `CACHE_MODE=UPTODATE` (the classification you stored above is fetched to `release-testing/workdir/bootstrap/logtype-classification.json`).
 
 ## Step 7 — Semantic search (natural language)
 
-`semantic("...")` finds records whose message *means* something similar to
-your query, even with no keyword overlap. It needs a reachable embedding
-server — the plugin never starts one. By default it uses the built-in remote
-endpoint (needs network); point it elsewhere with `--semantic-endpoint URL`,
-`CLP_SEMANTIC_ENDPOINT`, or
-`~/.config/yscope-clp-plugin/semantic-endpoint`:
+`semantic("...")` finds records whose message *means* something similar to your query, even with no keyword overlap. It needs a reachable embedding server — the plugin never starts one. By default it uses the built-in remote endpoint (needs network); point it elsewhere with `--semantic-endpoint URL`, `CLP_SEMANTIC_ENDPOINT`, or `~/.config/yscope-clp-plugin/semantic-endpoint`:
 
 ```bash
 "$B/clp-s-search-kql" "$ARCHIVE" 'semantic("GPU features unavailable")' 2>/dev/null \
@@ -354,12 +269,7 @@ Expected:
 Triton not installed or not compatible; certain GPU-related functions will not be available.
 ```
 
-— found even though your query shares no keywords with the message ("Triton"
-appears nowhere in it). The result set also includes other GPU-related lines
-(KV cache size, custom fusions); semantic matching is similarity-ranked, not
-exact. If this step fails with an endpoint error, the embedding service is
-unreachable from your machine; everything else in this walkthrough still
-works.
+— found even though your query shares no keywords with the message ("Triton" appears nowhere in it). The result set also includes other GPU-related lines (KV cache size, custom fusions); semantic matching is similarity-ranked, not exact. If this step fails with an endpoint error, the embedding service is unreachable from your machine; everything else in this walkthrough still works.
 
 ## Step 8 — Decompress (round-trip check)
 
@@ -368,16 +278,13 @@ works.
 grep -c 'Triton' release-testing/workdir/decompressed/original
 ```
 
-Decompression writes one JSONL file named `original` into the output
-directory.
+Decompression writes one JSONL file named `original` into the output directory.
 
-Expected: `18` — the decompressed JSONL contains the same 18 Triton records
-you found in Step 4 via projection. Round-trip confirmed.
+Expected: `18` — the decompressed JSONL contains the same 18 Triton records you found in Step 4 via projection. Round-trip confirmed.
 
 ## Step 9 (optional) — Drive it through the agent
 
-Everything above is what the plugin's *skills* automate. In a Claude Code
-session started from this repo:
+Everything above is what the plugin's *skills* automate. In a Claude Code session started from this repo:
 
 ```
 claude --plugin-dir ./plugins/clp
@@ -385,19 +292,9 @@ claude --plugin-dir ./plugins/clp
 
 then ask:
 
-> Compress the logs in release-testing/sample-logs/vllm and give me logtype
-> insights.
+> Compress the logs in release-testing/sample-logs/vllm and give me logtype insights.
 
-The agent should: compress with `--structurize`, report the compression stats,
-run `logtype-insights-bootstrap` (one command covering the schema sample, the
-100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above),
-cluster the templates with `logtype-cluster` (which embeds them through the
-semantic server — it should never try to install a model or start a server),
-classify the cluster
-representatives with a fast subagent (caching the expanded result), and return
-a report with severity counts, top templates, warnings, and follow-up queries
-— the same steps you just did by hand, with the expensive classification
-shrunk to one prompt over cluster representatives.
+The agent should: compress with `--structurize`, report the compression stats, run `logtype-insights-bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above), cluster the templates with `logtype-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with a fast subagent (caching the expanded result), and return a report with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives.
 
 ## Cleanup
 
