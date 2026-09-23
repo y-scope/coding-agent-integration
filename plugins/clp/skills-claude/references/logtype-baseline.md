@@ -48,22 +48,22 @@ of the *same* binary, but need not match byte-exactly the shapes-API logtypes
 a newer binary would produce, so a cache entry built on the fallback path may
 not GROWTH-match one built on the shapes path (it will re-classify as NEW).
 
-## Known limitation: the message field is a CLP-string
+## Searching the message field: exact vs. wildcard
 
 The message field (`message` structurized, `msg` native Mongo, …) is stored as
 a CLP-string (logtype template + encoded variables — what makes
-`stats.log_shapes` and the compression work). Consequence: a bare term only
-matches a value equal to the **whole** field — `<message>:term` returns 0
-unless the entire message is that one word, same as the wildcard rule in
-`shared-search.md`. **Add wildcards to search message content**:
-`<message>:*term*` works and returns real hits. The scalar fields (severity,
+`stats.log_shapes` and the compression work), but it follows the same KQL
+rule as every other field: `<message>:term` is an **exact** match against the
+whole field value, so it correctly returns 0 whenever no message equals just
+`term`. To match a substring, wildcard it — `<message>:*term*` — same as
+`shared-search.md`'s general wildcard rule. The scalar fields (severity,
 logger, payload leaf paths) are also KQL-searchable and narrow faster, since
-they don't need a wildcard scan. The logtype-baseline approach still matters
-even though wildcard search works: the dictionary dump gives the full
-template vocabulary up front, so queries can be built from real templates
-instead of guessed keywords. Semantic search (`semantic("…")`) also searches
-the logtypes directly and is a good complement to wildcard search for
-concept-shaped questions.
+an exact match on them needs no wildcard. The logtype-baseline approach still
+matters even with wildcard search available: the dictionary dump gives the
+full template vocabulary up front, so queries can be built from real
+templates instead of guessed keywords. Semantic search (`semantic("…")`) also
+searches the logtypes directly and is a good complement to wildcard search
+for concept-shaped questions.
 
 ## Retrieve & count records of a template
 

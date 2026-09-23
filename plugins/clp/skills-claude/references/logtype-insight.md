@@ -54,11 +54,12 @@ Method (follow strictly):
    regex the wildcard syntax can't express. For "project+jq": run the KQL
    with --projection, then `grep '^{' | jq -r '<jq>'`. For "semantic": run
    `semantic("...") AND <kql>` with --projection.
-2. The message field is a CLP-string, so a bare term only matches a value
-   equal to the **whole** field: `<message>:term` returns 0. Wildcard it —
-   `<message>:*term*` works and is fast. Prefer
-   it over project+grep for a template's distinctive STATIC text. Combine
-   with a scalar field in one compound query when you can:
+2. `<message>:term` is an **exact** match against the whole field value, so
+   it correctly returns 0 unless a message equals exactly `term` — the
+   message field follows the same KQL rule as any other field. For a
+   substring, wildcard it: `<message>:*term*` works and is fast. Prefer it
+   over project+grep for a template's distinctive STATIC text. Combine with
+   a scalar field in one compound query when you can:
      <severity>:<value> AND <message>:*term*
      <logger>:*<substr>* AND <message>:*term*
    Fall back to project+grep only when the distinctive text needs a regex the
@@ -86,10 +87,10 @@ Efficiency rules:
 - Compound KQL, not many separate queries.
 - Project aggressively; omit --projection only when you need the full record.
 - Do NOT use --tge/--tle unless the schema says the timestamp is epoch.
-- The message field is a clp-string — a bare `<message>:term` returns 0
-  because it only matches a whole-field value. Use `<message>:*term*`
-  (wildcarded) to search message content; it's fast. Fall back
-  to projecting and grepping/jq-filtering only when the match needs a regex.
+- `<message>:term` is an exact match, so it correctly returns 0 unless a
+  message equals exactly `term`. Wildcard it — `<message>:*term*` — to
+  search message content by substring; it's fast. Fall back to projecting
+  and grepping/jq-filtering only when the match needs a regex.
 - Add --ignore-case when case is uncertain.
 
 Return ONLY a Markdown Logtype Insights Report with these sections:

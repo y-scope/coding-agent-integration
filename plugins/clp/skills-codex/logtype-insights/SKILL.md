@@ -153,11 +153,12 @@ the user sees no progress at all.
 
    Build a QUERY PLAN: targeted queries derived from the representatives,
    expressed in the discovered field names. Per entry: `label`, the KQL `kql`
-   (scalar fields — severity/logger/payload leaves — narrow fastest; the
-   message field is also searchable but a bare `<message>:term` returns 0
-   since it only matches a whole-field value, so wildcard it as
-   `<message>:*term*` when the filter needs message content), the `project`
-   columns, and the `method` (`count` / `project+grep` (with `grep`, or fold
+   (scalar fields — severity/logger/payload leaves — narrow fastest since an
+   exact match needs no wildcard; the message field is also searchable, but
+   `<message>:term` is an exact match and correctly returns 0 unless a
+   message equals exactly `term`, so wildcard it as `<message>:*term*` when
+   the filter needs message content), the `project` columns, and the
+   `method` (`count` / `project+grep` (with `grep`, or fold
    the text into `kql` as `message:*text*` when possible) / `project+jq`
    (with `jq`) / `semantic`). For GROWTH, add entries only for genuinely new
    signals. Example (Mongo):
@@ -240,9 +241,9 @@ the user sees no progress at all.
      with KQL when exact totals matter). **Time span**: project the timestamp
      field and use `head`/`tail` (chronological; do NOT sort), or
      `--tge`/`--tle` if the timestamp is a real epoch.
-   - The message field is a clp-string — a bare `<message>:term` returns 0
-     because it only matches a whole-field value. Use `<message>:*term*`
-     (wildcarded) to search message content directly; it works and is fast.
+   - `<message>:term` is an exact match, so it correctly returns 0 unless a
+     message equals exactly `term`. Use `<message>:*term*` (wildcarded) to
+     search message content by substring; it works and is fast.
      Combine with a scalar filter in one compound query when you can
      (`<severity>:<value> AND <message>:*term*`,
      `<logger>:*<substr>* AND <message>:*term*`). Fall back to projecting
@@ -271,17 +272,18 @@ the user sees no progress at all.
    application skips classification (cached plan reused), or decompress:
    `~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-decompress <archives-dir> <out-dir>`.
 
-## Known limitation: the message field is a CLP-string
+## Searching the message field: exact vs. wildcard
 
 The message field (`message` structurized, `msg` native Mongo, …) is stored as
 a CLP-string (logtype template + encoded variables — what makes
-`stats.log_shapes` and the compression work). Consequence: a bare term only
-matches a value equal to the **whole** field — `<message>:term` returns 0
-unless the entire message is that one word. **Add wildcards to search message
-content**: `<message>:*term*` works and returns real hits, and is fast, not
-just a fallback. Scalar fields (severity, logger, payload leaf paths) are
-also KQL-searchable and narrow fastest since they need no wildcard. Prefer a
-direct wildcard search on the message field over project+grep:
+`stats.log_shapes` and the compression work), but it follows the same KQL
+rule as every other field: `<message>:term` is an **exact** match against the
+whole field value, so it correctly returns 0 whenever no message equals just
+`term`. To match a substring, wildcard it — `<message>:*term*` works and
+returns real hits, and is fast, not just a fallback. Scalar fields (severity,
+logger, payload leaf paths) are also KQL-searchable and narrow fastest since
+an exact match on them needs no wildcard. Prefer a direct wildcard search on
+the message field over project+grep:
 
 ```bash
 S=~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql
