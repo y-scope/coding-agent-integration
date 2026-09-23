@@ -11,7 +11,7 @@ Use only the plugin wrapper from `~/.codex/marketplaces/yscope/plugins/clp` (or 
 ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVES_DIR 'KQL_QUERY'
 ```
 
-The wrapper accepts the top-level `Archives dir` printed by compression or the inner clp-s archive directory (resolved automatically). Use single quotes around KQL. Sensible defaults (embedding endpoint, local cache) are built in; pass extra clp-s flags only if the user asks for something specific.
+The wrapper accepts the top-level `Archives dir` printed by compression or the inner clp-s archive directory (resolved automatically). Use single quotes around KQL. A sensible default embedding endpoint is built in; pass extra clp-s flags only if the user asks for something specific.
 
 For session-log workflows (list → compress → search), use the `codex-trajectory` skill instead of this one.
 
@@ -31,7 +31,7 @@ Two gotchas:
 
 ## Semantic search
 
-Use `semantic("natural language query")` in KQL to find log events whose logtype is semantically similar to the query, even when exact keywords differ. No flags needed — the wrapper auto-selects a working endpoint and shares a local cache across sessions. Combine with regular KQL using `AND`.
+Use `semantic("natural language query")` in KQL to find log events whose logtype is semantically similar to the query, even when exact keywords differ. No flags needed — the wrapper auto-selects a working endpoint. Combine with regular KQL using `AND`.
 
 ```bash
 ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'semantic("slow database queries")'

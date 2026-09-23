@@ -49,12 +49,6 @@ Allowed search controls:
   --semantic-top-k K       Return up to K nearest logtypes (default 5).
   --semantic-threshold T   Minimum similarity floor 0.0-1.0 (default 0.3).
   --embedding-batch-size N  Batch size for vector processing (default auto).
-  --semantic-cache-dir DIR Local embedded semantic cache directory. Auto-enabled
-                           under the plugin config dir; pass "none" to disable
-                           and use remote-only /v1/similarity.
-  --semantic-cache-cold-capacity N
-                           Cold-tier entry capacity of the local cache
-                           (default 10000000, ~4 GB on disk).
   --experimental          Enable clp-s experimental (clpp) features. Required
                            for shape()/decompose() KQL functions.
   --clp-s-bin PATH        Use this clp-s binary for this invocation only.
@@ -103,11 +97,6 @@ search:
 An endpoint named by 1-3 that fails its health check is a hard error; only the
 built-in defaults in 4 are probed and skipped. A server you host yourself
 (including on localhost) must be named explicitly — it is not auto-detected.
-
-A local embedded semantic cache is auto-enabled under the plugin config dir
-(~/.config/yscope-clp-plugin/semantic-cache) so repeated semantic queries hit
-in-process (~sub-ms) instead of round-tripping to the endpoint. Disable with
---semantic-cache-dir none or CLP_SEMANTIC_CACHE_DIR=none.
 EOF
 }
 
@@ -125,8 +114,6 @@ semantic_endpoint=""
 semantic_top_k=""
 semantic_threshold=""
 embedding_batch_size=""
-semantic_cache_dir=""
-semantic_cache_cold_capacity=""
 semantic_active=0
 experimental=0
 clp_s_bin_override=""
@@ -177,16 +164,6 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "error: --embedding-batch-size requires a value" >&2; exit 2; }
       embedding_batch_size="$2"
       semantic_active=1
-      shift 2
-      ;;
-    --semantic-cache-dir)
-      [[ $# -ge 2 ]] || { echo "error: --semantic-cache-dir requires a value" >&2; exit 2; }
-      semantic_cache_dir="$2"
-      shift 2
-      ;;
-    --semantic-cache-cold-capacity)
-      [[ $# -ge 2 ]] || { echo "error: --semantic-cache-cold-capacity requires a value" >&2; exit 2; }
-      semantic_cache_cold_capacity="$2"
       shift 2
       ;;
     --tge)
@@ -340,19 +317,6 @@ if [[ "$semantic_active" -eq 1 ]]; then
   # semantic-endpoint config file, then the built-in remote defaults. The
   # plugin never starts an embedding server itself.
   semantic_endpoint="$(resolve_semantic_endpoint "$semantic_endpoint")" || exit $?
-  # Local embedded semantic cache: auto-enabled under the plugin config dir so
-  # repeated semantic queries score in-process instead of round-tripping. Pass
-  # "none" (or set CLP_SEMANTIC_CACHE_DIR=none) to disable and use remote-only
-  # /v1/similarity.
-  if [[ -z "$semantic_cache_dir" ]]; then
-    semantic_cache_dir="${CLP_SEMANTIC_CACHE_DIR:-$(default_semantic_cache_dir)}"
-  fi
-  if [[ "$semantic_cache_dir" != "none" ]]; then
-    mkdir -p "$semantic_cache_dir"
-  fi
-  if [[ -z "$semantic_cache_cold_capacity" ]]; then
-    semantic_cache_cold_capacity="${CLP_SEMANTIC_CACHE_COLD_CAPACITY:-$DEFAULT_SEMANTIC_CACHE_COLD_CAPACITY}"
-  fi
 fi
 
 search_options=()
@@ -383,19 +347,6 @@ if [[ -n "$unique_field" ]]; then
 fi
 if [[ "$semantic_active" -eq 1 ]]; then
   search_options+=(--semantic-endpoint "$semantic_endpoint")
-  # Only pass the local-cache flags when this clp-s binary supports them.
-  # Older builds (e.g. clp-core 0.12.1) lack --semantic-cache-dir and abort
-  # with "Unknown OUTPUT_HANDLER: <archive>" when it is passed, which breaks
-  # semantic search entirely. Probe the binary's --help and fall back to
-  # remote-only /v1/similarity (no local cache) when the flag is unsupported.
-  if [[ "$semantic_cache_dir" != "none" ]]; then
-    if grep -q -- '--semantic-cache-dir' <("$clp_s_bin" s --help 2>&1); then
-      search_options+=(--semantic-cache-dir "$semantic_cache_dir")
-      search_options+=(--semantic-cache-cold-capacity "$semantic_cache_cold_capacity")
-    else
-      echo "warning: clp-s does not support --semantic-cache-dir; using remote-only semantic search (no local cache)" >&2
-    fi
-  fi
 fi
 if [[ -n "$semantic_top_k" ]]; then
   search_options+=(--semantic-top-k "$semantic_top_k")
@@ -422,12 +373,7 @@ if [[ "$semantic_active" -eq 1 ]]; then
     unset CLP_SEMANTIC_BATCH_SIZE
   fi
   unset CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT
-  # The wrapper passes --semantic-cache-dir explicitly (or intentionally omits
-  # it when disabled via "none"), so prevent clp-s from reading a stale or
-  # sentinel "none" value from the environment.
-  unset CLP_SEMANTIC_CACHE_DIR
 else
-  unset CLP_SEMANTIC_ENDPOINT CLP_SEMANTIC_BATCH_SIZE CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT \
-    CLP_SEMANTIC_CACHE_DIR
+  unset CLP_SEMANTIC_ENDPOINT CLP_SEMANTIC_BATCH_SIZE CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT
 fi
 exec "${cmd[@]}"

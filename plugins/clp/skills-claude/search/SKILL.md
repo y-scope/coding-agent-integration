@@ -30,4 +30,4 @@ That covers: the KQL table, the wildcard-substring rule (literals match whole va
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVES_DIR 'KQL_QUERY'
 ```
 
-The wrapper accepts the top-level `Archives dir` printed by compression or the inner clp-s archive directory (resolved automatically). Use single quotes around KQL. Sensible defaults (embedding endpoint, local cache) are built in; pass extra clp-s flags only if the user asks for something specific.
+The wrapper accepts the top-level `Archives dir` printed by compression or the inner clp-s archive directory (resolved automatically). Use single quotes around KQL. A sensible default embedding endpoint is built in; pass extra clp-s flags only if the user asks for something specific.

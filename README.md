@@ -108,9 +108,7 @@ echo 'https://embeddings.internal.example.com' \
 
 The same endpoint drives `logtype-cluster`, which embeds logtype templates through the server's `/v1/embeddings` endpoint.
 
-Other semantic flags: `--semantic-top-k K`, `--semantic-threshold T`, `--embedding-batch-size N`, `--semantic-cache-dir DIR`, `--semantic-cache-cold-capacity N`.
-
-A local embedded semantic cache is auto-enabled under the plugin config dir (`~/.config/yscope-clp-plugin/semantic-cache`, cold tier of 10 000 000 entries / ~4 GB, matching the clp-s default) so repeated semantic queries score in-process (~sub-ms) instead of round-tripping to the endpoint. The cache is shared across all sessions and archives. Disable with `--semantic-cache-dir none` or `CLP_SEMANTIC_CACHE_DIR=none`.
+Other semantic flags: `--semantic-top-k K`, `--semantic-threshold T`, `--embedding-batch-size N`.
 
 ```bash
 ./plugins/clp/bin/clp-s-search-kql /tmp/session-archive \
