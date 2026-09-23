@@ -14,15 +14,16 @@ jq -r '.templates | group_by(.category)[] | "### \(.[0].category)\n" + (map("- "
 jq -c '.query_plan[]' /tmp/logtype-classification.json
 ```
 
-Spawn ONE insight subagent (Agent tool), model **haiku**; if the report comes back unusable, tell the user before re-spawning with `sonnet`. Replace `SEARCH_WRAPPER` with the **resolved absolute path** of `${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql` — the subagent does not inherit `${CLAUDE_PLUGIN_ROOT}`, so the literal variable will not work there.
+Spawn ONE insight subagent (Agent tool), model **haiku**; if the report comes back unusable, tell the user before re-spawning with `sonnet`. Replace `SEARCH_WRAPPER` with the **resolved absolute path** of `${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql` — the subagent does not inherit `${CLAUDE_PLUGIN_ROOT}`, so the literal variable will not work there. Likewise pass `FREQS_FILE` as the absolute path the bootstrap printed.
 
 ## Insight subagent prompt template
 
-Fill in `ARCHIVE`, `GOAL`, the schema fields, and the extracted taxonomy / templates-by-category / query_plan:
+Fill in `ARCHIVE`, `GOAL`, `FREQS_FILE` (the bootstrap's `FREQS_FILE=` path, or `unavailable` when it reported `FREQS=UNAVAILABLE`), the schema fields, and the extracted taxonomy / templates-by-category / query_plan:
 
 ```
 Analyze this CLP archive by executing the provided query plan: ARCHIVE
 Search wrapper: SEARCH_WRAPPER
+Template frequencies: FREQS_FILE
 Goal: GOAL
 
 SCHEMA (field names in this archive):
@@ -58,13 +59,13 @@ Method (follow strictly):
      <logger>:*<substr>* AND <message>:*term*
    Fall back to project+grep only when the distinctive text needs a regex the
    wildcard syntax can't express.
-3. Per-template FREQUENCIES for the whole archive in one pass (the count
-   baseline) — project the message field, templatize, uniq -c:
-     SEARCH_WRAPPER --projection <message> ARCHIVE '*' \
-       | grep '^{' | jq -r '.<message>' \
-       | sed -E 's/\{[^}]+\}/<*>/g; s/0x[0-9a-fA-F]+/<*>/g; s/\b[0-9]+\b/<*>/g' \
-       | sort | uniq -c | sort -rn
-   Report the dominant templates by count as "top repeated messages".
+3. Per-template FREQUENCIES for the whole archive (the count baseline) are
+   already computed from the counts clp-s stored at compression time. The
+   frequencies file holds {"count":N,"logtype":"..."} NDJSON, most frequent
+   first; read the top entries with `head -20 FREQS_FILE`. Report the
+   dominant templates by count as "top repeated messages". Never recompute
+   frequencies by projecting and counting messages. If the frequencies are
+   "unavailable", say so in the Logtype Baseline section and omit counts.
 4. Total records: '*'. Severity breakdown: one count per severity value.
    Logger breakdown: project logger + uniq -c. Time span: project the
    timestamp field and use head/tail (records are chronological; do NOT sort),

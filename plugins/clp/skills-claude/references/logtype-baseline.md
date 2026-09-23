@@ -1,26 +1,21 @@
 # Logtype baseline reference (logtype-insights)
 
-Read this only when needed: the bootstrap misbehaves (empty dump, fallback questions), the user drills into individual templates, or you need the retrieval/semantic patterns. The happy path never needs this file — the `logtype-insights-bootstrap` script encapsulates the dump and the cache probe.
+Read this only when needed: the bootstrap misbehaves (empty dump, missing frequencies), the user drills into individual templates, or you need the retrieval/semantic patterns. The happy path never needs this file — the `logtype-insights-bootstrap` script encapsulates the dump and the cache probe.
 
 ## stats.log_shapes details
 
-- `stats.log_shapes` dumps the logtype dictionary: one raw JSON object per line, `{"archive_id":"...","count":...,"id":N,"shape":"..."}`. The shape string encodes variables in an archive-dependent form — regular archives use raw placeholder bytes (0x11 int, 0x12 str, 0x13 float; `count` is null), clpp/`--experimental` archives use `%rule.name%` TextShape placeholders (`count` is a real integer). `logtype-cache normalize` detects the encoding per line and renders both to the canonical `{"logtype":"...<*>..."}` NDJSON used by this skill and the cache. Works on structurized text archives and native-JSON archives alike (logtypes come from the message field).
+- `stats.log_shapes` dumps the logtype dictionary: one raw JSON object per line, `{"archive_id":"...","count":N,"id":N,"shape":"..."}`. `count` is how many values in that archive carried the template, stored by clp-s at compression time; it is `null` only for archives compressed before clp-s stored these counts. `id` numbers the templates within one archive, so aggregate across archives by template, never by `id`. Shapes mark variables as `%int%`/`%str%`/`%float%` on regular archives and `%rule.name%` on clpp/`--experimental` archives (older clp-s builds emitted raw placeholder bytes instead). `logtype-cache normalize` detects the encoding per line and renders all of them to the canonical `{"logtype":"...<*>..."}` NDJSON used by this skill and the cache, and `logtype-cache freqs` sums the counts per template. Works on structurized text archives and native-JSON archives alike (logtypes come from the message field).
 - The search wrapper adds the required `--experimental` flag automatically and rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently return nothing for it). It also prints archive-metadata header lines to stdout — always filter with `grep '^{'` before jq (the repo-wide idiom).
 - You **cannot** filter a stats query by substring (`stats.log_shapes:foo` is not valid); it always dumps the whole dictionary. Filter downstream:
   ```bash
   jq -r 'select(.logtype|test("failed";"i")) | .logtype' /tmp/logtypes.ndjson
   ```
-- `stats.log_shapes` gives templates and ids but **not per-template counts on regular archives** (`count` is null there; clpp archives carry real counts). Get counts with the templatize pass (below), which yields `count \t template` in one O(records) scan.
-
-## Templatize fallback (binaries that predate the shapes API)
-
-When `stats.log_shapes` emits no NDJSON, the bootstrap (re-run with `--message <field>`) builds an approximate baseline by projecting the message field and templatizing variable runs:
-
-```
-sed -E 's/\{[^}]+\}/<*>/g; s/0x[0-9a-fA-F]+/<*>/g; s/\b[0-9]+\b/<*>/g'
-```
-
-It writes both `/tmp/logtype-freqs.txt` (`count  template`, most frequent first) and the canonical `/tmp/logtypes.ndjson` (via `logtype-cache normalize`) so the cache probe and the rest of the workflow work unchanged. Caveat: templatized strings are approximations — they are stable across runs of the *same* binary, but need not match byte-exactly the shapes-API logtypes a newer binary would produce, so a cache entry built on the fallback path may not GROWTH-match one built on the shapes path (it will re-classify as NEW).
+- Per-template frequencies come from those stored counts, with no scan of the records. The bootstrap writes them to `/tmp/logtype-freqs.ndjson` (`{"count":N,"logtype":"..."}`, most frequent first); by hand:
+  ```bash
+  clp-s-search-kql ARCHIVE 'stats.log_shapes' | grep '^{' | logtype-cache freqs
+  ```
+  `freqs` exits 1 when any archive has `null` counts. Report frequencies as unavailable for such an archive and suggest recompressing it; do not approximate them by projecting and counting messages.
+- An empty `stats.log_shapes` dump means the clp-s binary predates the shapes API. The bootstrap then exits 1; reinstalling the plugin fixes it.
 
 ## The message field needs the same wildcard rule as any field
 
@@ -54,16 +49,11 @@ Narrow with a working scalar field first when you can — `<severity>:` and `<lo
   '<severity>:WARNING AND <message>:*StaticText*'
 ```
 
-Rules of thumb: pick the rarest distinctive static text (never a variable or a stopword); for all-template frequencies use one templatize pass, not per-template greps.
+Rules of thumb: pick the rarest distinctive static text (never a variable or a stopword); for all-template frequencies read `/tmp/logtype-freqs.ndjson`, not per-template greps.
 
 ## Analysis patterns
 
-- **Count per template (one pass, all templates):**
-  ```bash
-  clp-s-search-kql --projection <message> ARCHIVE '*' \
-    | grep '^{' | jq -r '.<message>' \
-    | sed -E 's/\{[^}]+\}/<*>/g; s/\b[0-9]+\b/<*>/g' | sort | uniq -c | sort -rn
-  ```
+- **Count per template (all templates):** `head -20 /tmp/logtype-freqs.ndjson`, or `jq -r 'select(.logtype|test("error";"i")) | "\(.count)\t\(.logtype)"' /tmp/logtype-freqs.ndjson` for a subset.
 - **Time span:** project the timestamp field, `head -n 1` / `tail -n 1` (records are chronological; do NOT sort); `--tge`/`--tle` only if the timestamp is a real epoch (native JSON).
 - **Scoped semantic:** `clp-s-search-kql ARCHIVE 'semantic("...") AND <severity>:<value>'`
 - **Filter the baseline with jq:**

@@ -12,13 +12,10 @@ Usage:
 
 Mechanical bootstrap for the logtype-insights skill. One call performs the
 schema-discovery sample, per-field value distributions, the logtype dictionary
-dump (with the templatize fallback for binaries that predate the shapes API),
+dump with per-template frequencies (from the counts stored in the archive),
 and the classification-cache probe — then prints a compact KEY=VALUE summary.
 
 Options:
-  --message FIELD    Message field name (clp-string). Required only when the
-                     shapes dump is empty and the templatize fallback must run
-                     (the summary says FALLBACK=TEMPLATIZE_NEEDS_MESSAGE).
   --max-chars N      Character limit the cache fingerprint is computed at
                      (default: 512, or $CLP_LOGTYPE_MAX_CHARS). Must match the
                      --max-chars later passed to logtype-cluster and
@@ -36,23 +33,25 @@ Summary keys printed on stdout (grep-able):
                       value distribution per top-level scalar field; low
                       distinct => severity/logger-like, high => message-like
   LOGTYPE_COUNT=      distinct logtypes in the archive (report to the user)
-  FALLBACK=           SHAPES_OK | TEMPLATIZE_USED | TEMPLATIZE_NEEDS_MESSAGE
+  FREQS=              OK | UNAVAILABLE  (UNAVAILABLE: an archive predates the
+                      stored per-logtype counts; FREQS_HINT= says why)
   CACHE_MODE=         UPTODATE | GROWTH | NEW  (from logtype-cache diff)
   APP_KEY= BASE_KEY=  cache keys (BASE_KEY only on GROWTH)
   TO_CLASSIFY=        number of templates that need classifying (0 on UPTODATE)
   MAX_CHARS=          character limit the fingerprint used; pass the same value
                       to logtype-cluster and logtype-cache
-  LOGTYPES_FILE= TO_CLASSIFY_FILE= FREQS_FILE=
+  LOGTYPES_FILE= TO_CLASSIFY_FILE=
                       paths of the produced files
+  FREQS_FILE=         {"count":N,"logtype":"..."} NDJSON, most frequent first,
+                      summed over all archives (FREQS=OK only)
   CLASSIFICATION_FILE=      cached plan, fetched for you (UPTODATE only)
   BASE_CLASSIFICATION_FILE= base entry, fetched for you (GROWTH only)
 
-Exit codes: 0 summary produced (all FALLBACK/CACHE_MODE outcomes), 1 archive or
+Exit codes: 0 summary produced (all FREQS/CACHE_MODE outcomes), 1 archive or
 dump failure, 2 usage error.
 EOF
 }
 
-message_field=""
 max_chars="${CLP_LOGTYPE_MAX_CHARS:-512}"
 out_dir="/tmp"
 cache_dir=""
@@ -61,9 +60,6 @@ archives_dir=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --message)
-      [[ $# -ge 2 ]] || { echo "error: --message requires a value" >&2; exit 2; }
-      message_field="$2"; shift 2 ;;
     --max-chars)
       [[ $# -ge 2 ]] || { echo "error: --max-chars requires a value" >&2; exit 2; }
       max_chars="$2"; shift 2 ;;
@@ -100,7 +96,9 @@ cache_args=()
 
 logtypes_file="${out_dir}/logtypes.ndjson"
 to_classify_file="${out_dir}/logtypes-to-classify.ndjson"
-freqs_file="${out_dir}/logtype-freqs.txt"
+shapes_file="${out_dir}/log-shapes.ndjson"
+freqs_file="${out_dir}/logtype-freqs.ndjson"
+freqs_err_file="${out_dir}/logtype-freqs.err"
 err_file="${out_dir}/logtypes.err"
 diff_file="${out_dir}/lt-diff.out"
 sample_file="${out_dir}/logtype-sample.ndjson"
@@ -141,47 +139,20 @@ for field in "${dist_fields[@]}"; do
   echo "DIST field=$field distinct=$distinct sampled=$sampled_records values=$values"
 done
 
-# --- 2. Logtype dictionary dump (shapes API; templatize fallback) ------------
-fallback="SHAPES_OK"
-# normalize exits 1 on empty input (pre-shapes-API binaries) — the emptiness
-# check below decides between the templatize fallback and a hard error.
-set +o pipefail
-"$SEARCH" "$archives_dir" 'stats.log_shapes' 2>"$err_file" \
-  | grep '^{' \
-  | "$CACHE_BIN" normalize > "$logtypes_file" 2>/dev/null || true
-set -o pipefail
+# --- 2. Logtype dictionary dump + per-template frequencies -------------------
+# grep exits 1 on an empty dump; normalize then fails and reports it below.
+"$SEARCH" "$archives_dir" 'stats.log_shapes' 2>"$err_file" | grep '^{' > "$shapes_file" || true
 
-if ! grep -q '^{' "$logtypes_file" 2>/dev/null; then
-  # The binary predates the shapes API (or the dump failed). Build an
-  # approximate baseline by projecting the message field and templatizing
-  # variable runs — O(records), but yields templates AND counts in one pass.
-  if [[ -z "$message_field" ]]; then
-    echo "LOGTYPE_COUNT=0"
-    echo "FALLBACK=TEMPLATIZE_NEEDS_MESSAGE"
-    echo "LOGTYPES_FILE=$logtypes_file"
-    echo "HINT=stats.log_shapes emitted no NDJSON (see $err_file). Re-run with" \
-         "--message <field> (the clp-string message field from SAMPLE/DIST, e.g." \
-         "'message' or 'msg') to build the templatize fallback baseline."
-    exit 0
-  fi
-  set +o pipefail
-  "$SEARCH" --projection "$message_field" "$archives_dir" '*' 2>/dev/null \
-    | grep '^{' | jq -r --arg f "$message_field" '.[$f] // empty' \
-    | sed -E 's/\{[^}]+\}/<*>/g; s/0x[0-9a-fA-F]+/<*>/g; s/\b[0-9]+\b/<*>/g' \
-    | sort | uniq -c | sort -rn > "$freqs_file"
-  # Convert "  COUNT template" lines to the canonical {"logtype":...} NDJSON
-  # (jq -R JSON-escapes; normalize dedups + sorts) so the cache probe works.
-  sed -E 's/^[[:space:]]*[0-9]+ //' "$freqs_file" \
-    | jq -Rc 'select(length>0) | {logtype:.}' \
-    | "$CACHE_BIN" normalize > "$logtypes_file" 2>/dev/null || true
-  set -o pipefail
-  fallback="TEMPLATIZE_USED"
+if ! "$CACHE_BIN" normalize --shapes-file "$shapes_file" > "$logtypes_file" 2>/dev/null; then
+  echo "error: stats.log_shapes emitted no logtypes (see $err_file); the clp-s" \
+       "binary may predate the shapes API — reinstall the plugin" >&2
+  exit 1
 fi
 
-if ! grep -q '^{' "$logtypes_file" 2>/dev/null; then
-  echo "error: could not build a logtype baseline (shapes dump empty and the" \
-       "templatize fallback produced nothing; see $err_file)" >&2
-  exit 1
+# The counts come from the archive itself, so no record scan is needed.
+freqs="OK"
+if ! "$CACHE_BIN" freqs --shapes-file "$shapes_file" > "$freqs_file" 2>"$freqs_err_file"; then
+  freqs="UNAVAILABLE"
 fi
 
 # --- 3. Logtype count + classification-cache probe ---------------------------
@@ -198,7 +169,12 @@ grep '^{' "$diff_file" > "$to_classify_file" || true
 to_classify="$(grep -c '^{' "$to_classify_file" || true)"
 
 echo "LOGTYPE_COUNT=$logtype_count"
-echo "FALLBACK=$fallback"
+echo "FREQS=$freqs"
+if [[ "$freqs" == "OK" ]]; then
+  echo "FREQS_FILE=$freqs_file"
+else
+  echo "FREQS_HINT=$(head -1 "$freqs_err_file")"
+fi
 echo "CACHE_MODE=$mode"
 echo "APP_KEY=$app_key"
 echo "BASE_KEY=$base_key"
@@ -206,7 +182,6 @@ echo "TO_CLASSIFY=$to_classify"
 echo "MAX_CHARS=$max_chars"
 echo "LOGTYPES_FILE=$logtypes_file"
 echo "TO_CLASSIFY_FILE=$to_classify_file"
-[[ "$fallback" == "TEMPLATIZE_USED" ]] && echo "FREQS_FILE=$freqs_file"
 
 # Fetch the cache entries the next steps need, so the caller doesn't have to.
 if [[ "$mode" == "UPTODATE" ]]; then

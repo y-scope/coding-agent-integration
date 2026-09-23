@@ -37,10 +37,10 @@ Read CLP's intrinsic metadata to learn what can be queried: fields and nesting, 
 
 ### Interpreting discovery output
 
-- `stats.log_shapes` requires a binary with the shapes API; the wrapper enables the required experimental flag. Regular archive entries can have `count: null`: that is not zero or a measured frequency.
+- `stats.log_shapes` requires a binary with the shapes API; the wrapper enables the experimental flag so clpp archives open too. Each entry's `count` is how many values in that archive carried the template, stored at compression time. It is `null` for archives compressed before clp-s stored these counts: that is not zero or a measured frequency.
 - `logtype-cache normalize` renders variable placeholders as `<*>` and deduplicates displayed templates. Retain the raw dictionary when identifiers and original encodings matter. Downstream, `logtype-cluster` caps each template at a character limit (512 by default) and de-duplicates the capped forms for embedding, and `logtype-cache` fingerprints that same capped, de-duplicated set — while the templates it stores stay full.
 - Bootstrap's `SAMPLE` and `DIST` come from sampled records, capped at 20,000 by default. They are discovery aids, not full-archive counts or stored numeric range/statistics metadata.
-- Bootstrap reports `FALLBACK=SHAPES_OK` when dictionary discovery succeeds. Identify any templatization fallback separately when evaluating coverage.
+- Bootstrap reports `FREQS=OK` with a `FREQS_FILE=` when every archive stored its counts; that file holds complete per-template frequencies. `FREQS=UNAVAILABLE` means at least one archive predates the stored counts, and no frequencies are reported for it.
 
 The capabilities overview also discusses stored numeric ranges and statistics. The local interfaces documented here do not establish a dedicated retrieval command for that metadata; numeric range predicates in record queries are a separate operation.
 

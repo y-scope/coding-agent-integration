@@ -50,13 +50,15 @@ Examples:
 Stats queries (dictionary dumps, not KQL): 'stats.log_shapes' emits the
 archive's logtype dictionary as NDJSON ({"archive_id","count","id","shape"});
 'stats.schema_tree' and 'stats.archives' emit schema and archive metadata.
-These require the shapes API (clp-core >= 0.13) and --experimental, which the
-wrapper adds automatically. Shape strings come in two encodings — regular
-archives use raw placeholder bytes (0x11 int, 0x12 str, 0x13 float; count is
-null), clpp/--experimental archives use %rule.name% TextShape placeholders
-(count is an integer) — `logtype-cache normalize` detects the encoding per
-line and renders both to '<*>'. The legacy 'stats.logtypes' query is
-rejected — shapes-API binaries silently return nothing for it.
+These require the shapes API (clp-core >= 0.13); the wrapper adds
+--experimental so clpp archives open too. `count` is how many values carried
+the shape, stored at compression time (null for archives compressed before
+clp-s stored it). Shapes mark variables as %int%/%str%/%float% on regular
+archives and %rule.name% on clpp archives (older builds emit raw placeholder
+bytes); `logtype-cache normalize` renders all of them to '<*>', and
+`logtype-cache freqs` sums the counts per template. The legacy
+'stats.logtypes' query is rejected — shapes-API binaries silently return
+nothing for it.
 
 This search wrapper intentionally does not expose clp-s output handlers,
 reducers, results-cache writes, decompression, or arbitrary clp-s option

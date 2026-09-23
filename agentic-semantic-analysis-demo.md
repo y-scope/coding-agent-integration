@@ -67,7 +67,7 @@ For prepared JSONL whose timestamp field is named `timestamp`:
 
 Use the actual timestamp field for your data. Supported plain-text logs can instead be ingested with `--structurize`; inspect parsing warnings and account for skipped files. Do not apply that preprocessing to already structured JSONL.
 
-Save the compression summary and bootstrap output. Confirm that records were ingested, inspect the schema, and require `FALLBACK=SHAPES_OK` for the dictionary-based demo. If it reports a templatization fallback, resolve the binary/data compatibility or label that run separately. Bootstrap field distributions are sampled and must not be reported as complete frequencies.
+Save the compression summary and bootstrap output. Confirm that records were ingested, inspect the schema, and require `FREQS=OK` for the dictionary-based demo. If it reports `FREQS=UNAVAILABLE`, recompress the logs with the current binary. Bootstrap field distributions are sampled and must not be reported as complete frequencies.
 
 Preserve the dictionary before normalization as well:
 

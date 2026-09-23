@@ -150,20 +150,20 @@ jq -s 'length' release-testing/workdir/logtypes.ndjson
 
 Expected: `100` — 250 records collapse to 100 distinct templates.
 
-Which templates repeat most? Project the messages, templatize, count:
+Which templates repeat most? The archive stores a count per template at compression time, so no record scan is needed:
 
 ```bash
-"$B/clp-s-search-kql" --projection message "$ARCHIVE" '*' 2>/dev/null \
-  | grep '^{' | jq -r '.message' \
-  | sed -E 's/\{[^}]+\}/<*>/g; s/0x[0-9a-fA-F]+/<*>/g; s/\b[0-9]+\b/<*>/g' \
-  | sort | uniq -c | sort -rn | head -3
+"$B/clp-s-search-kql" "$ARCHIVE" 'stats.log_shapes' 2>/dev/null \
+  | grep '^{' | "$B/logtype-cache" freqs | head -3
 ```
 
 Expected (top entry):
 
 ```
-      9 Triton not installed or not compatible; certain GPU-related functions will not be available.
+{"count": 9, "logtype": "Triton not installed or not compatible; certain GPU-related functions will not <*> available."}
 ```
+
+The counts over all 100 templates sum to 250, the number of records.
 
 ## Step 6 — The classification cache (NEW → UPTODATE → GROWTH)
 
@@ -252,7 +252,7 @@ By the way — Steps 2, 5, and the cache probe are what the `logtype-insights` s
   --out-dir release-testing/workdir/bootstrap "$ARCHIVE"
 ```
 
-Expected: a `SAMPLE=` record, `DIST field=...` value distributions for the four fields, `LOGTYPE_COUNT=100`, `FALLBACK=SHAPES_OK`, and `CACHE_MODE=UPTODATE` (the classification you stored above is fetched to `release-testing/workdir/bootstrap/logtype-classification.json`).
+Expected: a `SAMPLE=` record, `DIST field=...` value distributions for the four fields, `LOGTYPE_COUNT=100`, `FREQS=OK` with a `FREQS_FILE=` path, and `CACHE_MODE=UPTODATE` (the classification you stored above is fetched to `release-testing/workdir/bootstrap/logtype-classification.json`).
 
 ## Step 7 — Semantic search (natural language)
 
@@ -310,7 +310,8 @@ rm -rf release-testing/workdir
 | `jq: parse error: Invalid numeric literal` | You piped wrapper output straight into `jq`. The wrapper prints header lines first — always filter with `grep '^{'`. |
 | `message:<word>` returns 0 | Expected (Step 4). Message content is not KQL-searchable; project + grep instead. |
 | Step 5 prints `error: no shape/logtype entries found in input` and the count is 0 | Your `clp-s` predates the shapes API (e.g. clp-core 0.12.x) — the underlying error (`--experimental flag set but archive was not created with --experimental`) is hidden by the `2>/dev/null` in the pipeline. Your archive is fine and Steps 1–4/7–8 remain valid; only the binary is too old. Point `CLP_S_BIN` at a 0.13+ build and re-run Step 5 — no recompression needed. |
-| `logtype-insights-bootstrap` prints `LOGTYPE_COUNT=0` and `FALLBACK=TEMPLATIZE_NEEDS_MESSAGE` | Same 0.12.x cause as above, handled gracefully: re-run the bootstrap adding `--message message` and it builds an approximate templatized baseline (`FALLBACK=TEMPLATIZE_USED`) that feeds the cache probe normally. Template strings/counts may differ slightly from the shapes-API numbers in this doc. |
+| `logtype-insights-bootstrap` exits 1 with `error: stats.log_shapes emitted no logtypes` | Same 0.12.x cause as above. Point `CLP_S_BIN` at a 0.13+ build and re-run. |
+| `logtype-cache freqs` fails, or the bootstrap prints `FREQS=UNAVAILABLE` | The archive was compressed by a `clp-s` build that did not store per-template counts (`count` is `null` in `stats.log_shapes`). Recompress with the current build. |
 | `error: stats.logtypes was renamed to stats.log_shapes` | You ran the legacy query spelling; use `stats.log_shapes` as shown in Step 5. |
 | Semantic search: endpoint error | The embedding server is unreachable. Check the endpoint (`--semantic-endpoint`, `CLP_SEMANTIC_ENDPOINT`, or `~/.config/yscope-clp-plugin/semantic-endpoint`); the plugin never starts a server itself. Keyword/logtype steps are unaffected. |
 | `logtype-cluster` exits 2 | The embedding server is unreachable or rejected (same fix as above). Clustering is pure Python standard library, so there is no dependency to install. `setup` no longer exists — clustering uses the server, not a local model. |
