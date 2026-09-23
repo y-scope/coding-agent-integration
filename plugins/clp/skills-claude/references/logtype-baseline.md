@@ -30,10 +30,12 @@ ARCHIVE=<archive-dir>
 SEARCH="${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql"
 MSG=<message-field>
 # example records of one template, with timestamp + severity (--limit stops the scan early):
-"$SEARCH" --limit 20 --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '<message>:*DistinctiveStaticText*'
+"$SEARCH" --limit 20 --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '<message>:"*Distinctive Static Text*"'
 # count of that template — native --count, not --projection | grep -c:
-"$SEARCH" --count "$ARCHIVE" '<message>:*DistinctiveStaticText*'
+"$SEARCH" --count "$ARCHIVE" '<message>:"*Distinctive Static Text*"'
 ```
+
+Always quote the wildcard value — `field:"*value*"` not `field:*value*`. The `*` wildcard works inside quotes; without them, any space in the value causes clp-s to treat the term as natural language and trigger the semantic fallback (which errors when no endpoint is active). Single-word values work either way, but quoting unconditionally is the safe habit.
 
 `--count` counts inside the engine, so use it for every "how many records match X" question, including filters that match most of the archive (e.g. all INFO records); there is no need to count a rare complement and subtract. `--unique FIELD` lists a field's distinct values but still scans the matching records. See `shared-search.md` for both.
 
@@ -41,7 +43,7 @@ Avoid `grep`/`jq` over a full record scan: it is O(records), and messages can be
 
 ```bash
 "$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
-  '<message>:*foo* OR <message>:*bar* OR <message>:*baz*'
+  '<message>:"*foo*" OR <message>:"*bar*" OR <message>:"*baz*"'
 ```
 
 Fall back to project + grep/jq only when the distinctive text needs real regex features KQL wildcards can't express (anchors, character classes, backreferences):
@@ -55,7 +57,7 @@ Narrow with a working scalar field first when you can — `<severity>:` and `<lo
 
 ```bash
 "$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
-  '<severity>:WARNING AND <message>:*StaticText*'
+  '<severity>:WARNING AND <message>:"*Static Text*"'
 ```
 
 Rules of thumb: pick the rarest distinctive static text (never a variable or a stopword); for all-template frequencies read `/tmp/logtype-freqs.ndjson`, not per-template greps.

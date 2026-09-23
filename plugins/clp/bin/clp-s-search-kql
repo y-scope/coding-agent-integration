@@ -284,6 +284,11 @@ if [[ "$kql_query" =~ [Ss][Ee][Mm][Aa][Nn][Tt][Ii][Cc][[:space:]]*\( ]]; then
   semantic_active=1
 fi
 
+# Catch unquoted wildcard values that contain spaces, e.g. field:*multi word* — clp-s
+# treats those as natural language and triggers the semantic fallback, which errors when
+# no endpoint is active. The fix is always field:"*multi word*".
+"$(dirname "$0")/kql-validate-wildcards" "$kql_query" || exit 2
+
 # Per-invocation binary override composes with the CLP_S_BIN env var already
 # honored by resolve_clp_s; the flag wins for this invocation only.
 if [[ -n "$clp_s_bin_override" ]]; then
