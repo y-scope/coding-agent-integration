@@ -18,7 +18,31 @@ Allowed search controls:
   -i, --ignore-case        Ignore case distinctions.
   --archive-id ID          Limit search to one archive ID.
   --projection COLUMNS     Project comma-separated columns, e.g. level,message.
-                           May be repeated.
+                           May be repeated. Mutually exclusive with --count
+                           and --unique.
+  --count                  Count matching records with clp-s's in-engine
+                           aggregation; no per-record JSON is serialized, so
+                           it is far cheaper than projecting and piping to
+                           `grep -c '^{'` when many records match (measured:
+                           ~6-7s whether a filter matched 92 or 16.5M records
+                           of a 16.5M-record archive). Prints NOTHING when zero
+                           records match; treat empty output as a real zero.
+  --unique FIELD           List the distinct values of FIELD among matches with
+                           clp-s's in-engine aggregation. Still scans the
+                           matching records (measured: ~84s for a
+                           low-cardinality field over 16.5M records), but beats
+                           projecting and running sort | uniq.
+  --limit N                Stop after N matching records. Which N come back is
+                           unspecified (not the earliest or latest), so use it
+                           for examples, never for counts. It always caps the
+                           output size. It only saves time when the limit is
+                           reached before later schema tables or archives are
+                           read: clp-s decompresses a whole table before
+                           returning its first record, so on an archive whose
+                           records sit in one large table, --limit 1 costs
+                           about as much as a full scan.
+                           --count, --unique, and --limit are mutually
+                           exclusive.
   --semantic-endpoint URL  Embedding server URL for semantic search. Defaults
                            to $CLP_SEMANTIC_ENDPOINT, then the semantic-endpoint
                            config file, then the built-in remote endpoints.
@@ -50,13 +74,15 @@ Examples:
 Stats queries (dictionary dumps, not KQL): 'stats.log_shapes' emits the
 archive's logtype dictionary as NDJSON ({"archive_id","count","id","shape"});
 'stats.schema_tree' and 'stats.archives' emit schema and archive metadata.
-These require the shapes API (clp-core >= 0.13) and --experimental, which the
-wrapper adds automatically. Shape strings come in two encodings — regular
-archives use raw placeholder bytes (0x11 int, 0x12 str, 0x13 float; count is
-null), clpp/--experimental archives use %rule.name% TextShape placeholders
-(count is an integer) — `logtype-cache normalize` detects the encoding per
-line and renders both to '<*>'. The legacy 'stats.logtypes' query is
-rejected — shapes-API binaries silently return nothing for it.
+These require the shapes API (clp-core >= 0.13); the wrapper adds
+--experimental so clpp archives open too. `count` is how many values carried
+the shape, stored at compression time (null for archives compressed before
+clp-s stored it). Shapes mark variables as %int%/%str%/%float% on regular
+archives and %rule.name% on clpp archives (older builds emit raw placeholder
+bytes); `logtype-cache normalize` renders all of them to '<*>', and
+`logtype-cache freqs` sums the counts per template. The legacy
+'stats.logtypes' query is rejected — shapes-API binaries silently return
+nothing for it.
 
 This search wrapper intentionally does not expose clp-s output handlers,
 reducers, results-cache writes, decompression, or arbitrary clp-s option
@@ -88,6 +114,9 @@ EOF
 tge=""
 tle=""
 archive_id=""
+limit=""
+count_mode=0
+unique_field=""
 ignore_case=0
 projections=()
 archives_dir=""
@@ -180,6 +209,22 @@ while [[ $# -gt 0 ]]; do
       split_projection_csv "$2"
       shift 2
       ;;
+    --limit)
+      [[ $# -ge 2 ]] || { echo "error: --limit requires a value" >&2; exit 2; }
+      [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "error: --limit must be a positive integer" >&2; exit 2; }
+      limit="$2"
+      shift 2
+      ;;
+    --count)
+      count_mode=1
+      shift
+      ;;
+    --unique)
+      [[ $# -ge 2 ]] || { echo "error: --unique requires a field name" >&2; exit 2; }
+      [[ "$2" != -* ]] || { echo "error: invalid --unique field: $2" >&2; exit 2; }
+      unique_field="$2"
+      shift 2
+      ;;
     -i|--ignore-case)
       ignore_case=1
       shift
@@ -223,6 +268,16 @@ done
 
 if [[ -z "$archives_dir" || -z "$kql_query" ]]; then
   usage >&2
+  exit 2
+fi
+
+num_output_modes=$(( count_mode + (${#unique_field} > 0) + (${#limit} > 0) ))
+if [[ "$num_output_modes" -gt 1 ]]; then
+  echo "error: --count, --unique, and --limit are mutually exclusive" >&2
+  exit 2
+fi
+if [[ ( "$count_mode" -eq 1 || -n "$unique_field" ) && ${#projections[@]} -gt 0 ]]; then
+  echo "error: --count and --unique cannot be combined with --projection" >&2
   exit 2
 fi
 
@@ -316,6 +371,15 @@ if [[ "$ignore_case" -eq 1 ]]; then
 fi
 if [[ -n "$archive_id" ]]; then
   search_options+=(--archive-id "$archive_id")
+fi
+if [[ -n "$limit" ]]; then
+  search_options+=(--limit "$limit")
+fi
+if [[ "$count_mode" -eq 1 ]]; then
+  search_options+=(--count)
+fi
+if [[ -n "$unique_field" ]]; then
+  search_options+=(--unique "$unique_field")
 fi
 if [[ "$semantic_active" -eq 1 ]]; then
   search_options+=(--semantic-endpoint "$semantic_endpoint")

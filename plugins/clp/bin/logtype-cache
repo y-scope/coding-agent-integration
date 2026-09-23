@@ -48,12 +48,18 @@ Subcommands:
                                   one {"logtype":"..."} per line, deduplicated.
                                   Detects the shape encoding per line — raw
                                   placeholder bytes (0x11 int / 0x12 str /
-                                  0x13 float, count=null) on regular archives,
-                                  %rule.name% TextShape placeholders
-                                  (count=integer) on clpp archives — and
-                                  renders both as `<*>`. Lines that already
-                                  carry a "logtype" field pass through
-                                  unchanged.
+                                  0x13 float) from older clp-s builds, or
+                                  %placeholder% text (%int%, %rule.name%, ...)
+                                  — and renders both as `<*>`. Lines that
+                                  already carry a "logtype" field pass
+                                  through unchanged.
+    freqs [--shapes-file F]        Sum the per-shape `count`s of a
+                                  `stats.log_shapes` dump (stdin, or F) per
+                                  canonical logtype, across archives. Prints
+                                  {"count":N,"logtype":"..."} NDJSON, most
+                                  frequent first. Exits 1 when any line has a
+                                  null count (an archive compressed before
+                                  clp-s stored per-logtype counts).
     key   --logtypes-file F        Print the app_key for the given logtypes
                                   NDJSON file (accepts raw shape lines too).
     count --logtypes-file F        Print the number of distinct logtypes in the
@@ -165,20 +171,21 @@ def entry_truncated_set(obj, fallback):
     limit = entry_max_chars(obj, fallback)
     return {truncate_chars(t, limit) for t in entry_template_set(obj)}, limit
 
-# Raw CLP shape strings come in TWO encodings, depending on how the archive
-# was compressed:
+# `stats.log_shapes` shape strings come in TWO encodings:
 #
-# 1. Regular archives (clp_s logtype dictionary): variables are placeholder
-#    bytes (see clp::ir::VariablePlaceholder) 0x11 integer, 0x12
-#    dictionary/string, 0x13 float. A backslash is the escape byte: it is
-#    consumed and the byte after it emitted literally (mirroring
-#    LogTypeDictionaryEntry::decode_log_type).
-# 2. clpp (--experimental) archives (TextShape): variables are
-#    '%qualified.rule.name%' placeholders, a literal '%' is doubled to '%%',
-#    and there is NO backslash escaping.
+# 1. Raw regular-archive logtypes, emitted by clp-s builds that predate
+#    per-logtype counts: variables are placeholder bytes (see
+#    clp::ir::VariablePlaceholder) 0x11 integer, 0x12 dictionary/string, 0x13
+#    float. A backslash is the escape byte: it is consumed and the byte after
+#    it emitted literally (mirroring LogTypeDictionaryEntry::decode_log_type).
+# 2. Placeholder text: variables are '%name%' placeholders, a literal '%' is
+#    doubled to '%%', and there is NO backslash escaping. clpp
+#    (--experimental) archives use '%qualified.rule.name%'; current clp-s
+#    renders regular archives the same way, with %int%/%str%/%float%.
 #
-# stats.log_shapes marks the difference in its `count` field: clpp lines carry
-# a real integer count, regular-archive lines hard-code null.
+# The encoding is detected from the placeholder bytes, not from `count`:
+# current clp-s emits integer counts for regular archives too, and null for
+# regular archives compressed before counts were stored — rendered either way.
 _PLACEHOLDER_INT = "\x11"
 _PLACEHOLDER_STR = "\x12"
 _PLACEHOLDER_FLOAT = "\x13"
@@ -249,10 +256,9 @@ def shape_line_to_logtype(obj):
     """Return the canonical logtype string for one parsed NDJSON line, or None.
 
     Lines carrying a "logtype" field are already canonical and pass through
-    unchanged. Lines carrying a raw "shape" field are rendered according to
-    the encoding the emitting archive used — clpp TextShape when `count` is an
-    integer, regular placeholder-byte encoding when `count` is null/absent
-    (stats.log_shapes hard-codes null for regular archives)."""
+    unchanged. Lines carrying a "shape" field are rendered according to its
+    encoding: raw placeholder bytes when any are present, placeholder text
+    otherwise (see the encoding notes above)."""
     if not isinstance(obj, dict):
         return None
     lt = obj.get("logtype")
@@ -261,10 +267,9 @@ def shape_line_to_logtype(obj):
     shape = obj.get("shape")
     if not isinstance(shape, str):
         return None
-    count = obj.get("count")
-    if isinstance(count, int) and not isinstance(count, bool):
-        return render_text_shape(shape)
-    return render_shape(shape)
+    if any(p in shape for p in (_PLACEHOLDER_INT, _PLACEHOLDER_STR, _PLACEHOLDER_FLOAT)):
+        return render_shape(shape)
+    return render_text_shape(shape)
 
 # Let `head`/pagers close our stdout without raising BrokenPipeError.
 if hasattr(signal, "SIGPIPE"):
@@ -440,44 +445,88 @@ def backfill_entry(entry, missing, limit):
     return extended
 
 
-def cmd_normalize(args):
-    """Render stats.log_shapes NDJSON (stdin or --shapes-file) to canonical
-    {"logtype": "..."} NDJSON, deduplicated and sorted."""
-    if args.shapes_file:
-        if not os.path.isfile(args.shapes_file):
-            print(f"error: shapes file not found: {args.shapes_file}", file=sys.stderr)
-            return 2
+def read_shape_objects(shapes_file):
+    """Return (objects, rc): the JSON objects parsed from a stats.log_shapes
+    dump (shapes_file, or stdin when None), skipping non-JSON lines. A nonzero
+    rc means the input could not be read and the error was already printed."""
+    if shapes_file:
+        if not os.path.isfile(shapes_file):
+            print(f"error: shapes file not found: {shapes_file}", file=sys.stderr)
+            return [], 2
         try:
-            src = open(args.shapes_file, "r", encoding="utf-8")
+            src = open(shapes_file, "r", encoding="utf-8")
         except OSError as e:
             print(f"error: cannot read shapes file: {e}", file=sys.stderr)
-            return 2
+            return [], 2
     else:
         src = sys.stdin
-    logtypes = set()
+    objects = []
     try:
         for line in src:
             line = line.strip()
             if not line or not line.startswith("{"):
                 continue
             try:
-                obj = json.loads(line)
+                objects.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-            lt = shape_line_to_logtype(obj)
-            if isinstance(lt, str) and lt.strip():
-                logtypes.add(lt)
     except UnicodeDecodeError as e:
         print(f"error: shapes file is not valid UTF-8: {e}", file=sys.stderr)
-        return 2
+        return [], 2
     finally:
         if src is not sys.stdin:
             src.close()
+    return objects, 0
+
+
+def cmd_normalize(args):
+    """Render stats.log_shapes NDJSON (stdin or --shapes-file) to canonical
+    {"logtype": "..."} NDJSON, deduplicated and sorted."""
+    objects, rc = read_shape_objects(args.shapes_file)
+    if rc:
+        return rc
+    logtypes = set()
+    for obj in objects:
+        lt = shape_line_to_logtype(obj)
+        if isinstance(lt, str) and lt.strip():
+            logtypes.add(lt)
     if not logtypes:
         print("error: no shape/logtype entries found in input", file=sys.stderr)
         return 1
     for lt in sorted(logtypes):
         print(json.dumps({"logtype": lt}, ensure_ascii=False))
+    return 0
+
+
+def cmd_freqs(args):
+    """Sum stats.log_shapes counts per canonical logtype (stdin or
+    --shapes-file) and print {"count":N,"logtype":"..."} NDJSON, most frequent
+    first. Different archives number their shapes independently, so the sum is
+    keyed by the rendered logtype, never by `id`."""
+    objects, rc = read_shape_objects(args.shapes_file)
+    if rc:
+        return rc
+    counts = {}
+    missing = 0
+    for obj in objects:
+        lt = shape_line_to_logtype(obj)
+        if not isinstance(lt, str) or not lt.strip():
+            continue
+        count = obj.get("count")
+        if not isinstance(count, int) or isinstance(count, bool):
+            missing += 1
+            continue
+        counts[lt] = counts.get(lt, 0) + count
+    if missing:
+        print(f"error: {missing} stats.log_shapes line(s) have no count; the archive "
+              f"was compressed by a clp-s build that does not store per-logtype "
+              f"counts. Recompress it with the current plugin.", file=sys.stderr)
+        return 1
+    if not counts:
+        print("error: no shape/logtype entries found in input", file=sys.stderr)
+        return 1
+    for lt, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        print(json.dumps({"count": count, "logtype": lt}, ensure_ascii=False))
     return 0
 
 
@@ -743,6 +792,10 @@ def main(argv=None):
     pn = sub.add_parser("normalize", help="Render stats.log_shapes NDJSON to canonical logtype NDJSON.")
     pn.add_argument("--shapes-file", default=None, help="Input file (default: stdin).")
     pn.set_defaults(func=cmd_normalize, cache_dir=None)
+
+    pf = sub.add_parser("freqs", help="Sum stats.log_shapes counts per canonical logtype.")
+    pf.add_argument("--shapes-file", default=None, help="Input file (default: stdin).")
+    pf.set_defaults(func=cmd_freqs, cache_dir=None)
 
     pk = sub.add_parser("key", help="Compute the app_key for a logtypes NDJSON file.")
     pk.add_argument("--logtypes-file", required=True)

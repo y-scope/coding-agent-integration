@@ -77,10 +77,26 @@ Method:
    value is known, and wildcard as `message:*term*` only when the filter
    needs a substring match against message content), the columns to
    --projection, and the method:
-     - "count"        -> count matches via `... | grep -c '^{'`
-     - "project+grep" -> fold the static text into the KQL as
-                         `message:*text*` when possible; project the message
-                         field and grep only when the text needs a regex
+     - "count"        -> count matches via native `--count` (in-engine
+                         aggregation, mutually exclusive with --projection;
+                         runs in ~constant time regardless of match volume —
+                         use it even for a filter matching most of the
+                         archive). Do NOT use `--projection ... | grep -c
+                         '^{'` for a plain count — that's much slower once
+                         the match set is large. When the filter is
+                         expressible purely as message text, summing
+                         `count` over the matching templates in the
+                         bootstrap's /tmp/logtype-freqs.ndjson is an
+                         alternative that's O(distinct templates) instead
+                         of O(records).
+     - "project+grep" -> fold the static text into the KQL as OR'd wildcards,
+                         `message:*a* OR message:*b* OR message:*c*`, even for
+                         a keyword alternation — that still runs inside the
+                         search engine, not as a post-filter. Only add a real
+                         `grep`/`jq` pipe stage when the text needs a genuine
+                         regex feature (anchors, character classes,
+                         backreferences) that OR'd wildcards can't express;
+                         never use grep merely to implement `a|b|c` matching.
      - "project+jq"   -> project message/payload, jq-filter (e.g. a numeric
                          threshold on a payload leaf)
      - "semantic"     -> semantic("...") AND <scalar filter>, ONLY for an
@@ -88,7 +104,7 @@ Method:
    Example (Mongo): {"label":"Slow queries","kql":"attr.durationMillis:*",
      "project":"t.$date,attr.durationMillis,msg",
      "jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}
-   Example (vLLM):  {"label":"Memory warnings","kql":"level:WARNING AND message:*memory*",
+   Example (vLLM):  {"label":"Memory or OOM warnings","kql":"level:WARNING AND (message:*memory* OR message:*OOM* OR message:*oom-killer*)",
      "project":"timestamp,level,message",
      "method":"project+grep"}
    For GROWTH, add new plan entries only for genuinely new signals.

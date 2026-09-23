@@ -75,7 +75,7 @@ Local helpers (not `clp-s` passthroughs — they invoke `clp-s` only through the
 
 - `bin/structurize.py` — converts unstructured text logs to structured JSONL. Used by `clp-s-compress-folder --structurize`; not called directly.
 - `bin/logtype-cache` — persistent cache of the `logtype-insights` classification, with incremental update when an archive grows. See [Logtype Cache](#logtype-cache).
-- `bin/logtype-insights-bootstrap` — one-command bootstrap for the `logtype-insights` skill: schema-discovery sample, per-field value distributions, logtype dictionary dump (with the templatize fallback for binaries that predate the shapes API), and the classification-cache probe, summarized as grep-able `KEY=VALUE` lines.
+- `bin/logtype-insights-bootstrap` — one-command bootstrap for the `logtype-insights` skill: schema-discovery sample, per-field value distributions, logtype dictionary dump, per-template frequencies from the counts stored in the archive, and the classification-cache probe, summarized as grep-able `KEY=VALUE` lines.
 - `bin/logtype-cluster` (+ `logtype-cluster.py`) — groups semantically similar logtypes using embeddings from the semantic server so the LLM classifies one representative per cluster. See [Logtype Cluster](#logtype-cluster).
 
 ## Session Workflow
@@ -253,7 +253,7 @@ The skill's mechanical preamble is packaged as one command:
 ./plugins/clp/bin/logtype-insights-bootstrap /tmp/archive
 ```
 
-It samples records for schema discovery, prints per-field value distributions, dumps + normalizes the dictionary (falling back to templatization on binaries that predate the shapes API — re-run with `--message <field>` when it asks), probes the classification cache, and prints a grep-able `KEY=VALUE` summary (`LOGTYPE_COUNT=`, `FALLBACK=`, `CACHE_MODE=`, `TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths).
+It samples records for schema discovery, prints per-field value distributions, dumps + normalizes the dictionary, sums the per-template counts that clp-s stored at compression time, probes the classification cache, and prints a grep-able `KEY=VALUE` summary (`LOGTYPE_COUNT=`, `FREQS=`, `CACHE_MODE=`, `TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths). `FREQS=UNAVAILABLE` means an archive was compressed before clp-s stored those counts; recompress it to get frequencies.
 
 Note that `message:term` is an exact match against the whole field value, same as `field:term` on any field, so it correctly returns 0 unless a message equals exactly `term` — the message field being stored as a CLP-string doesn't change that. Exact match is faster, so prefer it whenever you know a field's full value; **wildcard** only for a substring match — `message:*term*` works and returns real hits, and message content almost always needs it, since it's free text. `semantic("…")` also searches the logtypes directly and is a good complement to wildcard search for concept-shaped questions.
 
@@ -267,6 +267,8 @@ LC=./plugins/clp/bin/logtype-cache
 ./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
   | grep '^{' | "$LC" normalize > /tmp/logtypes.ndjson
 "$LC" count --logtypes-file /tmp/logtypes.ndjson   # distinct templates
+./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
+  | grep '^{' | "$LC" freqs                         # {"count":N,"logtype":...}, most frequent first
 "$LC" diff  --logtypes-file /tmp/logtypes.ndjson   # UPTODATE | GROWTH | NEW
 "$LC" list                                          # cached entries + lineage
 "$LC" show <APP_KEY>

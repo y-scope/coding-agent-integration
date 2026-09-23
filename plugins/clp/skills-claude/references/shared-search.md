@@ -49,6 +49,12 @@ Use `semantic("natural language query")` in KQL to find log events whose logtype
 ## Tips
 
 - Project only the columns you need to limit data returned: when you know which fields matter, pass `--projection COLUMNS` (comma-separated; repeatable), e.g. `--projection timestamp,level`. Omit it only when you need the full record.
-- Count matches without fetching full records: `"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'KQL' | grep -c '^{`
-- Prefer one compound KQL query over several: `'field1:value AND field2 >= 1000'`
+- When a few example records are enough, pass `--limit N`. It always caps the output; it saves time only when the limit is reached before later schema tables or archives are read, because clp-s decompresses a whole table before returning its first record. Which N come back is unspecified (not the earliest or latest), so never use it for counts.
+- Count matches with `--count`, never `--projection ... | grep -c '^{'`. It counts inside the engine without serializing any record, so its cost barely depends on how many records match (measured ~6-7s whether a filter matched 92 or 16.5M records of a 16.5M-record archive). It prints one `{"archive_id":...,"count":N}` line per archive, and nothing at all when zero records match; treat empty output as a real zero. Use `grep -c '^{'` only for an incidental count from a `--projection` output you are already reading for another reason.
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --count ARCHIVE 'KQL'
+  ```
+- List a field's distinct values among matches with `--unique FIELD` instead of projecting and running `sort | uniq`. It still scans the matching records (measured ~84s for a low-cardinality field over 16.5M records), so get per-value totals with one `--count` query per value.
+- `--count`, `--unique`, and `--limit` are mutually exclusive, and `--count`/`--unique` cannot be combined with `--projection`.
+- Prefer one compound KQL query over several: `'field1:value AND field2 >= 1000'`. A keyword alternation is not a reason to grep: OR the wildcards in the query itself, `message:*a* OR message:*b* OR message:*c*`, which still runs inside the search engine. Pipe to `grep`/`jq` only when the match needs real regex features (anchors, character classes, backreferences).
 - Point at a local build with `--clp-s-bin PATH` or `CLP_S_BIN` (see the `dev` skill).

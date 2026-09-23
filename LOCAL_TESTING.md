@@ -174,12 +174,12 @@ jq -s '{schema:{message:"message"},
 "$LC" list
 ```
 
-Exercise the `logtype-insights` helper scripts. The bootstrap wraps the schema sample, the dictionary dump, and the cache probe in one command; on clp-core 0.13+ one call suffices, on older builds it prints `FALLBACK=TEMPLATIZE_NEEDS_MESSAGE` — re-run adding `--message message`:
+Exercise the `logtype-insights` helper scripts. The bootstrap wraps the schema sample, the dictionary dump with per-template frequencies, and the cache probe in one command. It needs clp-core 0.13+; older builds make it exit 1 with `error: stats.log_shapes emitted no logtypes`:
 
 ```bash
 ./plugins/clp/bin/logtype-insights-bootstrap \
   --cache-dir /tmp/smoke-lt-cache --out-dir /tmp/smoke-bootstrap "$ARCHIVE"
-# Expect DIST lines, LOGTYPE_COUNT>0, CACHE_MODE=UPTODATE (cache primed above).
+# Expect DIST lines, LOGTYPE_COUNT>0, FREQS=OK, CACHE_MODE=UPTODATE (cache primed above).
 
 # Clusterer: embeds via the semantic server (no setup, no local model).
 # Needs a reachable endpoint — the built-in remote default is used unless
