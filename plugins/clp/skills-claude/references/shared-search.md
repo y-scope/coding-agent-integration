@@ -50,7 +50,7 @@ Use `semantic("natural language query")` in KQL to find log events whose logtype
 
 - Project only the columns you need to limit data returned: when you know which fields matter, pass `--projection COLUMNS` (comma-separated; repeatable), e.g. `--projection timestamp,level`. Omit it only when you need the full record.
 - When a few example records are enough, pass `--limit N`. It always caps the output; it saves time only when the limit is reached before later schema tables or archives are read, because clp-s decompresses a whole table before returning its first record. Which N come back is unspecified (not the earliest or latest), so never use it for counts.
-- Count matches with `--count`, never `--projection ... | grep -c '^{'`. It counts inside the engine without serializing any record, so its cost barely depends on how many records match (measured ~6-7s whether a filter matched 92 or 16.5M records of a 16.5M-record archive). It prints one `{"archive_id":...,"count":N}` line per archive, and nothing at all when zero records match; treat empty output as a real zero.
+- Count matches with `--count`, never `--projection ... | grep -c '^{'`. It counts inside the engine without serializing any record, so its cost barely depends on how many records match (measured ~6-7s whether a filter matched 92 or 16.5M records of a 16.5M-record archive). It prints one `{"archive_id":...,"count":N}` line per archive, and nothing at all when zero records match; treat empty output as a real zero. Use `grep -c '^{'` only for an incidental count from a `--projection` output you are already reading for another reason.
   ```bash
   "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --count ARCHIVE 'KQL'
   ```
