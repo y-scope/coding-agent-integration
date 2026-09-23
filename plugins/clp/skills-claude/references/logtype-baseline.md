@@ -29,8 +29,8 @@ Prefer a direct KQL wildcard search on the message field for the template's dist
 ARCHIVE=<archive-dir>
 SEARCH="${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql"
 MSG=<message-field>
-# records of one template, with timestamp + severity:
-"$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '<message>:*DistinctiveStaticText*'
+# example records of one template, with timestamp + severity (--limit stops the scan early):
+"$SEARCH" --limit 20 --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '<message>:*DistinctiveStaticText*'
 # count of that template:
 "$SEARCH" --projection $MSG "$ARCHIVE" '<message>:*DistinctiveStaticText*' | grep -c '^{'
 ```

@@ -41,5 +41,6 @@ Use `semantic("natural language query")` in KQL to find log events whose logtype
 ## Tips
 
 - Project only the columns you need to limit data returned: when you know which fields matter, pass `--projection COLUMNS` (comma-separated; repeatable), e.g. `--projection timestamp,payload.name`. Omit it only when you need the full record.
+- When a few example records are enough, pass `--limit N`: the search stops after N matches instead of scanning the whole archive. Which N come back is unspecified (not the earliest or latest), so never use it for counts.
 - Count matches without fetching full records: `~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'KQL' | grep -c '^{'
 - Prefer one compound KQL query over several: `'field1:value AND field2 >= 1000'`

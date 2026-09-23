@@ -104,11 +104,9 @@ diff_file="${out_dir}/lt-diff.out"
 sample_file="${out_dir}/logtype-sample.ndjson"
 
 # --- 1. Sample records for schema discovery + value distributions ------------
-# head closes the pipe early, so the search stops after $sample_cap records
-# even on huge archives; the resulting SIGPIPE is expected, not an error.
-set +o pipefail
-"$SEARCH" "$archives_dir" '*' 2>/dev/null | grep '^{' | head -n "$sample_cap" > "$sample_file"
-set -o pipefail
+# --limit stops the search after $sample_cap records, even on huge archives.
+# grep exits 1 when nothing matched; the emptiness check below reports that.
+"$SEARCH" --limit "$sample_cap" "$archives_dir" '*' 2>/dev/null | grep '^{' > "$sample_file" || true
 
 if [[ ! -s "$sample_file" ]]; then
   echo "error: no records returned from the archive (is $archives_dir a CLP archive dir?)" >&2

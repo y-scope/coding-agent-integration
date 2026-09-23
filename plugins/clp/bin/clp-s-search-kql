@@ -19,6 +19,10 @@ Allowed search controls:
   --archive-id ID          Limit search to one archive ID.
   --projection COLUMNS     Project comma-separated columns, e.g. level,message.
                            May be repeated.
+  --limit N                Stop after N matching records instead of scanning
+                           the rest of the archive. Which N records come back
+                           is unspecified (not the earliest or latest), so use
+                           it for examples, never for counts.
   --semantic-endpoint URL  Embedding server URL for semantic search. Defaults
                            to $CLP_SEMANTIC_ENDPOINT, then the semantic-endpoint
                            config file, then the built-in remote endpoints.
@@ -90,6 +94,7 @@ EOF
 tge=""
 tle=""
 archive_id=""
+limit=""
 ignore_case=0
 projections=()
 archives_dir=""
@@ -180,6 +185,12 @@ while [[ $# -gt 0 ]]; do
     --projection)
       [[ $# -ge 2 ]] || { echo "error: --projection requires a value" >&2; exit 2; }
       split_projection_csv "$2"
+      shift 2
+      ;;
+    --limit)
+      [[ $# -ge 2 ]] || { echo "error: --limit requires a value" >&2; exit 2; }
+      [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "error: --limit must be a positive integer" >&2; exit 2; }
+      limit="$2"
       shift 2
       ;;
     -i|--ignore-case)
@@ -318,6 +329,9 @@ if [[ "$ignore_case" -eq 1 ]]; then
 fi
 if [[ -n "$archive_id" ]]; then
   search_options+=(--archive-id "$archive_id")
+fi
+if [[ -n "$limit" ]]; then
+  search_options+=(--limit "$limit")
 fi
 if [[ "$semantic_active" -eq 1 ]]; then
   search_options+=(--semantic-endpoint "$semantic_endpoint")
