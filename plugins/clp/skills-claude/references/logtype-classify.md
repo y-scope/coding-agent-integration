@@ -115,11 +115,15 @@ Method:
      - other (note but don't deep-search)
 2. Build a QUERY PLAN: targeted queries derived from the representatives,
    expressed in the discovered field names. Per entry: label, the KQL filter
-   (using the searchable scalar fields — severity/logger/payload leaves; NOT
-   message:term, which is a clp-string and returns 0), the columns to
-   --projection, and the method:
+   (scalar fields — severity/logger/payload leaves — narrow fastest; the
+   message field is also searchable but bare `message:term` returns 0 since
+   it only matches a whole-field value, so wildcard it as `message:*term*`
+   when the filter needs message content), the columns to --projection, and
+   the method:
      - "count"        -> count matches via `... | grep -c '^{'`
-     - "project+grep" -> project the message field, grep its static text
+     - "project+grep" -> fold the static text into the KQL as
+                         `message:*text*` when possible; project the message
+                         field and grep only when the text needs a regex
      - "project+jq"   -> project message/payload, jq-filter (e.g. a numeric
                          threshold on a payload leaf)
      - "semantic"     -> semantic("...") AND <scalar filter>, ONLY for an
@@ -127,14 +131,15 @@ Method:
    Example (Mongo): {"label":"Slow queries","kql":"attr.durationMillis:*",
      "project":"t.$date,attr.durationMillis,msg",
      "jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}
-   Example (vLLM):  {"label":"Memory warnings","kql":"level:WARNING",
-     "project":"timestamp,level,message","grep":"memory|OOM|KV",
+   Example (vLLM):  {"label":"Memory warnings","kql":"level:WARNING AND message:*memory*",
+     "project":"timestamp,level,message",
      "method":"project+grep"}
    For GROWTH, add new plan entries only for genuinely new signals.
-3. Remember: the message field is a clp-string. KQL `message:term` /
-   `message:*term*` return 0. Only the scalar fields (severity, logger,
-   payload leaves) are KQL-searchable; message content is retrieved by
-   projecting the message field and grepping.
+3. Remember: the message field is a clp-string, so a bare `message:term`
+   returns 0 (whole-field match only). `message:*term*` (wildcarded) works
+   and is fast — prefer it. Scalar fields (severity, logger,
+   payload leaves) are also searchable and narrow fastest when combined with
+   a message wildcard in one compound query.
 
 Write the result as valid JSON to /tmp/logtype-class.json with EXACTLY this
 shape, then print "DONE" and nothing else:

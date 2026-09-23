@@ -48,17 +48,21 @@ QUERY PLAN (each entry derived from a real template — execute each):
 
 Method (follow strictly):
 1. Execute every query_plan entry. For "count": run the KQL and `grep -c
-   '^{'`. For "project+grep": run the KQL with --projection, then `grep '^{' |
-   jq -r '.<message>' | grep -Ei '<grep>'`. For "project+jq": run the KQL with
-   --projection, then `grep '^{' | jq -r '<jq>'`. For "semantic": run
+   '^{'`. For "project+grep": prefer folding the grep target into the KQL as
+   `<message>:*text*` (wildcarded, works — see step 2) alongside the given
+   `kql` filter, and only pipe to `grep -Ei '<grep>'` when the target needs a
+   regex the wildcard syntax can't express. For "project+jq": run the KQL
+   with --projection, then `grep '^{' | jq -r '<jq>'`. For "semantic": run
    `semantic("...") AND <kql>` with --projection.
-2. CRITICAL — the message field is a CLP-string: KQL `<message>:term` and
-   `<message>:*term*` return 0. Only the scalar fields (severity, logger,
-   payload leaves) are KQL-searchable. Retrieve/count records of a template by
-   projecting the message field and grepping its distinctive STATIC text.
-   Narrow first with a working scalar field when you can:
-     <severity>:<value>   (works)  then project message + grep
-     <logger>:*<substr>*  (works)  then project message + grep
+2. The message field is a CLP-string, so a bare term only matches a value
+   equal to the **whole** field: `<message>:term` returns 0. Wildcard it —
+   `<message>:*term*` works and is fast. Prefer
+   it over project+grep for a template's distinctive STATIC text. Combine
+   with a scalar field in one compound query when you can:
+     <severity>:<value> AND <message>:*term*
+     <logger>:*<substr>* AND <message>:*term*
+   Fall back to project+grep only when the distinctive text needs a regex the
+   wildcard syntax can't express.
 3. Per-template FREQUENCIES for the whole archive in one pass (the count
    baseline) — project the message field, templatize, uniq -c:
      SEARCH_WRAPPER --projection <message> ARCHIVE '*' \
@@ -82,9 +86,10 @@ Efficiency rules:
 - Compound KQL, not many separate queries.
 - Project aggressively; omit --projection only when you need the full record.
 - Do NOT use --tge/--tle unless the schema says the timestamp is epoch.
-- CRITICAL: the message field is a clp-string — `<message>:term` and
-  `<message>:*term*` ALWAYS return 0. Search message content by projecting it
-  and grepping/jq-filtering. Only the scalar fields are KQL-searchable.
+- The message field is a clp-string — a bare `<message>:term` returns 0
+  because it only matches a whole-field value. Use `<message>:*term*`
+  (wildcarded) to search message content; it's fast. Fall back
+  to projecting and grepping/jq-filtering only when the match needs a regex.
 - Add --ignore-case when case is uncertain.
 
 Return ONLY a Markdown Logtype Insights Report with these sections:

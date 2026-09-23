@@ -337,12 +337,13 @@ templatization on binaries that predate the shapes API — re-run with
 a grep-able `KEY=VALUE` summary (`LOGTYPE_COUNT=`, `FALLBACK=`, `CACHE_MODE=`,
 `TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths).
 
-Note that the message field is stored as a CLP-string, so KQL **cannot** match
-message content: `message:term` and `message:*term*` always return 0. Retrieve
-message content by projecting the field and grepping it; the scalar fields
-(severity, logger, JSON payload leaves) are KQL-searchable normally.
-`semantic("…")` searches the logtypes directly and is the one KQL construct
-that reaches message content.
+Note that the message field is stored as a CLP-string, so a bare term only
+matches a value equal to the whole field: `message:term` returns 0.
+**Wildcard it** — `message:*term*` works and returns real hits, same as
+wildcarding any other field for a substring match. Scalar fields (severity,
+logger, JSON payload leaves) are also KQL-searchable and narrow fastest since
+they need no wildcard. `semantic("…")` also searches the logtypes directly
+and is a good complement to wildcard search for concept-shaped questions.
 
 ### Logtype Cache
 

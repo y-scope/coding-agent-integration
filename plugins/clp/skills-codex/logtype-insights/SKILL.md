@@ -153,14 +153,17 @@ the user sees no progress at all.
 
    Build a QUERY PLAN: targeted queries derived from the representatives,
    expressed in the discovered field names. Per entry: `label`, the KQL `kql`
-   (searchable scalar fields only — severity/logger/payload leaves; NOT
-   `<message>:term`, a clp-string that returns 0), the `project` columns, and
-   the `method` (`count` / `project+grep` (with `grep`) / `project+jq` (with
-   `jq`) / `semantic`). For GROWTH, add entries only for genuinely new
+   (scalar fields — severity/logger/payload leaves — narrow fastest; the
+   message field is also searchable but a bare `<message>:term` returns 0
+   since it only matches a whole-field value, so wildcard it as
+   `<message>:*term*` when the filter needs message content), the `project`
+   columns, and the `method` (`count` / `project+grep` (with `grep`, or fold
+   the text into `kql` as `message:*text*` when possible) / `project+jq`
+   (with `jq`) / `semantic`). For GROWTH, add entries only for genuinely new
    signals. Example (Mongo):
    `{"label":"Slow queries","kql":"attr.durationMillis:*","project":"t.$date,attr.durationMillis,msg","jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}`.
    Example (vLLM):
-   `{"label":"Memory warnings","kql":"level:WARNING","project":"timestamp,level,message","grep":"memory|OOM|KV","method":"project+grep"}`.
+   `{"label":"Memory warnings","kql":"level:WARNING AND message:*memory*","project":"timestamp,level,message","method":"project+grep"}`.
 
    Write `/tmp/logtype-class.json` with this shape — `assignments` must
    contain EVERY cluster id exactly once, with ONLY ids, never logtype text
@@ -237,11 +240,13 @@ the user sees no progress at all.
      with KQL when exact totals matter). **Time span**: project the timestamp
      field and use `head`/`tail` (chronological; do NOT sort), or
      `--tge`/`--tle` if the timestamp is a real epoch.
-   - CRITICAL: the message field is a clp-string — `<message>:term` /
-     `<message>:*term*` ALWAYS return 0. Retrieve message content by
-     projecting it and grepping/jq-filtering; only scalar fields are
-     KQL-searchable. Narrow first with a scalar (`<severity>:<value>`,
-     `<logger>:*<substr>*`), then project message + grep.
+   - The message field is a clp-string — a bare `<message>:term` returns 0
+     because it only matches a whole-field value. Use `<message>:*term*`
+     (wildcarded) to search message content directly; it works and is fast.
+     Combine with a scalar filter in one compound query when you can
+     (`<severity>:<value> AND <message>:*term*`,
+     `<logger>:*<substr>* AND <message>:*term*`). Fall back to projecting
+     message + grep only when the match needs a regex.
 
 8. Present a Markdown Logtype Insights Report:
    1. **Summary** — total records, severity counts, time span, top logger/component.
@@ -270,21 +275,31 @@ the user sees no progress at all.
 
 The message field (`message` structurized, `msg` native Mongo, …) is stored as
 a CLP-string (logtype template + encoded variables — what makes
-`stats.log_shapes` and the compression work). **KQL cannot search message
-content** — `<message>:term` and `<message>:*term*` always return 0; only
-existence (`<message>:*`) matches. Scalar fields (severity, logger, payload
-leaf paths) ARE KQL-searchable. Retrieve/count records of a template by
-projecting the message field and grepping its rarest distinctive STATIC text:
+`stats.log_shapes` and the compression work). Consequence: a bare term only
+matches a value equal to the **whole** field — `<message>:term` returns 0
+unless the entire message is that one word. **Add wildcards to search message
+content**: `<message>:*term*` works and returns real hits, and is fast, not
+just a fallback. Scalar fields (severity, logger, payload leaf paths) are
+also KQL-searchable and narrow fastest since they need no wildcard. Prefer a
+direct wildcard search on the message field over project+grep:
 
 ```bash
 S=~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql
+"$S" --projection <timestamp>,<severity>,<message> <archive-dir> \
+  '<severity>:WARNING AND <message>:*StaticText*'
+```
+
+Fall back to projecting the message field and grepping/jq-filtering only when
+the distinctive text needs a regex the wildcard syntax can't express:
+
+```bash
 "$S" --projection <timestamp>,<severity>,<message> <archive-dir> '<severity>:WARNING' \
   | grep '^{' | jq -rc 'select(.<message>|test("StaticText";"i"))'
 ```
 
-Semantic search (`semantic("…")`) also reads the logtypes directly and is the
-one KQL construct that reaches message content. The insight pass (step 7)
-always runs one mandatory scoped semantic cross-check; beyond that, use it
+Semantic search (`semantic("…")`) also reads the logtypes directly and is a
+good complement to wildcard search for concept-shaped questions. The insight
+pass (step 7) always runs one mandatory scoped semantic cross-check; beyond that, use it
 only for an ambiguous template, grouping similar templates, or a conceptual
 user question — always scoped: `semantic("…") AND <severity>:<value>`. Flags:
 `--semantic-top-k` (default 5) and `--semantic-threshold` (default 0.3; raise
