@@ -48,17 +48,18 @@ of the *same* binary, but need not match byte-exactly the shapes-API logtypes
 a newer binary would produce, so a cache entry built on the fallback path may
 not GROWTH-match one built on the shapes path (it will re-classify as NEW).
 
-## Searching the message field: exact vs. wildcard
+## The message field needs the same wildcard rule as any field
 
 The message field (`message` structurized, `msg` native Mongo, …) is stored as
 a CLP-string (logtype template + encoded variables — what makes
-`stats.log_shapes` and the compression work), but it follows the same KQL
-rule as every other field: `<message>:term` is an **exact** match against the
-whole field value, so it correctly returns 0 whenever no message equals just
-`term`. To match a substring, wildcard it — `<message>:*term*` — same as
-`shared-search.md`'s general wildcard rule. The scalar fields (severity,
-logger, payload leaf paths) are also KQL-searchable and narrow faster, since
-an exact match on them needs no wildcard. The logtype-baseline approach still
+`stats.log_shapes` and the compression work). That storage is irrelevant to
+searching it: `<message>:term` is an exact match, same as `<field>:term` on
+any field per `shared-search.md`, so it correctly returns 0 unless a message
+equals exactly `term`. Exact match is faster, so prefer it whenever you know
+the full field value (e.g. a scalar like severity or logger); wildcard only
+when you need a substring match — `<message>:*term*` — which is what message
+content almost always needs, since it's free text, not an enumerable value.
+The logtype-baseline approach still
 matters even with wildcard search available: the dictionary dump gives the
 full template vocabulary up front, so queries can be built from real
 templates instead of guessed keywords. Semantic search (`semantic("…")`) also

@@ -56,8 +56,10 @@ Method (follow strictly):
    `semantic("...") AND <kql>` with --projection.
 2. `<message>:term` is an **exact** match against the whole field value, so
    it correctly returns 0 unless a message equals exactly `term` — the
-   message field follows the same KQL rule as any other field. For a
-   substring, wildcard it: `<message>:*term*` works and is fast. Prefer it
+   message field follows the same KQL rule as any other field. Exact match
+   is faster, so use it directly wherever a field's full value is known
+   (severity, an exact logger path); message content is free text, so it
+   almost always needs a substring wildcard: `<message>:*term*`. Prefer that
    over project+grep for a template's distinctive STATIC text. Combine with
    a scalar field in one compound query when you can:
      <severity>:<value> AND <message>:*term*
@@ -88,8 +90,9 @@ Efficiency rules:
 - Project aggressively; omit --projection only when you need the full record.
 - Do NOT use --tge/--tle unless the schema says the timestamp is epoch.
 - `<message>:term` is an exact match, so it correctly returns 0 unless a
-  message equals exactly `term`. Wildcard it — `<message>:*term*` — to
-  search message content by substring; it's fast. Fall back to projecting
+  message equals exactly `term`. Exact match is faster, so use it when you
+  know a field's full value; message content is free text and almost always
+  needs a substring wildcard — `<message>:*term*`. Fall back to projecting
   and grepping/jq-filtering only when the match needs a regex.
 - Add --ignore-case when case is uncertain.
 

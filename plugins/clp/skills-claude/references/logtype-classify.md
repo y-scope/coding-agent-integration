@@ -115,11 +115,12 @@ Method:
      - other (note but don't deep-search)
 2. Build a QUERY PLAN: targeted queries derived from the representatives,
    expressed in the discovered field names. Per entry: label, the KQL filter
-   (scalar fields — severity/logger/payload leaves — narrow fastest since an
-   exact match needs no wildcard; the message field is also searchable, but
-   `message:term` is an exact match and correctly returns 0 unless a message
-   equals exactly `term`, so wildcard it as `message:*term*` when the filter
-   needs message content), the columns to --projection, and the method:
+   (any field, including message, is KQL-searchable — `message:term` is an
+   exact match and correctly returns 0 unless a message equals exactly
+   `term`; exact match is faster, so prefer it for scalar fields whose full
+   value is known, and wildcard as `message:*term*` only when the filter
+   needs a substring match against message content), the columns to
+   --projection, and the method:
      - "count"        -> count matches via `... | grep -c '^{'`
      - "project+grep" -> fold the static text into the KQL as
                          `message:*text*` when possible; project the message
@@ -137,10 +138,11 @@ Method:
    For GROWTH, add new plan entries only for genuinely new signals.
 3. Remember: `message:term` is an exact match, so it correctly returns 0
    unless a message equals exactly `term` — it is not a sign that message
-   content is unsearchable. `message:*term*` (wildcarded) works and is fast
-   — prefer it. Scalar fields (severity, logger, payload leaves) are also
-   searchable and narrow fastest when combined with a message wildcard in
-   one compound query.
+   content is unsearchable. Use exact match when a field's full value is
+   known (it's faster); `message:*term*` (wildcarded) is for substring
+   matches, which message content almost always needs. Combine a scalar
+   filter (severity, logger, payload leaves) with the message wildcard in
+   one compound query when both apply.
 
 Write the result as valid JSON to /tmp/logtype-class.json with EXACTLY this
 shape, then print "DONE" and nothing else:
