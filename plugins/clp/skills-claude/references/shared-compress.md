@@ -1,15 +1,11 @@
 # Shared compress reference
 
-Shared by the `compress` (stable clp-s) and `clpp-compress` (clpp / `--experimental`)
-skills. Read this for the compress workflow and rules; read `clpp-shared.md` for
-the clpp-specific additions when compressing with a parsing specification.
+Shared by the `compress` (stable clp-s) and `clpp-compress` (clpp / `--experimental`) skills. Read this for the compress workflow and rules; read `clpp-shared.md` for the clpp-specific additions when compressing with a parsing specification.
 
 ## Rules
 
-- Use only the plugin wrappers. Do not call bare `clp-s` or expose arbitrary CLP
-  commands/options.
-- Compress exactly **one** selected session JSONL file. Do not compress full
-  Claude/Codex trees.
+- Use only the plugin wrappers. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
+- Compress exactly **one** selected session JSONL file. Do not compress full Claude/Codex trees.
 - Do not pass `--single-file-archive`; search uses regular archive directories.
 - Always use `--timestamp-key timestamp`.
 - Session roots: Claude `~/.claude/projects`, Codex `${CODEX_HOME:-~/.codex}/sessions`.
@@ -24,10 +20,9 @@ the clpp-specific additions when compressing with a parsing specification.
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions"
    ```
 
-   Use `--agent claude` or `--agent codex` if the user asks for one agent.
+Use `--agent claude` or `--agent codex` if the user asks for one agent.
 
-2. Present choices with these columns: `IDX`, `AGENT`, modified timestamp,
-   raw bytes, human size, session name, project/cwd, session ID.
+2. Present choices with these columns: `IDX`, `AGENT`, modified timestamp, raw bytes, human size, session name, project/cwd, session ID.
 
 3. After the user chooses an `IDX`, compress using the printed manifest:
 
@@ -38,8 +33,7 @@ the clpp-specific additions when compressing with a parsing specification.
      --timestamp-key timestamp
    ```
 
-   Or, when the user gives a path directly, use `--session-file` instead of the
-   selection manifest.
+Or, when the user gives a path directly, use `--session-file` instead of the selection manifest.
 
 4. After compression, always report:
 
@@ -51,14 +45,11 @@ the clpp-specific additions when compressing with a parsing specification.
    - `Selected session`
    - `Archive metadata`
 
-Use the printed top-level `Archives dir` for search/decompress. Wrappers resolve
-the inner `clp-s` archive directory automatically.
+Use the printed top-level `Archives dir` for search/decompress. Wrappers resolve the inner `clp-s` archive directory automatically.
 
 ## Stable compress options
 
-`--compression-level`, `--target-encoded-size`, `--print-archive-stats`,
-`--output-dir`, `--dry-run`, and the archive-root config all apply to both the
-stable and the clpp (`--experimental`) paths.
+`--compression-level`, `--target-encoded-size`, `--print-archive-stats`, `--output-dir`, `--dry-run`, and the archive-root config all apply to both the stable and the clpp (`--experimental`) paths.
 
 ## Useful commands
 
@@ -86,6 +77,4 @@ Dry run:
 
 ## Pointing at a local build
 
-Pass `--clp-s-bin PATH` per invocation, or set `CLP_S_BIN` so every wrapper uses a
-locally-built `clp-s` (e.g. an in-flight clpp branch). See the `dev` skill for
-build/test/lint of a local CLP source tree.
+Pass `--clp-s-bin PATH` per invocation, or set `CLP_S_BIN` so every wrapper uses a locally-built `clp-s` (e.g. an in-flight clpp branch). See the `dev` skill for build/test/lint of a local CLP source tree.

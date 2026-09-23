@@ -44,14 +44,7 @@ git rev-parse HEAD
 
 Replace `DEMO_LOGS` with the prepared dataset directory. If needed, set `CLP_S_BIN` to the exact binary. Keep this shell open for the subsequent commands. The run directory is temporary; copy the finished evidence package to a durable location before sharing it.
 
-For optional clustering, no model install is needed: `logtype-cluster` embeds
-templates through the same already-running embedding server that powers
-semantic search (`setup` has been removed). Configure the endpoint once —
-`CLP_SEMANTIC_ENDPOINT`, `--semantic-endpoint`, or the `semantic-endpoint`
-config file — or rely on the built-in default. There is no local dependency
-(clustering is pure Python standard library). Templates are capped at
-`--max-chars` (default 512 characters) and de-duplicated before embedding;
-record the endpoint and the character limit for reproduction.
+For optional clustering, no model install is needed: `logtype-cluster` embeds templates through the same already-running embedding server that powers semantic search (`setup` has been removed). Configure the endpoint once — `CLP_SEMANTIC_ENDPOINT`, `--semantic-endpoint`, or the `semantic-endpoint` config file — or rely on the built-in default. There is no local dependency (clustering is pure Python standard library). Templates are capped at `--max-chars` (default 512 characters) and de-duplicated before embedding; record the endpoint and the character limit for reproduction.
 
 ## 3. Ingest and inspect the capture
 

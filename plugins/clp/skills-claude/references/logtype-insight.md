@@ -1,8 +1,6 @@
 # Logtype insight reference (logtype-insights step 7)
 
-Read this when a classification exists (`/tmp/logtype-classification.json`,
-either fresh from step 6 or fetched from the cache on UPTODATE). It covers
-building the insight subagent prompt and the report format.
+Read this when a classification exists (`/tmp/logtype-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE). It covers building the insight subagent prompt and the report format.
 
 ## Build the prompt from the classification
 
@@ -16,17 +14,11 @@ jq -r '.templates | group_by(.category)[] | "### \(.[0].category)\n" + (map("- "
 jq -c '.query_plan[]' /tmp/logtype-classification.json
 ```
 
-Spawn ONE insight subagent (Agent tool), model **haiku**; if the report comes
-back unusable, tell the user before re-spawning with `sonnet`. Replace
-`SEARCH_WRAPPER` with the
-**resolved absolute path** of `${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql` —
-the subagent does not inherit `${CLAUDE_PLUGIN_ROOT}`, so the literal variable
-will not work there.
+Spawn ONE insight subagent (Agent tool), model **haiku**; if the report comes back unusable, tell the user before re-spawning with `sonnet`. Replace `SEARCH_WRAPPER` with the **resolved absolute path** of `${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql` — the subagent does not inherit `${CLAUDE_PLUGIN_ROOT}`, so the literal variable will not work there.
 
 ## Insight subagent prompt template
 
-Fill in `ARCHIVE`, `GOAL`, the schema fields, and the extracted taxonomy /
-templates-by-category / query_plan:
+Fill in `ARCHIVE`, `GOAL`, the schema fields, and the extracted taxonomy / templates-by-category / query_plan:
 
 ```
 Analyze this CLP archive by executing the provided query plan: ARCHIVE
@@ -121,20 +113,11 @@ Return ONLY a Markdown Logtype Insights Report with these sections:
 
 ## Report format (present in this order)
 
-1. **Summary** — total records, severity counts, archive span, top
-   logger/component.
-2. **Logtype Baseline** — distinct template count, top templates by frequency
-   with counts, the discovered category breakdown. The spine of the report.
-3. **Issues & Warnings** — errors, warnings, top 3 warning *templates*
-   (grounded, not guessed), actionable problems; semantic-only findings if any.
-4. **Notable Categories** — per discovered category of interest, counts +
-   representative templates and what they indicate.
-5. **Performance Signals** — timing/throughput/slow-operation templates and
-   counts (if the app produces any); semantic-only findings if any.
-6. **Configuration & Startup** — config/init templates grounded in the baseline
-   (if any).
-7. **Semantic Search Coverage** — mandatory (the semantic pass always runs),
-   but report only meaningful findings — matches that template-classification
-   missed or confirmed, with their queries; drop empty/no-hit queries. If
-   nothing meaningful surfaced, one line saying so.
+1. **Summary** — total records, severity counts, archive span, top logger/component.
+2. **Logtype Baseline** — distinct template count, top templates by frequency with counts, the discovered category breakdown. The spine of the report.
+3. **Issues & Warnings** — errors, warnings, top 3 warning *templates* (grounded, not guessed), actionable problems; semantic-only findings if any.
+4. **Notable Categories** — per discovered category of interest, counts + representative templates and what they indicate.
+5. **Performance Signals** — timing/throughput/slow-operation templates and counts (if the app produces any); semantic-only findings if any.
+6. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
+7. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that template-classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
 8. **Follow-up queries** — 2–3 concrete queries derived from templates.
