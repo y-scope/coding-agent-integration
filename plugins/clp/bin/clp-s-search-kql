@@ -372,9 +372,6 @@ fi
 if [[ -n "$archive_id" ]]; then
   search_options+=(--archive-id "$archive_id")
 fi
-if [[ -n "$limit" ]]; then
-  search_options+=(--limit "$limit")
-fi
 if [[ "$count_mode" -eq 1 ]]; then
   search_options+=(--count)
 fi
@@ -429,5 +426,18 @@ if [[ "$semantic_active" -eq 1 ]]; then
 else
   unset CLP_SEMANTIC_ENDPOINT CLP_SEMANTIC_BATCH_SIZE CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT \
     CLP_SEMANTIC_CACHE_DIR
+fi
+# This clp-s build has no native --limit option on the search subcommand, so
+# --limit is implemented by piping to `head`. clp-s gets SIGPIPE (exit 141)
+# once head stops reading, which is expected and not a real failure.
+if [[ -n "$limit" ]]; then
+  set +o pipefail
+  "${cmd[@]}" | head -n "$limit"
+  status=("${PIPESTATUS[@]}")
+  set -o pipefail
+  if [[ "${status[0]}" -ne 0 && "${status[0]}" -ne 141 ]]; then
+    exit "${status[0]}"
+  fi
+  exit 0
 fi
 exec "${cmd[@]}"
