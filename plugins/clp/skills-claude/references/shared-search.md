@@ -17,7 +17,8 @@ For session-log workflows (list → compress → search), use the `claude-code-t
 | Concept | Syntax |
 | --- | --- |
 | String match | `field:value` |
-| Wildcard | `field:*value*` |
+| Wildcard (single word) | `field:*value*` |
+| Wildcard (multi-word) | `field:"*multi word value*"` |
 | Numeric compare | `durationMs >= 30000` |
 | Boolean | `A AND B`, `A OR B`, `NOT A` |
 | Phrase | `"multi word phrase"` |
@@ -26,14 +27,14 @@ For session-log workflows (list → compress → search), use the `claude-code-t
 
 A literal term matches only the **entire** field value. To match a substring, add explicit wildcards:
 
-- `hello*` — match `hello` at the **start** of a value (e.g. `hello world`).
-- `*hello*` — match `hello` **anywhere** (e.g. `abc hello 123`).
-- `message: "*job*"` — quoted wildcard form, as in the clp-s docs.
+- `message:*hello*` — match `hello` anywhere in the message.
+- `message:"*SQL txn*"` — multi-word substring: **quote the whole wildcard value** when it contains a space.
 
-A bare `INFO` (no wildcards) returns 0 even when `INFO` appears in the data — that is correct, not a bug. Always add `*` around the substring.
+A bare `INFO` (no wildcards) returns 0 even when `INFO` appears in the data — correct, not a bug. Always add `*` around the substring.
 
-### Two gotchas
+### Three gotchas
 
+- **Always quote wildcard values that contain spaces.** Use `field:"*multi word*"`, never `field:*multi word*`. An unquoted wildcard value with a space is treated by clp-s as a natural language query, which triggers the semantic fallback. When no semantic endpoint is active, the search errors out with "no embedding endpoint is configured" — a confusing error for what is just a missing pair of quotes. The `*` wildcard still works inside the quotes.
 - **Time ranges are flags, never KQL.** Use `--tge EPOCH_MS` / `--tle EPOCH_MS`: `python3 -c "from datetime import datetime,timezone; print(int(datetime(Y,M,D,h,m,s,tzinfo=timezone.utc).timestamp()*1000))"`
 - **Array fields use dot notation.** Use `message.content.type:tool_use`, not `message.content[].type:tool_use`.
 
