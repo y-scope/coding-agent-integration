@@ -372,6 +372,16 @@ fi
 if [[ -n "$archive_id" ]]; then
   search_options+=(--archive-id "$archive_id")
 fi
+# Only pass --limit when this clp-s binary supports it. Older builds have no
+# --limit option on the search subcommand at all and abort with "unrecognized
+# option <archives_dir>" if it's passed, so probe --help and fall back to
+# piping through `head` (still correct, just always pays for a full scan
+# rather than possibly short-circuiting early).
+limit_supported=0
+if [[ -n "$limit" ]] && grep -q -- '--limit' <("$clp_s_bin" s --help 2>&1); then
+  limit_supported=1
+  search_options+=(--limit "$limit")
+fi
 if [[ "$count_mode" -eq 1 ]]; then
   search_options+=(--count)
 fi
@@ -427,10 +437,10 @@ else
   unset CLP_SEMANTIC_ENDPOINT CLP_SEMANTIC_BATCH_SIZE CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT \
     CLP_SEMANTIC_CACHE_DIR
 fi
-# This clp-s build has no native --limit option on the search subcommand, so
-# --limit is implemented by piping to `head`. clp-s gets SIGPIPE (exit 141)
-# once head stops reading, which is expected and not a real failure.
-if [[ -n "$limit" ]]; then
+# Fallback path: this clp-s build has no native --limit, so implement it by
+# piping to `head`. clp-s gets SIGPIPE (exit 141) once head stops reading,
+# which is expected and not a real failure.
+if [[ -n "$limit" && "$limit_supported" -eq 0 ]]; then
   set +o pipefail
   "${cmd[@]}" | head -n "$limit"
   status=("${PIPESTATUS[@]}")
