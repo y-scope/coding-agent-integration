@@ -52,7 +52,7 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
 
    Efficiency rules (follow strictly):
    - Use compound KQL instead of multiple queries: field1:A AND field2:B
-   - Count with: clp-s-search-kql ARCHIVE 'KQL' | grep -c '^{'
+   - Count with: clp-s-search-kql --count ARCHIVE 'KQL' (in-engine; prints nothing when zero records match)
    - Project aggressively — fetch only the fields you need, not full records: pass
      `--projection COLUMNS` (comma-separated) for the required columns (e.g.
      `--projection timestamp,durationMs`).
@@ -70,7 +70,7 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
    needed.
 
    Suggested starting queries:
-   - Tool call breakdown: run one query per tool name using message.content.name:TOOL | grep -c '^{'
+   - Tool call breakdown: list tool names with --unique message.content.name, then --count per name using message.content.name:TOOL
    - Failures: toolUseResult.success:false OR toolUseResult.stderr:* OR level:error
    - Long turns: subtype:turn_duration AND durationMs >= 30000
    - Compaction: subtype:compact_boundary
@@ -129,9 +129,9 @@ CLP searches the compressed archive — unmatched records are never decompressed
 - Ask it to return only: archive path, queries run, key findings, and next useful queries.
 - This keeps the parent context lean and parallelizes independent query batches.
 
-**Count matches — `grep -c '^{'` skips header lines; each result line starts with `{`:**
+**Count matches with `--count` (in-engine, no records serialized; prints `{"archive_id":...,"count":N}`, or nothing when zero records match):**
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'message.content.name:Bash' | grep -c '^{'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --count ARCHIVE 'message.content.name:Bash'
 ```
 
 **Compound KQL — one query instead of multiple + joins:**

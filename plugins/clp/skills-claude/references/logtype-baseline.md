@@ -31,11 +31,20 @@ SEARCH="${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql"
 MSG=<message-field>
 # example records of one template, with timestamp + severity (--limit stops the scan early):
 "$SEARCH" --limit 20 --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '<message>:*DistinctiveStaticText*'
-# count of that template:
-"$SEARCH" --projection $MSG "$ARCHIVE" '<message>:*DistinctiveStaticText*' | grep -c '^{'
+# count of that template — native --count, not --projection | grep -c:
+"$SEARCH" --count "$ARCHIVE" '<message>:*DistinctiveStaticText*'
 ```
 
-Fall back to project + grep/jq only when the distinctive text has characters KQL's wildcard syntax can't express cleanly (e.g. it needs a regex, not a substring):
+`--count` counts inside the engine, so use it for every "how many records match X" question, including filters that match most of the archive (e.g. all INFO records); there is no need to count a rare complement and subtract. `--unique FIELD` lists a field's distinct values but still scans the matching records. See `shared-search.md` for both.
+
+Avoid `grep`/`jq` over a full record scan: it is O(records), and messages can be large, while KQL search runs inside the engine. A keyword alternation is not a reason to grep; OR the wildcards in one query:
+
+```bash
+"$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
+  '<message>:*foo* OR <message>:*bar* OR <message>:*baz*'
+```
+
+Fall back to project + grep/jq only when the distinctive text needs real regex features KQL wildcards can't express (anchors, character classes, backreferences):
 
 ```bash
 "$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '*' \
@@ -54,6 +63,10 @@ Rules of thumb: pick the rarest distinctive static text (never a variable or a s
 ## Analysis patterns
 
 - **Count per template (all templates):** `head -20 /tmp/logtype-freqs.ndjson`, or `jq -r 'select(.logtype|test("error";"i")) | "\(.count)\t\(.logtype)"' /tmp/logtype-freqs.ndjson` for a subset.
+- **Count for a group of templates:** sum `count` over the templates matching the group's static text. This is O(distinct templates), not a record scan, so prefer it to `--count` whenever the group is defined by message text alone:
+  ```bash
+  jq -s '[.[] | select(.logtype | test("compact|flush|memtable|ingest";"i")) | .count] | add' /tmp/logtype-freqs.ndjson
+  ```
 - **Time span:** project the timestamp field, `head -n 1` / `tail -n 1` (records are chronological; do NOT sort); `--tge`/`--tle` only if the timestamp is a real epoch (native JSON).
 - **Scoped semantic:** `clp-s-search-kql ARCHIVE 'semantic("...") AND <severity>:<value>'`
 - **Filter the baseline with jq:**

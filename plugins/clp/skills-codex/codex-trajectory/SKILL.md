@@ -44,7 +44,7 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
 
    Efficiency rules (follow strictly):
    - Use compound KQL instead of multiple queries: field1:A AND field2:B
-   - Count with: clp-s-search-kql ARCHIVE 'KQL' | grep -c '^{'
+   - Count with: clp-s-search-kql --count ARCHIVE 'KQL' (in-engine; prints nothing when zero records match)
    - Project aggressively — fetch only the fields you need, not full records: pass
      `--projection COLUMNS` (comma-separated) for the required columns (e.g.
      `--projection timestamp,payload.name`).
@@ -62,7 +62,7 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
    needed.
 
    Suggested starting queries:
-   - Tool call breakdown: run one query per tool name using payload.name:TOOL | grep -c '^{'
+   - Tool call breakdown: list tool names with --unique payload.name, then --count per name using payload.name:TOOL
    - Failures: payload.type:function_call_output AND payload.success:false
    - Stderr output: payload.stderr:*
    - Token usage: payload.type:token_count OR payload.info.total_token_usage.total_tokens:*
@@ -120,9 +120,9 @@ CLP searches the compressed archive — unmatched records are never decompressed
 - Ask it to return only: archive path, queries run, key findings, and next useful queries.
 - This keeps the parent context lean and parallelizes independent query batches.
 
-**Count matches — `grep -c '^{'` skips header lines; each result line starts with `{`:**
+**Count matches with `--count` (in-engine, no records serialized; prints `{"archive_id":...,"count":N}`, or nothing when zero records match):**
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'payload.type:function_call' | grep -c '^{'
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql --count ARCHIVE 'payload.type:function_call'
 ```
 
 **Compound KQL — one query instead of multiple + joins:**
