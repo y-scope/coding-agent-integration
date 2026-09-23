@@ -20,7 +20,9 @@ plugins/clp/.codex-plugin/plugin.json
 plugins/clp/bin/
     Restricted-passthrough bash wrappers (clp-s-*) and shared lib/clp-common.sh,
     plus local helpers that are not clp-s passthroughs (structurize.py,
-    logtype-cache, logtype-insights-bootstrap, logtype-cluster).
+    logtype-cache, logtype-insights-bootstrap, logtype-cluster,
+    logtype-insight-extract, logtype-query-plan-run, kql-build,
+    kql-validate-wildcards; shared Python in lib/kql_build.py).
 plugins/clp/skills-claude/
     Claude Code skills: compress, compress-folder, search, logtype-insights,
     decompress, claude-code-trajectory, clpp-compress, clpp-search, dev,

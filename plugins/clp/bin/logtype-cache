@@ -36,7 +36,9 @@ where each entry is the classification JSON, e.g.:
       "schema": {"timestamp": "t.$date", "severity": "s", ...},
       "taxonomy": [{"category": "errors", "description": "..."}],
       "templates": [{"logtype": "...", "category": "errors"}],
-      "query_plan": [{"label": "Errors", "kql": "s:E OR s:F", "method": "count"}],
+      "query_plan": [{"label": "Errors", "method": "count",
+                      "match": {"any": [{"field": "s", "eq": "E"},
+                                        {"field": "s", "eq": "F"}]}}],
       "classified_at": "2026-08-07T...",
       "max_chars": 512,                    # limit the key was computed at
       "grown_from": "<previous app_key>"   # present only when incrementally grown
@@ -98,6 +100,18 @@ Subcommands:
                                   merged result under NK. With no --base-key (or
                                   an absent base) this behaves like `put`. The
                                   merged entry records `grown_from: BK`.
+    set-plan --key K [--cache-dir D]
+                                  Replace entry K's query_plan with the plan read
+                                  from stdin (a JSON object with "query_plan",
+                                  or a bare array), leaving its templates,
+                                  taxonomy, and schema untouched. Stamps
+                                  `plan_updated_at`. Used to store a repaired
+                                  plan. Exit 1 when K is not cached.
+
+put, put-merged, and set-plan refuse (exit 2, nothing stored) a query_plan
+entry without a valid "match" filter -- a malformed filter, or a hand-written
+"kql" string (see lib/kql_build.py). put-merged checks only the entries read
+from stdin; the base entry's plan is kept as is.
     list  [--cache-dir D]          List cached entries: key, template count,
                                   classified_at, grown_from.
     show  KEY [--cache-dir D]      Pretty-print one cached entry.
@@ -114,6 +128,9 @@ import signal
 import sys
 import tempfile
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from kql_build import FilterError, check_entry  # noqa: E402
 
 # Cache keys are sha256 hex digests; anything else is rejected by entry_path.
 _KEY_RE = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -650,6 +667,28 @@ def atomic_store(cache_dir, key, obj, max_chars=None):
     print(f"Stored classification for app_key {key} -> {entry_path(cache_dir, key)}", file=sys.stderr)
 
 
+def plan_errors(plan):
+    """Error lines for the query_plan entries that cannot be stored."""
+    errors = []
+    for i, entry in enumerate(plan, 1):
+        try:
+            check_entry(entry)
+        except FilterError as exc:
+            label = entry.get("label", "") if isinstance(entry, dict) else ""
+            errors.append(f"query_plan[{i}] {label}: {exc}")
+    return errors
+
+
+def refuse_plan(plan):
+    errors = plan_errors(plan)
+    for line in errors:
+        print(f"error: {line}", file=sys.stderr)
+    if errors:
+        print("error: nothing stored; fix the query_plan entries above "
+              "(check with kql-build check-plan)", file=sys.stderr)
+    return bool(errors)
+
+
 def cmd_put(args):
     raw = sys.stdin.read()
     try:
@@ -664,6 +703,8 @@ def cmd_put(args):
         if field in obj and not isinstance(obj[field], list):
             print(f"error: '{field}' must be a JSON array", file=sys.stderr)
             return 2
+    if refuse_plan(obj.get("query_plan", [])):
+        return 2
     max_chars = resolve_max_chars(args.max_chars)
     if max_chars == 0:
         print("error: --max-chars must be a positive integer", file=sys.stderr)
@@ -686,6 +727,8 @@ def cmd_put_merged(args):
         if field in new and not isinstance(new[field], list):
             print(f"error: '{field}' must be a JSON array", file=sys.stderr)
             return 2
+    if refuse_plan(new.get("query_plan", [])):
+        return 2
 
     base = None
     if args.base_key:
@@ -739,6 +782,32 @@ def cmd_put_merged(args):
         new["grown_from"] = args.base_key
 
     atomic_store(args.cache_dir, args.key, new, max_chars)
+    return 0
+
+
+def cmd_set_plan(args):
+    raw = sys.stdin.read()
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"error: stdin is not valid JSON: {e}", file=sys.stderr)
+        return 2
+    plan = obj.get("query_plan") if isinstance(obj, dict) else obj
+    if not isinstance(plan, list) or not plan:
+        print("error: expected a non-empty query_plan array (bare, or under \"query_plan\")",
+              file=sys.stderr)
+        return 2
+    if refuse_plan(plan):
+        return 2
+    entry = load_entry(args.cache_dir, args.key)
+    if not isinstance(entry, dict):
+        print(f"error: no cached classification for key {args.key}", file=sys.stderr)
+        return 1
+    entry["query_plan"] = plan
+    entry["plan_updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    atomic_write(args.cache_dir, args.key, entry)
+    print(f"Stored {len(plan)}-entry query_plan for app_key {args.key} -> "
+          f"{entry_path(args.cache_dir, args.key)}", file=sys.stderr)
     return 0
 
 
@@ -822,6 +891,10 @@ def main(argv=None):
     pm.add_argument("--key", required=True, help="New app_key to store the merged result under.")
     pm.set_defaults(func=cmd_put_merged)
 
+    pz = sub.add_parser("set-plan", help="Replace a cached entry's query_plan with one read from stdin.")
+    pz.add_argument("--key", required=True, help="app_key of the entry to update.")
+    pz.set_defaults(func=cmd_set_plan)
+
     pl = sub.add_parser("list", help="List cached classifications.")
     pl.set_defaults(func=cmd_list)
 
@@ -829,8 +902,8 @@ def main(argv=None):
     ps.add_argument("key")
     ps.set_defaults(func=cmd_show)
 
-    # Shared --cache-dir for get/put/put-merged/diff/list/show (key/count don't need it).
-    for subp in (pd, pg, pp, pm, pl, ps):
+    # Shared --cache-dir for get/put/put-merged/set-plan/diff/list/show (key/count don't need it).
+    for subp in (pd, pg, pp, pm, pz, pl, ps):
         subp.add_argument(
             "--cache-dir",
             default=default_cache_dir(),

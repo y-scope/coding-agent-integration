@@ -51,6 +51,7 @@ Use discovered fields and patterns to retrieve evidence from the compressed data
 | Tool | What it does | Input | Output | When to use |
 |---|---|---|---|---|
 | `clp-s-search-kql` — wrapper | Executes key-value, wildcard, and semantic search queries, including combined predicates. | Archive, KQL query, and optional time bounds/projection. | Matching results on stdout, plus wrapper metadata headers. | Narrow the investigation, test a hypothesis, or retrieve supporting records. |
+| `logtype-query-plan-run` — helper | Executes a classification's query plan through `clp-s-search-kql`, entry by entry, rendering each entry's structured `match` filter to KQL with `kql-build`, and reports each result as it completes. | Archive and the extracted query plan. | Per-entry KQL, count, share of records, status (ok, zero, error, timeout, non-selective), elapsed time, and samples, as NDJSON and a Markdown table. | Run a stored plan with visible progress and see which of its queries fail or do not discriminate. |
 | `clp-s-decompress` — wrapper | Reconstructs stored records. | Archive. | Decompressed records. | Export or inspect raw data when query results are insufficient. |
 
 Filter wrapper metadata headers before parsing search output as NDJSON. Counting returned JSON lines is local processing, not archive-side aggregation; a record can also contain multiple events or tool calls.
@@ -63,7 +64,7 @@ These examples assume the named fields exist and support the operation:
 |---|---|
 | Key-value | `level:ERROR` |
 | Numeric range | `durationMs >= 30000` |
-| Wildcard | `logger:worker*` for a prefix; `logger:*worker*` for a substring. |
+| Wildcard | `logger:"worker*"` for a prefix; `logger:"*worker*"` for a substring. Quote every wildcard value. |
 | Semantic search | `semantic("requests waiting for available capacity")` |
 | Combined | `level:ERROR AND logger:worker* AND semantic("requests waiting for available capacity")` |
 

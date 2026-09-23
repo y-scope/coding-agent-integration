@@ -77,6 +77,10 @@ Local helpers (not `clp-s` passthroughs — they invoke `clp-s` only through the
 - `bin/logtype-cache` — persistent cache of the `logtype-insights` classification, with incremental update when an archive grows. See [Logtype Cache](#logtype-cache).
 - `bin/logtype-insights-bootstrap` — one-command bootstrap for the `logtype-insights` skill: schema-discovery sample, per-field value distributions, logtype dictionary dump, per-template frequencies from the counts stored in the archive, and the classification-cache probe, summarized as grep-able `KEY=VALUE` lines.
 - `bin/logtype-cluster` (+ `logtype-cluster.py`) — groups semantically similar logtypes using embeddings from the semantic server so the LLM classifies one representative per cluster. See [Logtype Cluster](#logtype-cluster).
+- `bin/logtype-insight-extract` — builds the `logtype-insights` insight-pass inputs from a cached classification: templates grouped by category (top N by frequency, truncated) and the query plan, one entry per line, and reports plan entries without a valid `match` filter (`QUERY_PLAN_INVALID=`). Bounded, so classifications holding huge near-duplicate templates stay fast.
+- `bin/logtype-query-plan-run` — executes that query plan through `clp-s-search-kql`, entry by entry, rendering each entry's `match` filter to KQL with `kql-build`, printing each entry's result as it completes and recording the rendered KQL, count, share of records, status (`ok`, `zero`, `error`, `timeout`, non-selective), elapsed time, and samples in `/tmp/logtype-query-results.ndjson`. An entry without a valid `match` is recorded as an error without running. `--entries 1-5` runs a batch; `--print-table` renders the recorded results as Markdown.
+- `bin/kql-build` (+ `lib/kql_build.py`) — renders a structured JSON filter (`all`/`any`/`not`, `eq`/`contains`/`prefix`/`exists`/`gt`…, scoped `semantic`) to KQL with every value quoted and escaped and every group parenthesized, so query plans never carry model-written KQL. `kql-build render '<filter>'` prints the KQL; `kql-build check-plan FILE` validates every query_plan entry. `logtype-cache put`/`put-merged`/`set-plan` refuse plans that fail the same check.
+- `bin/kql-validate-wildcards` — the search wrapper's guard against an unquoted wildcard value with a space (`field:*a b*`, which clp-s reads as natural language); rejects the query before it runs.
 
 ## Session Workflow
 
@@ -251,7 +255,7 @@ The skill's mechanical preamble is packaged as one command:
 
 It samples records for schema discovery, prints per-field value distributions, dumps + normalizes the dictionary, sums the per-template counts that clp-s stored at compression time, probes the classification cache, and prints a grep-able `KEY=VALUE` summary (`LOGTYPE_COUNT=`, `FREQS=`, `CACHE_MODE=`, `TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths). `FREQS=UNAVAILABLE` means an archive was compressed before clp-s stored those counts; recompress it to get frequencies.
 
-Note that `message:term` is an exact match against the whole field value, same as `field:term` on any field, so it correctly returns 0 unless a message equals exactly `term` — the message field being stored as a CLP-string doesn't change that. Exact match is faster, so prefer it whenever you know a field's full value; **wildcard** only for a substring match — `message:*term*` works and returns real hits, and message content almost always needs it, since it's free text. `semantic("…")` also searches the logtypes directly and is a good complement to wildcard search for concept-shaped questions.
+Note that `message:term` is an exact match against the whole field value, same as `field:term` on any field, so it correctly returns 0 unless a message equals exactly `term` — the message field being stored as a CLP-string doesn't change that. Exact match is faster, so prefer it whenever you know a field's full value; **wildcard** only for a substring match — `message:"*term*"` works and returns real hits, and message content almost always needs it, since it's free text. `semantic("…")` also searches the logtypes directly and is a good complement to wildcard search for concept-shaped questions.
 
 ### Logtype Cache
 
@@ -284,7 +288,9 @@ LC=./plugins/clp/bin/logtype-cache
 
 On GROWTH the new classification is merged into the base entry with `put-merged --base-key BK --key NK` (templates, taxonomy, and query plan are unioned; `grown_from` records the lineage), so a growing archive only ever costs the classification of its newly-added templates.
 
-Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with `$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`diff`, `get`, `put`, `put-merged`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 512, or `$CLP_LOGTYPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint (`key`, `diff`, `put`, `put-merged`); it must match the limit given to `logtype-cluster`, or embedding and cache fingerprints diverge.
+Every stored query plan entry carries a structured `match` filter rather than a KQL string (see `bin/kql-build`). `put`, `put-merged`, and `set-plan` refuse an entry without a valid `match` and store nothing. `set-plan --key K` replaces only entry K's query plan, leaving its templates and taxonomy untouched; the `logtype-insights` skill uses it once to repair a plan cached before plans used `match`.
+
+Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with `$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`diff`, `get`, `put`, `put-merged`, `set-plan`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 512, or `$CLP_LOGTYPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint (`key`, `diff`, `put`, `put-merged`); it must match the limit given to `logtype-cluster`, or embedding and cache fingerprints diverge.
 
 ### Logtype Cluster
 
