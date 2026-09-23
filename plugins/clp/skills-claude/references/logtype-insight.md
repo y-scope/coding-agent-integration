@@ -4,15 +4,16 @@ Read this when a classification exists (`/tmp/logtype-classification.json`, eith
 
 ## Build the prompt from the classification
 
-Extract the pieces to paste (one call, fresh shell):
+Extract the pieces with `logtype-insight-extract` (stdlib-only Python; do not use a raw `jq` pipeline here — see below):
 
 ```bash
-jq -c '.schema'  /tmp/logtype-classification.json
 jq -r '.taxonomy[] | "- \(.category): \(.description)"' /tmp/logtype-classification.json
-jq -r '.templates | group_by(.category)[] | "### \(.[0].category)\n" + (map("- " + .logtype) | join("\n"))' \
-  /tmp/logtype-classification.json
-jq -c '.query_plan[]' /tmp/logtype-classification.json
+"${CLAUDE_PLUGIN_ROOT}/bin/logtype-insight-extract" \
+  --classification-file /tmp/logtype-classification.json \
+  --freqs-file FREQS_FILE
 ```
+
+(pass `--no-freqs` instead of `--freqs-file` when the bootstrap reported `FREQS=UNAVAILABLE`.) It writes `/tmp/logtype-templates-by-category.txt` (paste as TEMPLATES BY CATEGORY) and `/tmp/logtype-query-plan.txt` (one query_plan entry per line, paste as QUERY PLAN), and prints a `SCHEMA=`/`TEMPLATES=`/`CATEGORIES=` summary — report those counts to the user. Per category it keeps only the top `--max-per-category` templates (default 25) ranked by the frequencies file, each truncated to `--trunc-chars` (default 180); for the overwhelming majority of apps, whose templates are short and few, this changes nothing observable. It exists because a raw `jq -r '.templates | group_by(.category)[] | ...'` loads and sorts the *entire* templates array with no bound on either count or per-template length: an app that logs large near-duplicate blobs as "distinct" templates (observed: CockroachDB serializing multi-line Pebble stats tables as single messages, one category alone holding 9810 of 11558 total templates, mean template length ~184KB) produces a multi-GB classification file that turns that one `jq` call into a 10+ minute (or effectively hung) step. Never fall back to the raw `jq` pipeline to "avoid a dependency" — `logtype-insight-extract` has no third-party dependencies either, it is simply bounded.
 
 Spawn ONE insight subagent (Agent tool), model **haiku**; if the report comes back unusable, tell the user before re-spawning with `sonnet`. Replace `SEARCH_WRAPPER` with the **resolved absolute path** of `${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql` — the subagent does not inherit `${CLAUDE_PLUGIN_ROOT}`, so the literal variable will not work there. Likewise pass `FREQS_FILE` as the absolute path the bootstrap printed.
 
@@ -33,7 +34,12 @@ SCHEMA (field names in this archive):
 TAXONOMY (categories):
 <PASTE taxonomy>
 
-TEMPLATES BY CATEGORY (every distinct message template; <*> marks variables):
+TEMPLATES BY CATEGORY (top templates per category by frequency out of the
+category's full count, which is stated per category; <*> marks variables; a
+"[N]" prefix is the archive-wide occurrence count from the frequencies file,
+absent when frequencies are unavailable; a trailing "…" means the template
+text was truncated for length, and " <NL> " marks an embedded literal newline
+in the original message):
 <PASTE templates grouped by category>
 
 QUERY PLAN (each entry derived from a real template — execute each):
@@ -113,7 +119,13 @@ Return ONLY a Markdown Logtype Insights Report with these sections:
 2. Logtype Baseline — total distinct templates; the top N templates by
    frequency (count + template); the discovered category breakdown
    (errors: K templates, performance: K, ...). This is the spine of the
-   report.
+   report. If one category's true count is far larger than the number of
+   templates shown for it, say so and note the likely cause (e.g. the app
+   logs large near-duplicate blobs — a multi-line stats table, a stack
+   trace — as a single message, so minor byte differences between dumps
+   register as distinct templates instead of one recurring one); do not
+   treat that inflated count as evidence of that many genuinely different
+   behaviors.
 3. Issues & Warnings — error/warning counts, top 3 warning TEMPLATES (not
    substrings), actionable problems; semantic-only findings if any.
 4. Notable Categories — for each discovered category of interest, counts +
@@ -134,7 +146,7 @@ Return ONLY a Markdown Logtype Insights Report with these sections:
 ## Report format (present in this order)
 
 1. **Summary** — total records, severity counts, archive span, top logger/component.
-2. **Logtype Baseline** — distinct template count, top templates by frequency with counts, the discovered category breakdown. The spine of the report.
+2. **Logtype Baseline** — distinct template count, top templates by frequency with counts, the discovered category breakdown. The spine of the report. Flag a category whose true count dwarfs the templates shown for it as a likely large-near-duplicate-blob artifact, not genuine behavioral diversity.
 3. **Issues & Warnings** — errors, warnings, top 3 warning *templates* (grounded, not guessed), actionable problems; semantic-only findings if any.
 4. **Notable Categories** — per discovered category of interest, counts + representative templates and what they indicate.
 5. **Performance Signals** — timing/throughput/slow-operation templates and counts (if the app produces any); semantic-only findings if any.

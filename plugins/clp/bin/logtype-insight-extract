@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""
+logtype-insight-extract - build the insight subagent's prompt pieces from a
+cached classification (logtype-insights skill, step 7).
+
+The classification file (`logtype-cache get`'s output, e.g.
+/tmp/logtype-classification.json) holds `templates[]` with full, byte-exact
+logtype strings -- unbounded in both count and per-string length. Most apps
+keep this small enough that `jq -r '.templates | group_by(.category)[] | ...'`
+finishes instantly, so the skill historically shelled out to jq directly (see
+git history of skills-claude/references/logtype-insight.md). That breaks down
+for an app that logs large near-duplicate blobs as "distinct" templates --
+e.g. CockroachDB serializing a multi-line Pebble storage-engine stats table as
+a single log message, with column widths shifting the exact bytes between
+dumps so clp-s never collapses them into one logtype. Observed in practice:
+11558 total templates, one category holding 9810 of them, mean template
+length ~184KB (max ~1.6MB) -- a 2.3GB classification file. jq's group_by (a
+full sort with a custom comparator) took 10+ minutes and was still running
+when killed; loading the same file with the stdlib json module and grouping
+with a plain dict took under a minute.
+
+This tool does that grouping in one pass (stdlib-only, matching logtype-cache
+and logtype-cluster.py's no-third-party-dependency rule), and -- unlike the
+raw jq pipeline -- keeps the OUTPUT bounded too: per category, only the top
+`--max-per-category` templates by frequency are kept (ranked using the
+frequencies file the bootstrap already produced, never recomputed), and each
+template is truncated to `--trunc-chars` characters with embedded newlines
+rendered as " <NL> " so the result stays one line per template. Templates
+that were never truncated are unaffected: for the overwhelming majority of
+apps, whose templates are short single-line strings, this changes nothing
+observable in the output besides the added frequency count prefix.
+
+Usage:
+  logtype-insight-extract [options]
+
+Options:
+  --classification-file F   Cached classification JSON
+                             (default: /tmp/logtype-classification.json)
+  --freqs-file F            Per-logtype frequency NDJSON from the bootstrap
+                             (default: /tmp/logtype-freqs.ndjson; pass
+                             --no-freqs when the bootstrap reported
+                             FREQS=UNAVAILABLE)
+  --no-freqs                Skip frequency ranking; keep templates in
+                             classification-file order instead (first
+                             `--max-per-category` per category).
+  --max-per-category N      Cap templates shown per category (default: 25)
+  --trunc-chars N           Truncate each template to N characters for the
+                             OUTPUT only -- never mutates the underlying
+                             cache (default: 180)
+  --out-templates F         Where to write the templates-by-category text
+                             (default: /tmp/logtype-templates-by-category.txt)
+  --out-query-plan F        Where to write one query_plan entry per line as
+                             compact JSON (default: /tmp/logtype-query-plan.txt)
+
+Prints a KEY=VALUE summary to stdout: SCHEMA=, TEMPLATES=, CATEGORIES=,
+QUERY_PLAN=, and one "CATEGORY <name> <count>" line per category, largest
+first -- paste TEMPLATES/CATEGORIES counts into the user-facing narration and
+use the file paths for the insight subagent prompt.
+
+Exit codes: 0 ok, 1 input problem.
+"""
+
+import argparse
+import json
+import sys
+from collections import defaultdict
+
+DEFAULT_CLASSIFICATION_FILE = "/tmp/logtype-classification.json"
+DEFAULT_FREQS_FILE = "/tmp/logtype-freqs.ndjson"
+DEFAULT_OUT_TEMPLATES = "/tmp/logtype-templates-by-category.txt"
+DEFAULT_OUT_QUERY_PLAN = "/tmp/logtype-query-plan.txt"
+
+
+def truncate(text: str, limit: int) -> str:
+    text = text.replace("\n", " <NL> ")
+    if len(text) > limit:
+        return text[:limit] + "…"
+    return text
+
+
+def load_freqs(path: str) -> dict:
+    freq = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            freq[rec["logtype"]] = rec.get("count", 0)
+    return freq
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Extract taxonomy/templates-by-category/query_plan from a "
+        "cached logtype classification, ranked and truncated so the output "
+        "stays bounded regardless of how large individual templates are."
+    )
+    parser.add_argument("--classification-file", default=DEFAULT_CLASSIFICATION_FILE)
+    parser.add_argument("--freqs-file", default=DEFAULT_FREQS_FILE)
+    parser.add_argument("--no-freqs", action="store_true")
+    parser.add_argument("--max-per-category", type=int, default=25)
+    parser.add_argument("--trunc-chars", type=int, default=180)
+    parser.add_argument("--out-templates", default=DEFAULT_OUT_TEMPLATES)
+    parser.add_argument("--out-query-plan", default=DEFAULT_OUT_QUERY_PLAN)
+    args = parser.parse_args(argv)
+
+    try:
+        with open(args.classification_file, "r", encoding="utf-8") as f:
+            classification = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: failed to read {args.classification_file}: {exc}", file=sys.stderr)
+        return 1
+
+    freq = {}
+    if not args.no_freqs:
+        try:
+            freq = load_freqs(args.freqs_file)
+        except OSError as exc:
+            print(
+                f"error: failed to read {args.freqs_file}: {exc} "
+                "(pass --no-freqs if frequencies are unavailable)",
+                file=sys.stderr,
+            )
+            return 1
+
+    templates = classification.get("templates", [])
+    by_cat = defaultdict(list)
+    for t in templates:
+        logtype = t["logtype"]
+        by_cat[t["category"]].append((freq.get(logtype, 0), logtype))
+
+    with open(args.out_templates, "w", encoding="utf-8") as f:
+        for cat, items in by_cat.items():
+            if freq:
+                items.sort(key=lambda x: -x[0])
+            shown = items[: args.max_per_category]
+            f.write(
+                f"### {cat} ({len(items)} templates total, showing top "
+                f"{len(shown)} by frequency)\n"
+                if freq
+                else f"### {cat} ({len(items)} templates total, showing first "
+                f"{len(shown)})\n"
+            )
+            for cnt, logtype in shown:
+                prefix = f"[{cnt}] " if freq else ""
+                f.write(f"- {prefix}{truncate(logtype, args.trunc_chars)}\n")
+            f.write("\n")
+
+    with open(args.out_query_plan, "w", encoding="utf-8") as f:
+        for q in classification.get("query_plan", []):
+            f.write(json.dumps(q) + "\n")
+
+    print(f"SCHEMA={json.dumps(classification.get('schema', {}))}")
+    print(f"TEMPLATES={len(templates)}")
+    print(f"CATEGORIES={len(by_cat)}")
+    print(f"QUERY_PLAN={len(classification.get('query_plan', []))}")
+    print(f"OUT_TEMPLATES={args.out_templates}")
+    print(f"OUT_QUERY_PLAN={args.out_query_plan}")
+    for cat, items in sorted(by_cat.items(), key=lambda kv: -len(kv[1])):
+        print(f"CATEGORY {cat} {len(items)}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
