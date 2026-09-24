@@ -35,10 +35,10 @@ plugins/clp/bin/
     clp-compress-status,
     kql-build, kql-validate-wildcards) that are not clp-s passthroughs.
 plugins/clp/skills-claude/
-    Claude Code skills: compress, compress-folder, search, log-shape-insights,
+    Claude Code skills: compress, compress-folder, search, log-insights,
     decompress, claude-code-trajectory.
 plugins/clp/skills-codex/
-    Codex skills: compress, compress-folder, search, log-shape-insights,
+    Codex skills: compress, compress-folder, search, log-insights,
     decompress, codex-trajectory.
 
 scripts/validate-codex-plugin.sh

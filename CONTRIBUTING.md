@@ -27,11 +27,11 @@ plugins/clp/bin/
     kql-validate-wildcards; shared Python in lib/kql_build.py and
     lib/log_shapes.py).
 plugins/clp/skills-claude/
-    Claude Code skills: compress, compress-folder, search, log-shape-insights,
+    Claude Code skills: compress, compress-folder, search, log-insights,
     decompress, claude-code-trajectory, clpp-compress, clpp-search, dev,
     plus references/ (shared snippets included by the skills).
 plugins/clp/skills-codex/
-    Codex skills: compress, compress-folder, search, log-shape-insights,
+    Codex skills: compress, compress-folder, search, log-insights,
     decompress, codex-trajectory.
 
 scripts/validate-codex-plugin.sh

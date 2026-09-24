@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-log-shape-insight-facts - compute every number of a log-shape-insights report in
+log-shape-insight-facts - compute every number of a log-insights report in
 code, so the report writer only has to put them into words
-(log-shape-insights skill, step 7).
+(log-insights skill, step 7).
 
 A small model asked to add up a category table, pick the right severity count,
 or work out a time span from example records gets them wrong: in a trial it
@@ -139,7 +139,7 @@ def read_top_templates(path, n, chars=220):
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Compute a log-shape-insights report's numbers in code.")
+    ap = argparse.ArgumentParser(description="Compute a log-insights report's numbers in code.")
     ap.add_argument("--results-file", default="/tmp/log-shape-query-results.ndjson",
                     help="the classified plan's results")
     ap.add_argument("--baseline-results-file", default="/tmp/log-shape-baseline-results.ndjson",

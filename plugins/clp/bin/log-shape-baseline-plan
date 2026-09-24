@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 log-shape-baseline-plan - write the app-agnostic baseline queries of a
-log-shape-insights run to their own plan file (log-shape-insights skill, step 4).
+log-insights run to their own plan file (log-insights skill, step 4).
 
 The insight subagent used to discover the severity and logger breakdowns by
 running its own searches, one at a time, out of sight. Those queries depend on
@@ -134,7 +134,7 @@ def field_entries(role, field, counter, args, schema):
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Add baseline queries to a log-shape-insights query plan.")
+    parser = argparse.ArgumentParser(description="Add baseline queries to a log-insights query plan.")
     parser.add_argument("--archive", required=True)
     parser.add_argument("--schema-json", required=True)
     parser.add_argument("--plan-file", default="/tmp/log-shape-baseline-plan.txt")

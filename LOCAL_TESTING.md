@@ -121,7 +121,7 @@ Claude and Codex share this wrapper directory. Agent-specific tuning lives in `p
 
 ## Folder + Log Shape Smoke Test
 
-Covers `clp-detect-logs`, `clp-s-compress-folder --structurize` and the `log-shape-insights` flow. Point `LOG_DIR` at a folder of vLLM text logs (`release-testing/sample-logs/vllm` works).
+Covers `clp-detect-logs`, `clp-s-compress-folder --structurize` and the `log-insights` flow. Point `LOG_DIR` at a folder of vLLM text logs (`release-testing/sample-logs/vllm` works).
 
 ```bash
 LOG_DIR=/path/to/logs
@@ -191,7 +191,7 @@ stand_in /tmp/smoke-log-shapes.ndjson | "$LC" put --key "$KEY"
 "$LC" list
 ```
 
-Exercise the `log-shape-insights` helper scripts. The bootstrap wraps the schema sample, the dictionary dump with per-template frequencies, and the cache probe in one command, and stores the archive's counts in the cache database so a later run on the same archive skips the dump. It needs clp-core 0.13+; older builds make it exit 1 with `error: stats.log_shapes emitted no log shapes`. `--dump` makes this first run dump the dictionary even when you repeat the block, so the clusterer below always has the full template text:
+Exercise the `log-insights` helper scripts. The bootstrap wraps the schema sample, the dictionary dump with per-template frequencies, and the cache probe in one command, and stores the archive's counts in the cache database so a later run on the same archive skips the dump. It needs clp-core 0.13+; older builds make it exit 1 with `error: stats.log_shapes emitted no log shapes`. `--dump` makes this first run dump the dictionary even when you repeat the block, so the clusterer below always has the full template text:
 
 ```bash
 ./plugins/clp/bin/log-shape-insights-bootstrap --dump \

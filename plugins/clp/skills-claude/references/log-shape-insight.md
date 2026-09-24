@@ -1,4 +1,4 @@
-# Log shape insight reference (log-shape-insights steps 6–9)
+# Log shape insight reference (log-insights steps 6–9)
 
 Read this when a classification exists (`/tmp/log-shape-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE); the context question below is asked at step 6, before it does. It covers the two questions to the user, the summary, building the insight inputs, the core plan's pool and the focus queued into it, the facts, the report writer's prompt, and the report format.
 
@@ -6,7 +6,7 @@ Read this when a classification exists (`/tmp/log-shape-classification.json`, ei
 
 Ask right after spawning the classifier, so the user answers while it runs (on UPTODATE, ask it together with the focus question at step 8). One AskUserQuestion, header "Context", not multi-select:
 
-- question: "While I classify the N templates: do you already know anything about these logs?"
+- question: "While I classify the N templates: what do you already know about these logs?" (on UPTODATE, with nothing to classify: "What do you already know about these logs?")
 - "Chasing a problem" — something went wrong; the automatic "Other" field is where they say what (a symptom, a time, a component).
 - "Checking something specific" — a question they want answered.
 - "Just exploring" — no background; the whole picture is what they want.
@@ -60,7 +60,7 @@ Run it once over the core plan, as a background Bash call (`run_in_background: t
 
 With `--inbox` the pool also takes entries from the inbox while it runs: each goes ahead of every core entry not yet started, so the user's focus runs next even on an archive where each search takes minutes. The pool does not exit until the inbox is closed — `log-shape-focus` closes it — and after its core plan it prints `INBOX waiting ...` until then. With no close line it gives up after `--inbox-timeout` seconds (default 900; `INBOX=timed-out`), so a question left unanswered does not hold it forever.
 
-Then post the **summary**, while the pool runs. Keep it to about ten lines, every figure from the bootstrap, the baseline results and the extract's `CATEGORY` lines:
+Then post the **summary**, while the pool runs. Keep it to about ten lines, every figure from the bootstrap, the baseline results and the extract's `CATEGORY` lines. It is the one place the total record count and the category table appear; later messages refer back to them:
 
 - total records and the severity split (the baseline's counts);
 - the categories as a small table — records, templates, priority — largest first, with the low-priority ones folded into one line;
@@ -73,8 +73,8 @@ Ask in one AskUserQuestion, header "Focus", not multi-select (on UPTODATE, the c
 
 - question: "What should the report focus on?"
 - first option, marked "(Recommended)": the categories the user's context points at, when it points at any ("request-handling + service-discovery — matches 'requests dropping'"); otherwise "Everything".
-- one option per remaining high-priority category, largest first, its description the classifier's `why` and its record count — up to the four options AskUserQuestion allows;
-- "Everything", if the first option is not already it.
+- one option per remaining high-priority category, largest first, its description the classifier's `why`, its record count, and how many deeper checks choosing it queues (the extract's `drill=` count; for 0, "I'll write one to three checks from its templates") — up to the four options AskUserQuestion allows;
+- "Everything", if the first option is not already it, described truthfully: "The standard checks already cover every category; no extra queries."
 
 The automatic "Other" takes the user's own question. Then run `log-shape-focus` ONCE — even for "Everything", since it is what closes the inbox:
 
@@ -89,13 +89,13 @@ The automatic "Other" takes the user's own question. Then run `log-shape-focus` 
 - The user's **own question**, or **context** that names something specific (a component, a symptom, an error text), gets 1–3 entries you write to `/tmp/log-shape-focus-entries.ndjson`, one JSON entry per line, in the same shape as a plan entry: `label`, `match` (the grammar in `log-shape-classify.md`), `method`, `project` for a projecting method, and `category` when one fits. Derive each from templates in `/tmp/log-shape-templates-by-category.txt` that exist, as the classifier does; for a concept rather than a phrase, use a `semantic` node inside an `all` beside a concrete filter. `log-shape-focus` checks every entry and queues nothing if one is invalid (exit 1, inbox left open): fix it and run it again.
 - A **time** the user mentions ("around 10:12") cannot be a filter — `match` has no time range — so keep it for the writer: it is in the context, and the fetched records carry timestamps.
 
-`log-shape-focus` prints each queued entry with its KQL, then `FOCUS=` and `FOCUS_ENTRIES=`; tell the user in a line what was queued. Then follow the pool.
+`log-shape-focus` prints each queued entry with its KQL, then `FOCUS=` and `FOCUS_ENTRIES=`; tell the user in one plain line what was queued ("Queued 2 deeper checks on slow SQL transactions; they run next"), or, for `FOCUS_ENTRIES=0`, that the standard checks already cover it. Then follow the pool.
 
 ## Follow the pool (step 8)
 
 The runner decides how many searches run at once. A search holds its whole segment in memory (about 9 GiB for a 10 GB log), so it runs one search alone, measures its peak memory, and starts another only while free memory can take one more; it keeps sampling and pauses a search if memory runs short. Do not pin `--jobs` unless the user asks. It counts the archive's records first (`TOTAL_RECORDS=`) so each result carries a percentage. Recorded results for the same archive and plan are kept across calls, so re-running one entry (`--entries 3`) replaces only that entry. Results print as entries finish, in completion order. An entry's `then` rule can add a follow-up to the pool once its result is in (the baseline uses this to fetch the records behind a rare severity); those results carry `origin: "follow-up of N"`. `PEAK_CONCURRENCY=` and `PLAN_STATUS` close the run.
 
-As entries finish, post one line per entry to the user: its number, label, and result — count and percentage, or the status — plus elapsed time. Bash output is not reliably shown to the user, so this narration is how they follow the run. Each entry ends in one of these statuses:
+Do not post a line per entry. While the pool runs, post one status line each time a minute passes without news (`12 of 20 checks done`); Bash output is not reliably shown to the user, so this line is how they know the run is alive. Each entry ends in one of these statuses:
 
 - `ok` — ran and matched records.
 - `zero` — ran and matched nothing. Every entry is derived from a template that exists, so a zero usually means the KQL does not express the template it came from.
@@ -104,7 +104,7 @@ As entries finish, post one line per entry to the user: its number, label, and r
 
 A `non_selective` flag marks an entry matching at least 90% of the records: either its filter is too broad to isolate its category, or that category makes up most of the log.
 
-The focus entries (`origin: "focus"`, marked "(focus)" in the table) are numbered after the core plan's last entry. When the pool is done, print both tables, save them for the checks below, and show them to the user verbatim. They are the record of which queries ran and how well each worked; each is numbered from 1, so cite an entry as "baseline #N" or "plan #N":
+The focus entries (`origin: "focus"`, marked "(focus)" in the table) are numbered after the core plan's last entry. When the pool is done, print both tables and save them: the report check reads them, and the report's Query Log reproduces them. Do not paste them into the chat. Each is numbered from 1; cite an entry as "baseline #N" or "plan #N" in the report only:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-query-plan-run" --print-table \
@@ -112,7 +112,7 @@ The focus entries (`origin: "focus"`, marked "(focus)" in the table) are numbere
 "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-query-plan-run" --print-table | tee /tmp/log-shape-plan-table.md
 ```
 
-Below the tables, call out each `error`, `timeout`, `zero`, or `non_selective` entry in one line. Do not fix and re-run them yourself: `--retry-failed` already retried each `error` or `timeout` entry once (marked `retried`), and the subagent may run one corrected query for a loose entry and log it.
+Then close phase 4 in one or two lines: how many checks ran, and each `error`, `timeout` or `zero` entry with what it costs the report. Mention a `non_selective` entry only when a value that dominates the log does not explain it. Do not fix and re-run them yourself: `--retry-failed` already retried each `error` or `timeout` entry once (marked `retried`), and the subagent may run one corrected query for a loose entry and log it.
 
 ## Compute the facts, and post the early numbers (step 9)
 
@@ -129,7 +129,7 @@ Then post the **early numbers**: 3 to 5 lines quoted from the facts file, the fo
 
 ## Spawn the report writer
 
-Every query has run and every number is in the facts file, so the last step only puts them into words. The writing is where a stronger model pays off: a small writer drifts into derived figures (sums, rounded shares) and unsupported causes, and each one costs a correction round later (in a trial with haiku: 18 flagged lines and 15 edits, over three minutes). Spawn ONE subagent (Agent tool), model **opus**; if the Agent tool rejects `opus` as unavailable, use `sonnet`, and tell the user which model is writing. It runs no searches and does no arithmetic. Hand it absolute file paths (it does not inherit `${CLAUDE_PLUGIN_ROOT}`), the schema, the taxonomy, the focus and the user's context (both also in the facts file's first section), and the results table (or its path). It writes the report itself to `/tmp/log-shape-insight-report.md` and replies only `DONE`, so the report is never regenerated just to be saved. If the file is missing or unusable, tell the user and re-spawn the writer once. Before spawning, kindly tell the user that this step takes a couple of minutes, because the writer is summarizing everything gathered so far into the report, and that the wait is expected, not a stall ("All the facts are computed. The report writer (opus) is now summarizing everything gathered so far into the report; this usually takes a couple of minutes, so thanks for bearing with it.").
+Every query has run and every number is in the facts file, so the last step only puts them into words. The writing is where a stronger model pays off: a small writer drifts into derived figures (sums, rounded shares) and unsupported causes, and each one costs a correction round later (in a trial with haiku: 18 flagged lines and 15 edits, over three minutes). Spawn ONE subagent (Agent tool), model **opus**; if the Agent tool rejects `opus` as unavailable, use `sonnet`, and tell the user which model is writing. It runs no searches and does no arithmetic. Hand it absolute file paths (it does not inherit `${CLAUDE_PLUGIN_ROOT}`), the schema, the taxonomy, the focus and the user's context (both also in the facts file's first section), and the results table (or its path). It writes the report itself to `/tmp/log-shape-insight-report.md` and replies only `DONE`, so the report is never regenerated just to be saved. If the file is missing or unusable, tell the user and re-spawn the writer once. Before spawning, open phase 5 with one line naming the model and the time (`[5/5] Writing the report with opus (~2 min)`); the estimate tells the user the wait is expected.
 
 ## Check the report
 
@@ -153,7 +153,7 @@ Every query has run and every number is in the facts file, so the last step only
 Fill in `ARCHIVE`, `GOAL`, `FOCUS` (the chosen categories, the user's own question, or "everything"), `USER_CONTEXT` (the context answer verbatim, or "none"), `FACTS_FILE` (`/tmp/log-shape-insight-facts.md`), `TEMPLATES_FILE` (`/tmp/log-shape-templates-by-category.txt`), `RESULTS_TABLE` (the two saved tables, `/tmp/log-shape-baseline-table.md` and `/tmp/log-shape-plan-table.md`), the schema fields, and the taxonomy:
 
 ```
-Write the Log Shape Insights Report for this CLP archive: ARCHIVE
+Write the Log Insights Report for this CLP archive: ARCHIVE
 Goal: GOAL
 Focus the user chose: FOCUS
 What the user said they already know: USER_CONTEXT
@@ -216,7 +216,7 @@ Rules:
    say whether the files support it, contradict it, or say nothing about it,
    and quote the lines that decide it. Never restate it as a fact.
 
-Write ONLY the Markdown Log Shape Insights Report to
+Write ONLY the Markdown Log Insights Report to
 /tmp/log-shape-insight-report.md (Write tool), then reply DONE and nothing else.
 The report has these sections:
 1. Summary -- total records, severity counts, top logger/component, what the
@@ -241,9 +241,8 @@ The report has these sections:
 8. Semantic Search Coverage.
 9. Top 3 follow-up KQL queries, derived from templates (mix keyword and
    semantic), leaning toward the focus.
-10. Query Log -- the baseline and follow-up entries by index ("baseline #N"),
-   kql and count (from RESULTS_TABLE), and every flagged query. The plan's own entries are
-   already in the table shown to the user.
+10. Query Log -- both tables from RESULTS_TABLE, verbatim (the chat does not
+   show them), then every flagged query with a one-line note.
 ```
 
 ## Report format (present in this order)
@@ -257,4 +256,4 @@ The report has these sections:
 7. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
 8. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that template-classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
 9. **Follow-up queries** — 2–3 concrete queries derived from templates.
-10. **Query Log** — every query the subagent ran beyond the plan, with its result, including empty ones and corrected re-runs of failed plan entries. The plan's own entries are not repeated here; their table was shown when the plan finished.
+10. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.

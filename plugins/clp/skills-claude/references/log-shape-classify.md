@@ -1,4 +1,4 @@
-# Log shape classification reference (log-shape-insights step 6)
+# Log shape classification reference (log-insights step 6)
 
 Read this when the bootstrap reported `CACHE_MODE=GROWTH` or `NEW` (or an UPTODATE schema mismatch downgraded to NEW). It covers the cluster → classify → expand → merge → store pipeline and the full classification subagent prompt.
 
@@ -186,7 +186,7 @@ Rules:
 
 ## After the subagent returns: validate → expand → merge → store
 
-Tell the user the classifier returned and you are validating it. The insight pass needs the merged classification now; the cache only needs it by the next run, so storing it runs in the background.
+Validation needs no message to the user unless it fails. The insight pass needs the merged classification now; the cache only needs it by the next run, so storing it runs in the background.
 
 The subagent never writes KQL: each query_plan entry carries a `match` filter that `kql-build` renders, so an unquoted wildcard or an ungrouped AND/OR cannot reach the cache. `log-shape-cache merge` and `put` refuse an entry without a valid `match` or ranking too, as a backstop; `put` also checks every entry's category against the merged taxonomy.
 
@@ -239,7 +239,7 @@ Then store it for the next run, as a separate background Bash call (`run_in_back
   < /tmp/log-shape-classification.json
 ```
 
-When it finishes, tell the user in a line that the classification is cached (`Stored classification for app_key …: N templates`). If it fails, report the error; this run's report does not depend on it.
+When it finishes, mention in your next message that the classification is cached for later runs; it needs no message of its own. If it fails, report the error; this run's report does not depend on it.
 
 On the next run, an unchanged archive returns UPTODATE (no subagent); a grown archive returns GROWTH and only the newly-added templates go through this file again.
 
