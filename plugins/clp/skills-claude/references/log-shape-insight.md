@@ -121,6 +121,7 @@ Every number of the report is computed in code, because a small model asked to a
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-insight-facts" --schema-json '<the SCHEMA= line from the extract>' \
   --archive-dir <archive-dir> \
+  --schema-tree-file /tmp/log-shape-schema-tree.json \
   --freqs-file <FREQS_FILE>   # --freqs-file none and --category-totals none when frequencies were unavailable
 ```
 
@@ -140,7 +141,8 @@ Every query has run and every number is in the facts file, so the last step only
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-report-check" /tmp/log-shape-insight-report.md \
-     --also /tmp/log-shape-baseline-table.md --also /tmp/log-shape-plan-table.md > /tmp/log-shape-report-flags.txt
+     --also /tmp/log-shape-baseline-table.md --also /tmp/log-shape-plan-table.md \
+     --schema-tree-file /tmp/log-shape-schema-tree.json > /tmp/log-shape-report-flags.txt
    ```
 
    It flags a figure that is in neither the facts nor the results table (with the two listed figures it sums to, if it does), a percentage the inputs never print as a percentage, a count whose only occurrences in the inputs sit next to different wording, a timestamp the inputs do not contain, and a KQL filter on a field the archive does not have. Exit 0 means nothing flagged; exit 1 means `FLAG` lines.

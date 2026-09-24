@@ -49,6 +49,12 @@ Logger values seen:   <e.g. NETWORK,REPL,... or sflow.task.vllm_worker_3,...>
 CLUSTERS TO CLASSIFY (one {"id","count","representative"} per line):
 <PASTE the cluster lines printed by log-shape-cluster cluster>
 
+[Only with field rules] FIELD RULES (already decided): every template whose
+values sit in these fields already has the rule's category and is not among the
+clusters above. Your taxonomy MUST include each of these categories, with a priority and a
+why; you may also assign clusters to them:
+<PASTE one line per category: "<category>: <field>, <field>, ...">
+
 [Only for GROWTH] Existing categories from the previous classification — REUSE
 these where a representative fits; add a new category only if none fits.
 Existing query-plan labels (do not duplicate): <paste base taxonomy categories
@@ -188,6 +194,7 @@ Rules:
 - Use the discovered field names verbatim in `match` and `project`.
 - Every taxonomy entry has "priority" and "why"; every query_plan entry has
   "category" (a taxonomy category), "priority", and "stage".
+- [Only with field rules] The taxonomy includes every field-rule category.
 ```
 
 ## After the subagent returns: validate → expand → merge → store

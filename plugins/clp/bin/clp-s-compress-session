@@ -461,7 +461,11 @@ fi
 
 clp_s_bin="$(resolve_clp_s)" || exit $?
 
-cmd=("$clp_s_bin" c)
+# A session record keeps its prompts, replies, tool calls and tool output in the
+# message.content array. --structurize-arrays stores each array element's fields
+# as schema-tree columns, so their text is templated into log shapes and each
+# field can be queried and counted; without it the array is one opaque string.
+cmd=("$clp_s_bin" c --structurize-arrays)
 if [[ -n "$parsing_specification" ]]; then
   cmd+=(--parsing-specification "$parsing_specification")
 fi

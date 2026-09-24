@@ -269,6 +269,9 @@ def main(argv=None) -> int:
     ap.add_argument("--schema-json", required=True)
     ap.add_argument("--archive-dir", required=True,
                     help="the top-level archive directory; its metadata gives the time span")
+    ap.add_argument("--schema-tree-file", default=None,
+                    help="clp-s-schema-tree --json-out file: the facts then name the text fields, "
+                         "and every path in it counts as a field")
     ap.add_argument("--top", type=int, default=20)
     ap.add_argument("--out", default="/tmp/log-shape-insight-facts.md")
     args = ap.parse_args(argv)
@@ -316,7 +319,19 @@ def main(argv=None) -> int:
     w(f"- Time span: {time_span(args.archive_dir)}")
     names = ", ".join(f"{role} = `{schema[role]}`" for role in ("timestamp", "severity", "logger", "message") if schema.get(role))
     payload = ", ".join(f"`{p}`" for p in schema.get("payload", []) or [])
+    tree_note = ""
+    if args.schema_tree_file:
+        try:
+            with open(args.schema_tree_file, "r", encoding="utf-8") as f:
+                tree_rows = json.load(f)
+            text = [r["path"] for r in tree_rows if r.get("type") == "ClpString"]
+            tree_note = (f"; text fields: {', '.join(f'`{p}`' for p in dict.fromkeys(text))}; "
+                         f"and any other path listed in `{args.schema_tree_file}`")
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+            print(f"error: cannot read --schema-tree-file {args.schema_tree_file}: {e}", file=sys.stderr)
+            return 2
     w(f"- Fields a KQL query may filter on: {names}" + (f"; payload: {payload}" if payload else "")
+      + tree_note
       + ". Nothing else is a field: the classification's categories exist only in the analysis, "
       "so a query cannot filter on a category name.\n")
 
@@ -422,21 +437,29 @@ def main(argv=None) -> int:
 
     # -- categories
     if totals:
+        rec_sum = sum(c["records"] for c in totals.values())
+        # A record with several text fields (a session record's prompt, reply and
+        # tool output) carries one templated value per field, so the counts are
+        # values, not records, once they exceed the record count.
+        per_value = bool(total) and rec_sum > total
+        base = rec_sum if per_value else total
+        unit = "Values" if per_value else "Records"
         w("## Categories (exact: the stored per-template counts, summed; no keyword involved)")
-        w("| Category | Priority | Templates | Records | Share of records |")
+        w(f"| Category | Priority | Templates | {unit} | Share of {unit.lower()} |")
         w("|---|---|---|---|---|")
-        rec_sum = 0
         for cat, c in sorted(totals.items(), key=lambda kv: -kv[1]["records"]):
-            rec_sum += c["records"]
             w(f"| {cat} | {c.get('priority') or '-'} | {c['templates']:,} | {c['records']:,} "
-              f"| {pct(c['records'], total)} |")
-        w(f"| **sum** | | {sum(c['templates'] for c in totals.values()):,} | {rec_sum:,} | {pct(rec_sum, total)} |")
+              f"| {pct(c['records'], base)} |")
+        w(f"| **sum** | | {sum(c['templates'] for c in totals.values()):,} | {rec_sum:,} | {pct(rec_sum, base)} |")
         whys = [(cat, c) for cat, c in totals.items() if c.get("why") and c.get("priority") == "high"]
         if whys:
             w("\nWhy the classifier ranked these categories high (its judgement, not a finding):")
             for cat, c in whys:
                 w(f"- `{cat}`: {c['why']}")
-        if total:
+        if per_value:
+            w(f"\nTemplated values: {rec_sum:,} in {total:,} records. A record carries one value per "
+              "text field, so the values outnumber the records and every share above is a share of values.")
+        elif total:
             w(f"\nRecords no template accounts for: {total - rec_sum:,} ({pct(total - rec_sum, total)}).")
         blobs = [(cat, c) for cat, c in totals.items() if c["templates"] > 500 and c["templates"] > 0.9 * c["records"]]
         for cat, c in blobs:
