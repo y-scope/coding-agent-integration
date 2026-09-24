@@ -15,7 +15,7 @@ instead of reclassifying the whole archive.
 Cache key (the "app fingerprint") is sha256 of the sorted set of distinct
 logtype strings from the archive's dictionary dump
 (`clp-s-search-kql ARCHIVE 'stats.log_shapes'`, rendered by `normalize`), each
-TRUNCATED to a character limit first (default 512, `--max-chars` /
+TRUNCATED to a character limit first (default 500, `--max-chars` /
 `$CLP_LOGTYPE_MAX_CHARS`) and de-duplicated. Truncation mirrors what
 logtype-cluster sends to the embedding server, so the key identifies the
 *embedded* vocabulary. Same embedded vocabulary -> same key -> cache hit ->
@@ -40,7 +40,7 @@ where each entry is the classification JSON, e.g.:
                       "match": {"any": [{"field": "s", "eq": "E"},
                                         {"field": "s", "eq": "F"}]}}],
       "classified_at": "2026-08-07T...",
-      "max_chars": 512,                    # limit the key was computed at
+      "max_chars": 500,                    # limit the key was computed at
       "grown_from": "<previous app_key>"   # present only when incrementally grown
     }
 
@@ -138,8 +138,9 @@ _KEY_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 # Templates are capped at this many UTF-8 characters before fingerprinting — the
 # same limit logtype-cluster applies before embedding (truncate_chars is
 # duplicated there; the two MUST agree or the embedding and the cache diverge).
-# Changing it deliberately re-keys the cache.
-DEFAULT_MAX_CHARS = 512
+# Changing it deliberately re-keys the cache. 500 keeps embedded texts under the
+# embedding model's 512-token context (see logtype-cluster.py).
+DEFAULT_MAX_CHARS = 500
 
 
 def default_max_chars():

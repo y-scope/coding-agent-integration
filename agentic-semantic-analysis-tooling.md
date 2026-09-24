@@ -38,7 +38,7 @@ Read CLP's intrinsic metadata to learn what can be queried: fields and nesting, 
 ### Interpreting discovery output
 
 - `stats.log_shapes` requires a binary with the shapes API; the wrapper enables the experimental flag so clpp archives open too. Each entry's `count` is how many values in that archive carried the template, stored at compression time. It is `null` for archives compressed before clp-s stored these counts: that is not zero or a measured frequency.
-- `logtype-cache normalize` renders variable placeholders as `<*>` and deduplicates displayed templates. Retain the raw dictionary when identifiers and original encodings matter. Downstream, `logtype-cluster` caps each template at a character limit (512 by default) and de-duplicates the capped forms for embedding, and `logtype-cache` fingerprints that same capped, de-duplicated set — while the templates it stores stay full.
+- `logtype-cache normalize` renders variable placeholders as `<*>` and deduplicates displayed templates. Retain the raw dictionary when identifiers and original encodings matter. Downstream, `logtype-cluster` caps each template at a character limit (500 by default) and de-duplicates the capped forms for embedding, and `logtype-cache` fingerprints that same capped, de-duplicated set — while the templates it stores stay full.
 - Bootstrap's `SAMPLE` and `DIST` come from sampled records, capped at 20,000 by default. They are discovery aids, not full-archive counts or stored numeric range/statistics metadata.
 - Bootstrap reports `FREQS=OK` with a `FREQS_FILE=` when every archive stored its counts; that file holds complete per-template frequencies. `FREQS=UNAVAILABLE` means at least one archive predates the stored counts, and no frequencies are reported for it.
 
@@ -86,7 +86,7 @@ Group patterns when that helps the question, and reuse applicable work as the in
 
 | Tool / operation | What it does | Input | Output | When to use |
 |---|---|---|---|---|
-| `logtype-cluster cluster` — helper | Groups similar templates using embeddings from the configured semantic server, after capping each at a character limit (512 by default) and de-duplicating. | Normalized templates and server/threshold settings. | Representatives and retained cluster memberships (full templates). | Reduce the number of patterns the agent needs to classify individually. |
+| `logtype-cluster cluster` — helper | Groups similar templates using embeddings from the configured semantic server, after capping each at a character limit (500 by default) and de-duplicating. | Normalized templates and server/threshold settings. | Representatives and retained cluster memberships (full templates). | Reduce the number of patterns the agent needs to classify individually. |
 | `logtype-cluster expand` — helper | Propagates assigned cluster labels to members. | Clusters and agent-produced classifications. | Template-level classifications. | Apply and review representative labels across the inventory. |
 | `logtype-cache` — helper | Normalizes templates, fingerprints truncated and de-duplicated template sets, and retrieves, stores, or merges classifications. | Shape dictionaries, template sets, or classification JSON, depending on the subcommand. | Normalized templates, cache status/diffs, or cached categories and query plans. | Reuse applicable labels and identify additions needing classification. |
 

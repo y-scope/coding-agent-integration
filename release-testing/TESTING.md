@@ -167,7 +167,7 @@ The counts over all 100 templates sum to 250, the number of records.
 
 ## Step 6 — The classification cache (NEW → UPTODATE → GROWTH)
 
-Analyzing an archive means classifying its templates — expensive the first time, but the same application emits the same templates every run, so the plugin caches the classification, keyed by a fingerprint (SHA-256 of the sorted template set, each template capped at a character limit — 512 by default — and de-duplicated, matching what is sent for embedding). Stored templates stay full and byte-exact. `diff` compares your archive's templates against the cache and prints a tab-separated status header:
+Analyzing an archive means classifying its templates — expensive the first time, but the same application emits the same templates every run, so the plugin caches the classification, keyed by a fingerprint (SHA-256 of the sorted template set, each template capped at a character limit — 500 by default — and de-duplicated, matching what is sent for embedding). Stored templates stay full and byte-exact. `diff` compares your archive's templates against the cache and prints a tab-separated status header:
 
 - `NEW <key> <count>` — never seen this app; all `<count>` templates need classifying.
 - `UPTODATE <key> <count>` — fingerprint hit; nothing to do. (A template whose tail changed only past the character limit is appended to the entry with the category of the truncated form it shares.)

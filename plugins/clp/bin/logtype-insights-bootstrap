@@ -17,7 +17,7 @@ and the classification-cache probe — then prints a compact KEY=VALUE summary.
 
 Options:
   --max-chars N      Character limit the cache fingerprint is computed at
-                     (default: 512, or $CLP_LOGTYPE_MAX_CHARS). Must match the
+                     (default: 500, or $CLP_LOGTYPE_MAX_CHARS). Must match the
                      --max-chars later passed to logtype-cluster and
                      logtype-cache, or their fingerprints diverge.
   --out-dir DIR      Where the intermediate files are written (default: /tmp).
@@ -52,7 +52,7 @@ dump failure, 2 usage error.
 EOF
 }
 
-max_chars="${CLP_LOGTYPE_MAX_CHARS:-512}"
+max_chars="${CLP_LOGTYPE_MAX_CHARS:-500}"
 out_dir="/tmp"
 cache_dir=""
 sample_cap="${CLP_BOOTSTRAP_SAMPLE_CAP:-20000}"

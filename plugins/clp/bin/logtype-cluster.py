@@ -4,7 +4,7 @@
 Invoked via the `logtype-cluster` bash launcher, which resolves the embedding
 server URL and exports it as CLP_SEMANTIC_ENDPOINT. Two subcommands:
 
-  cluster  Truncate each logtype to a character limit (default 512, UTF-8
+  cluster  Truncate each logtype to a character limit (default 500, UTF-8
            characters), de-duplicate the results, embed the distinct texts
            via the semantic server's /v1/embeddings endpoint, and group them by
            greedy leader clustering at a cosine threshold. The LLM then
@@ -50,6 +50,11 @@ EMBEDDING_DTYPE = "int8"
 EMBEDDINGS_PATH = "/v1/embeddings"
 SIMILARITY_PATH = "/v1/similarity"
 CONTENT_TYPE = "application/vnd.clp.embeddings.text.utf8.length-table.v1"
+RESPONSE_CONTENT_TYPE = "application/vnd.clp.embeddings.indexed.v1"
+# Record index that marks the response terminal (u32 length + MessagePack
+# map<String, String>) instead of an embedding. An error the server hits after
+# streaming starts arrives in this terminal with status=error, under HTTP 200.
+TERMINAL_INDEX = 0xFFFF_FFFF
 # Cloudflare fronts the hosted endpoints and rejects urllib's default
 # User-Agent with HTTP 403 (error 1010), so send an explicit one.
 USER_AGENT = "clp-logtype-cluster/1"
@@ -72,8 +77,11 @@ REQUEST_TIMEOUT_S = _positive_env_int("CLP_SEMANTIC_TIMEOUT_S", 120)
 # a prefix are only ever embedded once. Configurable per session. The SAME limit
 # is the classification-cache fingerprint (logtype-cache duplicates
 # truncate_chars and reads the same env var), so changing it deliberately
-# re-keys the cache.
-DEFAULT_MAX_CHARS = _positive_env_int("CLP_LOGTYPE_MAX_CHARS", 512)
+# re-keys the cache. 500, not 512: the embedding model's context is 512 TOKENS
+# including its special tokens, and punctuation-heavy templates (`,<*>,<*>,...`)
+# tokenize to about one token per character, so a 512-character cap can overflow
+# it and the server rejects the whole batch. 500 leaves headroom.
+DEFAULT_MAX_CHARS = _positive_env_int("CLP_LOGTYPE_MAX_CHARS", 500)
 # Hard ceiling on the encoded size of one /v1/embeddings request body, applied
 # independently of the batch count. Decimal MB so it is under 100 MB however the
 # limit is read.
@@ -212,14 +220,51 @@ def embeddings_url(endpoint):
     return endpoint + EMBEDDINGS_PATH
 
 
+def decode_msgpack_str_map(blob):
+    """Decode a MessagePack map<String, String>, the response terminal's metadata.
+
+    Supports only the map and str formats that type allows, so the clusterer
+    stays standard-library only. Raises ValueError on anything else.
+    """
+    pos = 0
+
+    def take(n):
+        nonlocal pos
+        if pos + n > len(blob):
+            raise ValueError("truncated MessagePack data")
+        chunk = blob[pos:pos + n]
+        pos += n
+        return chunk
+
+    def length(fix_first, fix_last, sized):
+        tag = take(1)[0]
+        if fix_first <= tag <= fix_last:
+            return tag - fix_first
+        if tag in sized:
+            return int.from_bytes(take(sized[tag]), "big")
+        raise ValueError(f"unexpected MessagePack type 0x{tag:02x}")
+
+    def string():
+        return take(length(0xA0, 0xBF, {0xD9: 1, 0xDA: 2, 0xDB: 4})).decode("utf-8", "replace")
+
+    result = {}
+    for _ in range(length(0x80, 0x8F, {0xDE: 2, 0xDF: 4})):
+        key = string()
+        result[key] = string()
+    if pos != len(blob):
+        raise ValueError("trailing bytes after MessagePack map")
+    return result
+
+
 def embed_batch(url, texts):
     """POSTs one `text.utf8.length-table.v1` batch; returns a list of vectors.
 
     Request body: row_lens:u32[N] (little-endian UTF-8 byte lengths) followed
-    by the N payloads. Response is `embeddings.indexed.v1` — N records of
-    (index:u32le, values:int8[dim]) followed by a msgpack stats trailer, which
-    is ignored. Records carry their own index, so they are placed by index
-    rather than by arrival order.
+    by the N payloads. Response is `embeddings.indexed.v1` — records of
+    (index:u32le, values:int8[dim]) in any order, then exactly one terminal:
+    index 0xFFFFFFFF, metadata_len:u32le, and a MessagePack map<String, String>
+    whose `status` is `ok` (with `record_count`) or `error` (with `error_code`,
+    `error_status`, `error_message`). Records are placed by their own index.
     """
     payloads = [t.encode("utf-8") for t in texts]
     body = b"".join(struct.pack("<I", len(p)) for p in payloads) + b"".join(payloads)
@@ -240,6 +285,7 @@ def embed_batch(url, texts):
     )
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S) as response:
+            content_type = response.headers.get_content_type()
             data = response.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read()[:400].decode("utf-8", "replace")
@@ -248,23 +294,61 @@ def embed_batch(url, texts):
     except (urllib.error.URLError, OSError) as exc:
         fail(2, f"cannot reach the embedding server: {exc}", f"endpoint: {url}")
 
-    record_size = 4 + EMBEDDING_DIM
-    if len(data) < record_size * len(texts):
-        fail(2, f"embedding response too short: got {len(data)} bytes, "
-                f"expected at least {record_size * len(texts)} "
-                f"({len(texts)} x {record_size})")
+    if content_type != RESPONSE_CONTENT_TYPE:
+        fail(2, f"embedding response has content type {content_type}, "
+                f"expected {RESPONSE_CONTENT_TYPE}", f"endpoint: {url}")
 
+    record_size = 4 + EMBEDDING_DIM
     vectors = [None] * len(texts)
-    for n in range(len(texts)):
-        offset = n * record_size
+    offset = 0
+    while True:
+        if offset + 4 > len(data):
+            fail(2, f"embedding response truncated: no terminal after "
+                    f"{len(data)} bytes", f"endpoint: {url}")
         index = struct.unpack_from("<I", data, offset)[0]
-        if index >= len(texts):
-            fail(2, f"embedding response index {index} out of range "
-                    f"for {len(texts)} inputs")
+        if index == TERMINAL_INDEX:
+            break
+        if index >= len(texts) or vectors[index] is not None:
+            fail(2, f"embedding response has an out-of-range or duplicate "
+                    f"index {index} for {len(texts)} inputs", f"endpoint: {url}")
+        if offset + record_size > len(data):
+            fail(2, f"embedding response truncated inside the record for "
+                    f"index {index}", f"endpoint: {url}")
         vectors[index] = struct.unpack_from(
             f"<{EMBEDDING_DIM}b", data, offset + 4)
-    if any(v is None for v in vectors):
-        fail(2, "embedding response did not cover every input index")
+        offset += record_size
+
+    offset += 4
+    if offset + 4 > len(data):
+        fail(2, "embedding response truncated inside the terminal",
+             f"endpoint: {url}")
+    metadata_len = struct.unpack_from("<I", data, offset)[0]
+    metadata = data[offset + 4:offset + 4 + metadata_len]
+    if len(metadata) != metadata_len:
+        fail(2, "embedding response truncated inside the terminal",
+             f"endpoint: {url}")
+    try:
+        terminal = decode_msgpack_str_map(metadata)
+    except ValueError as exc:
+        fail(2, f"embedding response terminal is malformed: {exc}",
+             f"endpoint: {url}")
+
+    status = terminal.get("status")
+    if status == "error":
+        fail(2, f"embedding server error: "
+                f"{terminal.get('error_message', '(no message)')}",
+             f"error_code={terminal.get('error_code', '?')} "
+             f"error_status={terminal.get('error_status', '?')} "
+             f"batch_size={len(texts)}",
+             f"endpoint: {url}")
+    if status != "ok":
+        fail(2, f"embedding response terminal has unknown status {status!r}",
+             f"endpoint: {url}")
+    if terminal.get("record_count") != str(len(texts)) \
+            or any(v is None for v in vectors):
+        fail(2, f"embedding response covered {sum(v is not None for v in vectors)} "
+                f"of {len(texts)} inputs (record_count="
+                f"{terminal.get('record_count')})", f"endpoint: {url}")
     return vectors
 
 
