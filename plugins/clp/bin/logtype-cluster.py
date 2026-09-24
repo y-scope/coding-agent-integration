@@ -10,13 +10,15 @@ server URL and exports it as CLP_SEMANTIC_ENDPOINT. Two subcommands:
            greedy leader clustering at a cosine threshold. The LLM then
            classifies only the cluster representatives, by cluster id.
   expand   Propagate the LLM's per-cluster category assignments to every member
-           logtype verbatim (stdlib-only; never re-generates logtype strings,
-           so cache GROWTH matching stays byte-exact by construction).
+           (stdlib-only). Each member is written as its hashes -- of the full
+           template and of its first max_chars characters (lib/logtypes.py) --
+           computed from the member strings themselves, never re-generated, so
+           cache GROWTH matching stays exact by construction.
 
 Truncation and de-duplication concern only what is POSTed for embedding. `members`
-and `representative` are always FULL logtype strings, so `expand` and the
-classification cache keep full templates; the character limit is also the cache
-fingerprint (see logtype-cache, which duplicates truncate_chars).
+and `representative` are always FULL logtype strings; the character limit is
+also the cache fingerprint (truncate_chars is shared with logtype-cache through
+lib/logtypes.py).
 
 Embeddings come from an already-running server; this tool never starts one and
 never downloads a model. Point it at a server with --semantic-endpoint,
@@ -38,6 +40,9 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from logtypes import prefix_hash, template_hash, truncate_chars  # noqa: E402
 
 DEFAULT_THRESHOLD = os.environ.get("CLP_LOG_CLUSTER_THRESHOLD", "0.80")
 
@@ -75,9 +80,9 @@ REQUEST_TIMEOUT_S = _positive_env_int("CLP_SEMANTIC_TIMEOUT_S", 120)
 # Templates are truncated to this many UTF-8 characters before embedding, then
 # de-duplicated, so a long template cannot bloat a request and templates sharing
 # a prefix are only ever embedded once. Configurable per session. The SAME limit
-# is the classification-cache fingerprint (logtype-cache duplicates
-# truncate_chars and reads the same env var), so changing it deliberately
-# re-keys the cache. 500, not 512: the embedding model's context is 512 TOKENS
+# is the classification-cache fingerprint (logtype-cache shares truncate_chars
+# through lib/logtypes.py and reads the same env var), so changing it
+# deliberately re-keys the cache. 500, not 512: the embedding model's context is 512 TOKENS
 # including its special tokens, and punctuation-heavy templates (`,<*>,<*>,...`)
 # tokenize to about one token per character, so a 512-character cap can overflow
 # it and the server rejects the whole batch. 500 leaves headroom.
@@ -129,16 +134,6 @@ def load_logtypes(path):
     if not logtypes:
         fail(1, f"no logtypes found in {path}")
     return sorted(logtypes)
-
-
-def truncate_chars(text, max_chars):
-    """Return `text` capped at max_chars UTF-8 characters (code points).
-
-    Python str slicing is by code point, so this cannot split a character and
-    the result is always valid UTF-8. Mirrored in logtype-cache, which must agree
-    exactly or the cache fingerprint diverges.
-    """
-    return text if len(text) <= max_chars else text[:max_chars]
 
 
 def dedup_truncated(templates, max_chars):
@@ -572,11 +567,20 @@ def cmd_expand(args):
         print("warning: classification contains \"templates\"; ignoring it — "
               "templates are rebuilt from the cluster members", file=sys.stderr)
 
+    # Templates are identified by hash, never by text (see lib/logtypes.py):
+    # the text can be hundreds of KB per template, and it stays in the
+    # archive's own dictionary dump. prefix_hash uses the limit the clusters
+    # were embedded at, which is also the cache fingerprint's limit.
+    max_chars = clusters_doc.get("max_chars")
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:
+        max_chars = DEFAULT_MAX_CHARS
     templates = []
     for cluster in clusters:
         cat = categories[cluster["id"]]
         for member in cluster.get("members", []):
-            templates.append({"logtype": member, "category": cat})
+            templates.append({"hash": template_hash(member),
+                              "prefix_hash": prefix_hash(member, max_chars),
+                              "category": cat})
 
     expanded = {}
     if "schema" in classification:
@@ -584,6 +588,7 @@ def cmd_expand(args):
     expanded["taxonomy"] = classification.get("taxonomy", [])
     expanded["templates"] = templates
     expanded["query_plan"] = classification.get("query_plan", [])
+    expanded["max_chars"] = max_chars
 
     with open(args.output, "w", encoding="utf-8") as fh:
         json.dump(expanded, fh, ensure_ascii=False, indent=1)

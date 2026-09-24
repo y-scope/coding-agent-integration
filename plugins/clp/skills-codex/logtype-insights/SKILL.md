@@ -9,7 +9,7 @@ description: App-agnostic logtype-baseline log analysis with CLP. Dump the archi
 
 End-to-end analysis of **any** CLP archive using the **logtype baseline** method: dump the archive's logtype dictionary (the complete vocabulary of distinct message templates, `<*>` marking variables — tens to a few hundred templates no matter how many millions of records), classify those *real* templates into categories, and derive every later query from a template that is guaranteed to exist. No blind keyword batteries.
 
-The classification is a property of the **application**, not the capture, so it is cached (keyed by `sha256` of the sorted template set, each template capped at a character limit — 500 by default — and de-duplicated, matching what is embedded) and updated incrementally when the archive grows — re-analyzing the same app skips classification entirely. The skill reports the archive's logtype count.
+The classification is a property of the **application**, not the capture, so it is cached (keyed by `sha256` of the sorted template set, each template capped at a character limit — 500 by default — and de-duplicated, matching what is embedded) and updated incrementally when the archive grows — re-analyzing the same app skips classification entirely. The cache is one SQLite database that stores templates by hash, never by text, so it stays small and fast even for apps whose templates are hundreds of KB each. The skill reports the archive's logtype count.
 
 For a single ad-hoc KQL query, use the `search` skill. To compress raw logs first, use `compress-folder`.
 
@@ -57,7 +57,7 @@ Then tell the user what the bootstrap found, in 2–3 lines: the logtype count, 
      --input /tmp/logtypes-to-classify.ndjson
    ```
 
-Stdout prints a summary then one `{"id","count","representative"}` line per cluster (ids `c1..cN`, largest first). Full memberships go to `/tmp/logtype-clusters.json` for `expand`. Representatives and members are always FULL templates; only the embedding request uses the truncated, de-duplicated texts, so `EMBEDDED` is at most `TEMPLATES`. Embeddings come from the semantic server (nothing is installed or started locally). Exit 2 means the server is unreachable or rejected: **report the error verbatim to the user and stop** — do not diagnose it, do not start or configure a server, and do not silently switch methods. If the user then asks you to continue without clustering, classify `/tmp/logtypes-to-classify.ndjson` directly using the OLD contract: a `templates` array with each logtype copied **byte-exact**, no `assignments`, no `expand` — pipe your JSON straight into `put-merged --max-chars "$MAX_CHARS"` (this replaces step 6's validate/expand block; after `put-merged`, run `logtype-cache get "$APP_KEY" > /tmp/logtype-classification.json` and continue at step 7). Report the reduction to the user (`TEMPLATES=N` → `EMBEDDED=K` → `CLUSTERS=M`).
+Stdout prints a summary then one `{"id","count","representative"}` line per cluster (ids `c1..cN`, largest first). Full memberships go to `/tmp/logtype-clusters.json` for `expand`. Representatives and members are always FULL templates; only the embedding request uses the truncated, de-duplicated texts, so `EMBEDDED` is at most `TEMPLATES`. Embeddings come from the semantic server (nothing is installed or started locally). Exit 2 means the server is unreachable or rejected: **report the error verbatim to the user and stop** — do not diagnose it, do not start or configure a server, and do not silently switch methods. Report the reduction to the user (`TEMPLATES=N` → `EMBEDDED=K` → `CLUSTERS=M`).
 
 6. **Classify the clusters (GROWTH / NEW only) — inline, ids only.** Tell the user you are classifying the M representatives (the longest step) before you start. Assign EACH cluster id (judging by its representative) the best-fitting category. Use this GENERIC default taxonomy, AND for GROWTH the existing base categories (reuse where one fits; add new only if none fits), AND for NEW any APP-SPECIFIC categories the representatives suggest (e.g. Mongo: workload/operations, replication/election, sharding, indexing, storage; vLLM: worker-health, kv-cache, model-loading). Generic defaults:
 
@@ -83,7 +83,7 @@ Write `/tmp/logtype-class.json` with this shape — `assignments` must contain E
    }
    ```
 
-Then validate, expand ids to every member template (byte-exact by construction), and store — GROWTH merges into the base entry, NEW stores fresh. Use `MODE`/`APP_KEY`/`BASE_KEY`/`MAX_CHARS` from the bootstrap output (`--max-chars` must match the bootstrap's, or the stored fingerprint won't match the next run):
+Then validate, expand ids to every member template (by hash, exact by construction), merge — GROWTH merges into the base entry, NEW passes through — and store. Use `MODE`/`APP_KEY`/`BASE_KEY`/`MAX_CHARS` from the bootstrap output (`--max-chars` must match the bootstrap's, or the stored fingerprint won't match the next run):
    ```bash
    BIN=~/.codex/marketplaces/yscope/plugins/clp/bin
    # Fields must be ARRAYS (a bare `.assignments` test passes for a scalar,
@@ -99,13 +99,14 @@ Then validate, expand ids to every member template (byte-exact by construction),
    "$BIN"/logtype-cluster expand --clusters /tmp/logtype-clusters.json \
      --classification /tmp/logtype-class.json --output /tmp/logtype-expanded.json
    if [[ "$MODE" == "GROWTH" ]]; then
-     # Guard: an empty BASE_KEY would silently store ONLY the new templates.
+     # Guard: an empty BASE_KEY would silently keep ONLY the new templates.
      [[ -n "$BASE_KEY" ]] || { echo "error: GROWTH with empty BASE_KEY" >&2; exit 1; }
-     "$BIN"/logtype-cache put-merged --max-chars "$MAX_CHARS" --base-key "$BASE_KEY" --key "$APP_KEY" < /tmp/logtype-expanded.json
+     "$BIN"/logtype-cache merge --base-key "$BASE_KEY" < /tmp/logtype-expanded.json > /tmp/logtype-classification.json
    else
-     "$BIN"/logtype-cache put-merged --max-chars "$MAX_CHARS" --key "$APP_KEY" < /tmp/logtype-expanded.json
+     "$BIN"/logtype-cache merge < /tmp/logtype-expanded.json > /tmp/logtype-classification.json
    fi
-   "$BIN"/logtype-cache get "$APP_KEY" > /tmp/logtype-classification.json   # full plan for step 7
+   # Store it for the next run (milliseconds; step 7 reads the file above):
+   "$BIN"/logtype-cache put --key "$APP_KEY" --max-chars "$MAX_CHARS" < /tmp/logtype-classification.json
    ```
 
 After storing, report the taxonomy you produced and that the classification is now cached for future runs.
@@ -120,16 +121,21 @@ After storing, report the taxonomy you produced and that the classification is n
    "$BIN"/kql-build check-plan /tmp/logtype-query-plan-repaired.json || exit 1
    "$BIN"/logtype-cache set-plan --key "$APP_KEY" < /tmp/logtype-query-plan-repaired.json
    jq -c '.query_plan[]' /tmp/logtype-query-plan-repaired.json > /tmp/logtype-query-plan.txt
-   # Add the severity/logger baseline (samples the archive for a few seconds; SCHEMA= is the extract's line):
+   # The severity/logger baseline, as its own plan and pool (samples the archive
+   # for a few seconds; SCHEMA= is the extract's line):
    "$BIN"/logtype-baseline-plan --archive <archive-dir> --schema-json '<SCHEMA= line>'
-   # Then run the whole plan as one query pool:
+   "$BIN"/logtype-query-plan-run --retry-failed --query-plan-file /tmp/logtype-baseline-plan.txt \
+     --results-file /tmp/logtype-baseline-results.ndjson <archive-dir>
+   # Then the classified plan:
    "$BIN"/logtype-query-plan-run --retry-failed <archive-dir>
-   "$BIN"/logtype-query-plan-run --print-table
+   # Both tables, each numbered from 1 (cite "baseline #N" or "plan #N"):
+   "$BIN"/logtype-query-plan-run --print-table --results-file /tmp/logtype-baseline-results.ndjson | tee /tmp/logtype-baseline-table.md
+   "$BIN"/logtype-query-plan-run --print-table | tee /tmp/logtype-plan-table.md
    ```
 
    `QUERY_PLAN_INVALID=` above zero means entries without a valid `match` filter — typically a plan cached before plans used `match`, whose entries carry hand-written `kql` strings (`QUERY_PLAN_INVALID_ENTRIES=` lists them). Repair them once before running the plan: tell the user, list the reasons with `check-plan ... | grep ERROR`, and write `/tmp/logtype-query-plan-repaired.json` as `{"query_plan":[...]}` holding every entry in order — the valid ones unchanged, each invalid one with the same label, method, project, grep, and jq, its filter rewritten as an equivalent `match` (for a `kql` string that mixes AND and OR without parentheses, the grouping its label means), and no `kql` key. Validate it with `check-plan`, store it with `set-plan` (it replaces only the plan; templates and taxonomy stay), and refresh `/tmp/logtype-query-plan.txt` as shown. The next run reads the repaired plan from the cache.
 
-   The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in `/tmp/logtype-query-results.ndjson`; the run also records the archive's total record count. As entries finish, give one line per entry: its number, label, result or status, and elapsed time. The baseline entries (`origin: "baseline"`) give the severity and logger breakdown; when a rare-severity residual is small, a follow-up entry fetches those records, and its `samples` are the errors and warnings themselves. `/tmp/logtype-category-totals.json` holds the exact records per category, so report those instead of a keyword probe's count. Then run `"$BIN"/logtype-insight-facts --schema-json '<SCHEMA= line>' --results-file /tmp/logtype-query-results.ndjson --freqs-file <FREQS_FILE>` (add `--freqs-file none --category-totals none` when frequencies are unavailable): it writes `/tmp/logtype-insight-facts.md` with every number of the report computed in code, so quote figures from that file and never add up or derive your own. Before presenting the report, save it and run `"$BIN"/logtype-report-check <report file> --also <results table file>`; fix or remove any figure it flags. When the pool is done, show the `--print-table` output verbatim and call out the entries that failed, matched nothing, or matched nearly everything. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give one line with the top templates by frequency, and "queries done, writing the report" before step 8. For the queries you run yourself, pick the method that fits:
+   The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in its results file (`/tmp/logtype-baseline-results.ndjson` for the baseline, `/tmp/logtype-query-results.ndjson` for the plan); the run also records the archive's total record count. As entries finish, give one line per entry: its number, label, result or status, and elapsed time. The baseline entries (`origin: "baseline"`) give the severity and logger breakdown; when a rare-severity residual is small, a follow-up entry fetches those records, and its `samples` are the errors and warnings themselves. `/tmp/logtype-category-totals.json` holds the exact records per category, so report those instead of a keyword probe's count. Then run `"$BIN"/logtype-insight-facts --schema-json '<SCHEMA= line>' --freqs-file <FREQS_FILE>` (it reads both results files) (add `--freqs-file none --category-totals none` when frequencies are unavailable): it writes `/tmp/logtype-insight-facts.md` with every number of the report computed in code, so quote figures from that file and never add up or derive your own. Before presenting the report, save it and run `"$BIN"/logtype-report-check <report file> --also /tmp/logtype-baseline-table.md --also /tmp/logtype-plan-table.md`; fix or remove any figure it flags. When the pools are done, show both tables verbatim and call out the entries that failed, matched nothing, or matched nearly everything. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give one line with the top templates by frequency, and "queries done, writing the report" before step 8. For the queries you run yourself, pick the method that fits:
    - `count`: run the KQL with `--count` (in-engine; cannot be combined with `--projection`), never `--projection ... | grep -c '^{'`. It prints one `{"archive_id":...,"count":N}` line per archive and nothing when zero records match; treat empty output as a real zero.
    - `project+grep`: fold the target into the KQL as `<message>:"*text*"`, and OR the wildcards for a keyword alternation (`<message>:"*a*" OR <message>:"*b*"`). Only when the target needs real regex features (anchors, character classes, backreferences), run the KQL with `--projection`, then `grep '^{' | jq -r '.<message>' | grep -Ei '<grep>'`. Add `--limit N` when a few example records are enough.
    - `project+jq`: run the KQL with `--projection`, then `grep '^{' | jq -r '<jq>'`.
@@ -176,7 +182,7 @@ Semantic search (`semantic("…")`) also reads the logtypes directly and is a go
 
 ## Classification cache notes
 
-- `app_key = sha256(sorted set of distinct logtype strings, each capped at `MAX_CHARS` characters)` — the fingerprint of the *embedded* vocabulary, since the same limit is applied before embedding; cache dir `~/.config/yscope-clp-plugin/logtype-cache/` (`$CLP_LOGTYPE_CACHE_DIR` or `--cache-dir` to override). Entries store `schema`, `taxonomy`, `templates` (FULL, byte-exact), `query_plan`, plus `max_chars`, `classified_at`, and `grown_from` lineage.
-- `diff` modes: **UPTODATE** (reuse, no classifying — but verify the cached schema; a full template differing only past the character limit is appended with the category of the truncated form it shares), **GROWTH** (classify only the new templates, `put-merged` unions them into the base entry), **NEW** (classify all, store fresh). The bootstrap runs `diff` for you and fetches the relevant entries.
-- GROWTH matching compares byte-exact full templates; the subset test behind it uses the truncated sets. Byte-exactness is guaranteed when you go through `logtype-cluster expand` (it copies members verbatim); on the no-clusterer path, paste logtypes verbatim from the normalized NDJSON.
+- `app_key = sha256(sorted set of distinct logtype strings, each capped at `MAX_CHARS` characters)` — the fingerprint of the *embedded* vocabulary, since the same limit is applied before embedding; the cache is `cache.sqlite` in `~/.config/yscope-clp-plugin/logtype-cache/` (`$CLP_LOGTYPE_CACHE_DIR` or `--cache-dir` to override). Entries store `schema`, `taxonomy`, `query_plan`, `max_chars`, `classified_at`, `grown_from` lineage, and per template its `hash` (full text), `prefix_hash` (first `MAX_CHARS` characters) and `category` — never the text, which stays in the archive's dictionary dump and which `logtype-insight-extract` joins on the hash.
+- `diff` modes: **UPTODATE** (reuse, no classifying — but verify the cached schema; a template differing from a cached one only past the character limit takes its category through the shared prefix hash), **GROWTH** (classify only the new templates; `merge` unions them into the base entry), **NEW** (classify all). The bootstrap runs `diff` for you and fetches the relevant entries. If `diff` warns that entries are in the old JSON format, tell the user and suggest `logtype-cache repair` (a one-time conversion); do not run it on your own.
+- GROWTH matching compares hashes of the full templates; the subset test behind it uses the prefix hashes. Both are exact when you go through `logtype-cluster expand`, which hashes the members straight from the cluster file.
 - Inspect: `logtype-cache list` (shows lineage), `logtype-cache show <APP_KEY>`.

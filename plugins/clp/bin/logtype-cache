@@ -23,26 +23,31 @@ classification reused. When it grows, the key changes; `diff` finds the
 previous entry whose truncated template set is a subset of the new one (the
 archive grew from it) so only the new templates need classifying.
 
-Stored `templates[].logtype` are always the FULL, byte-exact strings — the
-character limit is an embedding/fingerprint concern only. Note the deliberate
-consequence: a change to a template's tail beyond the limit does not change the
-fingerprint, so it does not register as growth.
+Storage: one SQLite database, <cache-dir>/cache.sqlite. An entry is one row of
+`entries` (schema, taxonomy, query_plan, max_chars, classified_at, grown_from)
+and one row of `templates` per template. A template is stored by hash, never by
+text (see lib/logtypes.py): `hash` of the full template, `prefix_hash` of its
+first max_chars characters, and its `category`. Templates can be hundreds of KB
+each -- CockroachDB logs multi-line Pebble stats tables as single messages --
+and an entry that held their text grew past 2 GB, which every lookup parsed in
+full. The text is in the archive's own dictionary dump; readers join on the
+hash. Finding the entry an archive grew from is one indexed subset query.
 
-Cache layout:
-    <cache-dir>/<KEY>.json
-where each entry is the classification JSON, e.g.:
+A classification, as read from stdin and printed by `get`, is:
     {
-      "app_key": "...",
+      "app_key": "...",                    # printed by get
       "schema": {"timestamp": "t.$date", "severity": "s", ...},
       "taxonomy": [{"category": "errors", "description": "..."}],
-      "templates": [{"logtype": "...", "category": "errors"}],
+      "templates": [{"hash": "<sha256>", "prefix_hash": "<sha256>",
+                     "category": "errors"}],
       "query_plan": [{"label": "Errors", "method": "count",
                       "match": {"any": [{"field": "s", "eq": "E"},
                                         {"field": "s", "eq": "F"}]}}],
-      "classified_at": "2026-08-07T...",
-      "max_chars": 500,                    # limit the key was computed at
+      "max_chars": 500,                    # limit the prefix hashes and key use
+      "classified_at": "2026-08-07T...",   # printed by get
       "grown_from": "<previous app_key>"   # present only when incrementally grown
     }
+`logtype-cluster expand` writes this shape.
 
 Subcommands:
     normalize [--shapes-file F]    Render a `stats.log_shapes` NDJSON dump
@@ -71,84 +76,73 @@ Subcommands:
                                   then NDJSON template lines ({"logtype":"..."}):
                                     UPTODATE\\t<app_key>\\t<count>
                                         cache is current; no templates to classify.
-                                        Also reported when the truncated set is
-                                        unchanged but a stored entry is keyed
-                                        differently (e.g. a template's tail moved
-                                        past the character limit); any new full
-                                        templates then inherit the category of the
-                                        truncated form they share, and the entry
-                                        is re-stored under the canonical key.
+                                        A template that differs from a cached one
+                                        only past the limit takes that one's
+                                        category when joined on prefix_hash.
                                     GROWTH\\t<app_key>\\t<base_key>\\t<count>\\t<new_count>
                                         archive grew from <base_key>; the
                                         following <new_count> templates are NEW
-                                        and need classifying (then put-merged).
+                                        and need classifying (then merge).
                                     NEW\\t<app_key>\\t<count>
                                         no base found; all <count> templates
                                         follow and need classifying.
                                   <count> is always the TRUE full template count;
-                                  subset matching is done on truncated sets.
-    get   KEY [--cache-dir D]      Print cached JSON to stdout (exit 0); exit 1
-                                  on miss.
-    put   KEY [--cache-dir D]      Read classification JSON from stdin and store
-                                  it under <cache-dir>/KEY.json (atomic write).
-                                  Stamps/refreshes `classified_at`.
-    put-merged --base-key BK --key NK [--cache-dir D]
-                                  Read a classification JSON for the NEW templates
-                                  (from `diff`'s GROWTH/NEW output) from stdin,
-                                  merge it into the base entry BK's
-                                  templates/taxonomy/query_plan, and store the
-                                  merged result under NK. With no --base-key (or
-                                  an absent base) this behaves like `put`. The
-                                  merged entry records `grown_from: BK`.
-    set-plan --key K [--cache-dir D]
-                                  Replace entry K's query_plan with the plan read
+                                  subset matching is done on prefix hashes.
+    get   KEY                      Print the cached classification (exit 0); exit
+                                  1 on miss.
+    merge [--base-key BK]          Read a classification of the NEW templates
+                                  from stdin and print it merged with entry BK
+                                  (templates by hash, taxonomy by category,
+                                  query_plan by label; records grown_from). With
+                                  no --base-key it prints the input unchanged.
+                                  Writes nothing, so the insight pass can read
+                                  the result at once while `put` stores it.
+    put   --key K                  Store the classification read from stdin
+                                  under K, replacing any entry K. Stamps
+                                  `classified_at`. Safe to run in the
+                                  background: readers see the old entry or the
+                                  new one, never a mix.
+    set-plan --key K               Replace entry K's query_plan with the plan read
                                   from stdin (a JSON object with "query_plan",
                                   or a bare array), leaving its templates,
                                   taxonomy, and schema untouched. Stamps
                                   `plan_updated_at`. Used to store a repaired
                                   plan. Exit 1 when K is not cached.
-
-put, put-merged, and set-plan refuse (exit 2, nothing stored) a query_plan
-entry without a valid "match" filter -- a malformed filter, or a hand-written
-"kql" string (see lib/kql_build.py). put-merged checks only the entries read
-from stdin; the base entry's plan is kept as is.
-    list  [--cache-dir D]          List cached entries: key, template count,
+    list                           List cached entries: key, template count,
                                   classified_at, grown_from.
-    show  KEY [--cache-dir D]      Pretty-print one cached entry.
+    show  KEY                      Pretty-print one cached entry.
+    repair                         Convert entries of the old one-JSON-file-per-
+                                  entry cache (<cache-dir>/<KEY>.json, which
+                                  held template text) into the database, under
+                                  the same keys, then delete each converted
+                                  file. The old files are otherwise ignored.
+
+put, merge, and set-plan refuse (exit 2, nothing written) a query_plan entry
+without a valid "match" filter -- a malformed filter, or a hand-written "kql"
+string (see lib/kql_build.py). merge checks only the entries read from stdin;
+the base entry's plan is kept as is.
 
 --cache-dir overrides the default
 ~/.config/yscope-clp-plugin/logtype-cache (or $CLP_LOGTYPE_CACHE_DIR).
 """
 import argparse
-import hashlib
 import json
 import os
 import re
 import signal
+import sqlite3
 import sys
-import tempfile
+import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from kql_build import FilterError, check_entry  # noqa: E402
+from logtypes import (  # noqa: E402
+    DEFAULT_MAX_CHARS, app_key, default_max_chars, prefix_hash, template_hash)
 
-# Cache keys are sha256 hex digests; anything else is rejected by entry_path.
+# Cache keys and template hashes are sha256 hex digests.
 _KEY_RE = re.compile(r"\A[0-9a-f]{64}\Z")
-
-# Templates are capped at this many UTF-8 characters before fingerprinting — the
-# same limit logtype-cluster applies before embedding (truncate_chars is
-# duplicated there; the two MUST agree or the embedding and the cache diverge).
-# Changing it deliberately re-keys the cache. 500 keeps embedded texts under the
-# embedding model's 512-token context (see logtype-cluster.py).
-DEFAULT_MAX_CHARS = 500
-
-
-def default_max_chars():
-    try:
-        value = int(os.environ.get("CLP_LOGTYPE_MAX_CHARS", DEFAULT_MAX_CHARS))
-    except (TypeError, ValueError):
-        return DEFAULT_MAX_CHARS
-    return value if value > 0 else DEFAULT_MAX_CHARS
+DB_NAME = "cache.sqlite"
 
 
 def resolve_max_chars(value):
@@ -159,35 +153,12 @@ def resolve_max_chars(value):
     return value if value > 0 else 0
 
 
-def truncate_chars(text, max_chars):
-    """Cap `text` at max_chars UTF-8 characters (code points).
-
-    Python str slicing is by code point, so this cannot split a character and
-    the result is always valid UTF-8. Must stay identical to logtype-cluster.py's
-    copy.
-    """
-    return text if len(text) <= max_chars else text[:max_chars]
+def app_key_for_logtypes(logtypes, max_chars):
+    return app_key(logtypes, max_chars)
 
 
-def truncated_set(logtypes, max_chars):
-    """The deduplicated set of truncated forms — the cache's fingerprint input."""
-    return {truncate_chars(lt, max_chars) for lt in logtypes}
-
-
-def entry_max_chars(obj, fallback):
-    """The character limit a stored entry's key was computed at, or `fallback`."""
-    value = obj.get("max_chars") if isinstance(obj, dict) else None
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
-    return fallback
-
-
-def entry_truncated_set(obj, fallback):
-    """(truncated set, limit) for a stored entry, recomputed from its byte-exact
-    full templates at the limit the entry recorded. The stored templates remain
-    the single source of truth — no truncated list is trusted from disk."""
-    limit = entry_max_chars(obj, fallback)
-    return {truncate_chars(t, limit) for t in entry_template_set(obj)}, limit
+def now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # `stats.log_shapes` shape strings come in TWO encodings:
 #
@@ -304,6 +275,138 @@ def default_cache_dir():
     return os.path.expanduser("~/.config/yscope-clp-plugin/logtype-cache")
 
 
+# --- Storage -----------------------------------------------------------------
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS entries (
+    app_key          TEXT PRIMARY KEY,
+    max_chars        INTEGER NOT NULL,
+    schema           TEXT,              -- JSON object, or NULL
+    taxonomy         TEXT NOT NULL,     -- JSON array
+    query_plan       TEXT NOT NULL,     -- JSON array
+    classified_at    TEXT NOT NULL,
+    plan_updated_at  TEXT,
+    grown_from       TEXT
+);
+CREATE TABLE IF NOT EXISTS templates (
+    app_key      TEXT NOT NULL REFERENCES entries(app_key) ON DELETE CASCADE,
+    hash         TEXT NOT NULL,         -- sha256 of the full template
+    prefix_hash  TEXT NOT NULL,         -- sha256 of its first max_chars characters
+    category     TEXT NOT NULL,
+    PRIMARY KEY (app_key, hash)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS templates_by_prefix ON templates(app_key, prefix_hash);
+"""
+
+
+def check_key(key):
+    if not isinstance(key, str) or not _KEY_RE.match(key):
+        raise SystemExit(f"error: invalid cache key {key!r}: expected a 64-character hex digest")
+    return key
+
+
+def connect(cache_dir):
+    os.makedirs(cache_dir, exist_ok=True)
+    db = sqlite3.connect(os.path.join(cache_dir, DB_NAME), timeout=120)
+    # WAL lets a background `put` write while `diff`/`get` read.
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA foreign_keys=ON")
+    db.executescript(SCHEMA_SQL)
+    return db
+
+
+def legacy_files(cache_dir):
+    """Entries of the old one-JSON-file-per-entry cache still in cache_dir."""
+    if not os.path.isdir(cache_dir):
+        return []
+    return sorted(n for n in os.listdir(cache_dir) if n.endswith(".json") and _KEY_RE.match(n[:-5]))
+
+
+def warn_legacy(cache_dir):
+    old = legacy_files(cache_dir)
+    if old:
+        print(f"warning: {len(old)} cache entr{'y is' if len(old) == 1 else 'ies are'} in the old JSON "
+              f"format and ignored; run `logtype-cache repair` once to convert "
+              f"{'it' if len(old) == 1 else 'them'}", file=sys.stderr)
+
+
+def load_entry(db, key):
+    row = db.execute(
+        "SELECT max_chars, schema, taxonomy, query_plan, classified_at, plan_updated_at, grown_from "
+        "FROM entries WHERE app_key = ?", (key,)).fetchone()
+    if row is None:
+        return None
+    obj = {"app_key": key, "max_chars": row[0]}
+    if row[1] is not None:
+        obj["schema"] = json.loads(row[1])
+    obj["taxonomy"] = json.loads(row[2])
+    obj["query_plan"] = json.loads(row[3])
+    obj["classified_at"] = row[4]
+    if row[5]:
+        obj["plan_updated_at"] = row[5]
+    if row[6]:
+        obj["grown_from"] = row[6]
+    obj["templates"] = [
+        {"hash": h, "prefix_hash": p, "category": c}
+        for h, p, c in db.execute(
+            "SELECT hash, prefix_hash, category FROM templates WHERE app_key = ? ORDER BY hash", (key,))
+    ]
+    return obj
+
+
+def store_entry(db, key, obj, max_chars, classified_at=None):
+    """Replace entry `key` with `obj` in one transaction."""
+    templates = {t["hash"]: t for t in obj["templates"]}  # the last one for a hash wins
+    with db:
+        db.execute("DELETE FROM entries WHERE app_key = ?", (key,))
+        db.execute(
+            "INSERT INTO entries (app_key, max_chars, schema, taxonomy, query_plan, classified_at, "
+            "plan_updated_at, grown_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (key, max_chars,
+             json.dumps(obj["schema"], ensure_ascii=False) if "schema" in obj else None,
+             json.dumps(obj.get("taxonomy", []), ensure_ascii=False),
+             json.dumps(obj.get("query_plan", []), ensure_ascii=False),
+             classified_at or now(), obj.get("plan_updated_at"), obj.get("grown_from")))
+        db.executemany(
+            "INSERT INTO templates (app_key, hash, prefix_hash, category) VALUES (?, ?, ?, ?)",
+            ((key, t["hash"], t["prefix_hash"], t["category"]) for t in templates.values()))
+    return len(templates)
+
+
+def read_classification(stream):
+    """The classification JSON from stream, validated, or (None, rc)."""
+    try:
+        obj = json.loads(stream.read())
+    except json.JSONDecodeError as e:
+        print(f"error: stdin is not valid JSON: {e}", file=sys.stderr)
+        return None, 2
+    if not isinstance(obj, dict):
+        print("error: classification JSON must be a JSON object", file=sys.stderr)
+        return None, 2
+    for field in ("templates", "taxonomy", "query_plan"):
+        if field in obj and not isinstance(obj[field], list):
+            print(f"error: '{field}' must be a JSON array", file=sys.stderr)
+            return None, 2
+    obj.setdefault("templates", [])
+    for i, t in enumerate(obj["templates"], 1):
+        if not isinstance(t, dict):
+            print(f"error: templates[{i}] is not an object", file=sys.stderr)
+            return None, 2
+        if "logtype" in t:
+            print(f"error: templates[{i}] carries template text ('logtype'); the cache stores "
+                  f"templates by hash -- produce the classification with `logtype-cluster expand`",
+                  file=sys.stderr)
+            return None, 2
+        if not (isinstance(t.get("hash"), str) and _KEY_RE.match(t["hash"])
+                and isinstance(t.get("prefix_hash"), str) and _KEY_RE.match(t["prefix_hash"])
+                and isinstance(t.get("category"), str)):
+            print(f"error: templates[{i}] needs 'hash' and 'prefix_hash' (sha256 hex) and a "
+                  f"'category' string", file=sys.stderr)
+            return None, 2
+    if refuse_plan(obj.get("query_plan", [])):
+        return None, 2
+    return obj, 0
+
 def load_logtypes(path):
     """Return the set of distinct canonical logtype strings from a dictionary
     NDJSON file. Accepts both line shapes:
@@ -327,141 +430,6 @@ def load_logtypes(path):
             if isinstance(lt, str) and lt.strip():
                 logtypes.add(lt)
     return logtypes
-
-
-def app_key_for_logtypes(logtypes, max_chars):
-    h = hashlib.sha256()
-    for lt in sorted(truncated_set(logtypes, max_chars)):
-        h.update(lt.encode("utf-8"))
-        h.update(b"\n")
-    return h.hexdigest()
-
-
-def entry_path(cache_dir, key):
-    # Every legitimate key is a sha256 hex digest produced by
-    # app_key_for_logtypes. Validate the shape so a hand-passed --key/--base-key
-    # cannot escape the cache directory via path separators or "..".
-    if not isinstance(key, str) or not _KEY_RE.match(key):
-        raise SystemExit(
-            f"error: invalid cache key {key!r}: expected a 64-character hex digest"
-        )
-    return os.path.join(cache_dir, f"{key}.json")
-
-
-def load_entry(cache_dir, key):
-    path = entry_path(cache_dir, key)
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def atomic_write(cache_dir, key, obj):
-    os.makedirs(cache_dir, exist_ok=True)
-    path = entry_path(cache_dir, key)
-    fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".json", dir=cache_dir)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(obj, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def dict_list(obj, field):
-    """Return obj[field] as a list of dicts; [] for any malformed shape.
-
-    Cache entries and stdin classifications are model-generated JSON, so a field
-    can arrive as a scalar or null. Coercing here keeps one bad entry from
-    breaking `diff` for every other archive in the cache.
-    """
-    if not isinstance(obj, dict):
-        return []
-    value = obj.get(field)
-    if not isinstance(value, list):
-        return []
-    return [v for v in value if isinstance(v, dict)]
-
-
-def entry_template_set(obj):
-    return {
-        t["logtype"]
-        for t in dict_list(obj, "templates")
-        if isinstance(t.get("logtype"), str)
-    }
-
-
-def scan_cache(cache_dir, current_templates, fallback_max_chars):
-    """One pass over the cache, comparing truncated template sets.
-
-    Returns (exact, best):
-      exact = (key, obj, limit) for the first entry whose truncated set equals
-              the probe's (both taken at that entry's recorded limit), or None.
-      best  = (key, obj, truncated_set, limit) for the entry whose truncated set
-              is the largest PROPER subset of the probe's, or None. Requiring a
-              proper subset means a GROWTH report always has new_count > 0.
-    """
-    exact = None
-    best = None
-    if not os.path.isdir(cache_dir):
-        return exact, best
-    for name in sorted(os.listdir(cache_dir)):
-        if not name.endswith(".json") or not _KEY_RE.match(name[:-5]):
-            continue
-        key = name[:-5]
-        obj = load_entry(cache_dir, key)
-        if not obj:
-            continue
-        if not isinstance(obj, dict) or not isinstance(obj.get("templates"), list):
-            print(
-                f"warning: skipping malformed cache entry {name} "
-                f"(templates is not a JSON array)",
-                file=sys.stderr,
-            )
-            continue
-        eset, limit = entry_truncated_set(obj, fallback_max_chars)
-        if not eset:
-            continue
-        probe = {truncate_chars(t, limit) for t in current_templates}
-        if exact is None and eset == probe:
-            exact = (key, obj, limit)
-        if eset < probe and (best is None or len(eset) > len(best[2])):
-            best = (key, obj, eset, limit)
-    return exact, best
-
-
-def backfill_entry(entry, missing, limit):
-    """Copy of `entry` with `missing` full templates appended, each inheriting
-    the category of a stored template that shares its truncated form.
-
-    Keeps a UPTODATE entry complete after a full-set change that left the
-    truncated vocabulary untouched — no model call, because two templates with
-    the same truncated form were embedded identically. Returns None when nothing
-    could be inherited."""
-    category_by_trunc = {}
-    for t in dict_list(entry, "templates"):
-        logtype, category = t.get("logtype"), t.get("category")
-        if isinstance(logtype, str) and isinstance(category, str):
-            category_by_trunc.setdefault(truncate_chars(logtype, limit), category)
-    added = []
-    for logtype in missing:
-        category = category_by_trunc.get(truncate_chars(logtype, limit))
-        if category is not None:
-            added.append({"logtype": logtype, "category": category})
-    if not added:
-        return None
-    extended = dict(entry)
-    extended["templates"] = list(dict_list(entry, "templates")) + added
-    return extended
-
 
 def read_shape_objects(shapes_file):
     """Return (objects, rc): the JSON objects parsed from a stats.log_shapes
@@ -572,102 +540,6 @@ def cmd_count(args):
     print(len(logtypes))
     return 0
 
-
-def extend_if_incomplete(cache_dir, canonical_key, entry, logtypes, max_chars):
-    """Store `entry` under `canonical_key` with any full template missing from it
-    appended, inheriting the category of a stored template that shares its
-    truncated form. Returns True when an extended entry was written.
-
-    This is what keeps a UPTODATE entry complete when the full set changed
-    without changing the truncated vocabulary — a tail moved past the limit.
-    """
-    stored = entry_template_set(entry)
-    missing = sorted(lt for lt in logtypes if lt not in stored)
-    if not missing:
-        return False
-    extended = backfill_entry(entry, missing, max_chars)
-    if extended is None:
-        return False
-    atomic_store(cache_dir, canonical_key, extended, max_chars)
-    return True
-
-
-def cmd_diff(args):
-    if not os.path.exists(args.logtypes_file):
-        print(f"error: logtypes file not found: {args.logtypes_file}", file=sys.stderr)
-        return 2
-    logtypes = load_logtypes(args.logtypes_file)
-    if not logtypes:
-        print("error: no logtype entries found in file", file=sys.stderr)
-        return 1
-    max_chars = resolve_max_chars(args.max_chars)
-    if max_chars == 0:
-        print("error: --max-chars must be a positive integer", file=sys.stderr)
-        return 2
-    app_key = app_key_for_logtypes(logtypes, max_chars)
-
-    # Canonical hit: the embedded vocabulary is unchanged since last
-    # classification. Still reconcile any full templates that appeared only in
-    # their tail past the limit.
-    entry = load_entry(args.cache_dir, app_key)
-    if entry is not None:
-        extend_if_incomplete(args.cache_dir, app_key, entry, logtypes, max_chars)
-        print(f"UPTODATE\t{app_key}\t{len(logtypes)}")
-        return 0
-
-    exact, best = scan_cache(args.cache_dir, logtypes, max_chars)
-
-    # Same truncated vocabulary under a different key — an entry written before
-    # this fingerprint. Adopt it: optionally canonicalize it under the current
-    # key (only when it was compared at the current limit), then report UPTODATE.
-    if exact is not None:
-        key, obj, limit = exact
-        if limit == max_chars:
-            if extend_if_incomplete(args.cache_dir, app_key, obj, logtypes,
-                                    max_chars):
-                key = app_key
-        print(f"UPTODATE\t{key}\t{len(logtypes)}")
-        return 0
-
-    if best is not None:
-        key, obj, _eset, _limit = best
-        base_full = entry_template_set(obj)
-        new_templates = sorted(lt for lt in logtypes if lt not in base_full)
-        if new_templates:
-            print(f"GROWTH\t{app_key}\t{key}\t{len(logtypes)}\t{len(new_templates)}")
-            for lt in new_templates:
-                print(json.dumps({"logtype": lt}, ensure_ascii=False))
-            return 0
-        # scan_cache only returns proper subsets, so this is unreachable; never
-        # emit a GROWTH that has nothing to classify.
-        print(f"UPTODATE\t{key}\t{len(logtypes)}")
-        return 0
-
-    # No base: first classification of this application.
-    print(f"NEW\t{app_key}\t{len(logtypes)}")
-    for lt in sorted(logtypes):
-        print(json.dumps({"logtype": lt}, ensure_ascii=False))
-    return 0
-
-
-def cmd_get(args):
-    obj = load_entry(args.cache_dir, args.key)
-    if obj is None:
-        return 1
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False))
-    sys.stdout.write("\n")
-    return 0
-
-
-def atomic_store(cache_dir, key, obj, max_chars=None):
-    obj["app_key"] = key
-    obj["classified_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if max_chars is not None:
-        obj["max_chars"] = max_chars
-    atomic_write(cache_dir, key, obj)
-    print(f"Stored classification for app_key {key} -> {entry_path(cache_dir, key)}", file=sys.stderr)
-
-
 def plan_errors(plan):
     """Error lines for the query_plan entries that cannot be stored."""
     errors = []
@@ -690,106 +562,139 @@ def refuse_plan(plan):
     return bool(errors)
 
 
-def cmd_put(args):
-    raw = sys.stdin.read()
-    try:
-        obj = json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"error: stdin is not valid JSON: {e}", file=sys.stderr)
+def find_base(db, logtypes):
+    """(exact_key, best_key): an entry whose prefix-hash set equals the
+    archive's, and the entry whose set is the largest PROPER subset of it (the
+    archive grew from it), each or None. Each entry is compared at the limit it
+    was stored with. Requiring a proper subset means a GROWTH report always has
+    new templates."""
+    exact, best, best_n = None, None, -1
+    db.execute("CREATE TEMP TABLE IF NOT EXISTS probe (h TEXT PRIMARY KEY)")
+    for (limit,) in db.execute("SELECT DISTINCT max_chars FROM entries").fetchall():
+        probe = {prefix_hash(lt, limit) for lt in logtypes}
+        db.execute("DELETE FROM probe")
+        db.executemany("INSERT INTO probe (h) VALUES (?)", ((h,) for h in probe))
+        rows = db.execute(
+            "SELECT t.app_key, COUNT(DISTINCT t.prefix_hash), COUNT(DISTINCT p.h) "
+            "FROM templates t JOIN entries e ON e.app_key = t.app_key AND e.max_chars = ? "
+            "LEFT JOIN probe p ON p.h = t.prefix_hash GROUP BY t.app_key", (limit,)).fetchall()
+        for key, n, hits in sorted(rows):
+            if n != hits:
+                continue  # holds a template this archive doesn't have
+            if n == len(probe):
+                exact = exact or key
+            elif n > best_n:
+                best, best_n = key, n
+    return exact, best
+
+
+def cmd_diff(args):
+    if not os.path.exists(args.logtypes_file):
+        print(f"error: logtypes file not found: {args.logtypes_file}", file=sys.stderr)
         return 2
-    if not isinstance(obj, dict):
-        print("error: classification JSON must be a JSON object", file=sys.stderr)
-        return 2
-    for field in ("templates", "taxonomy", "query_plan"):
-        if field in obj and not isinstance(obj[field], list):
-            print(f"error: '{field}' must be a JSON array", file=sys.stderr)
-            return 2
-    if refuse_plan(obj.get("query_plan", [])):
-        return 2
+    logtypes = load_logtypes(args.logtypes_file)
+    if not logtypes:
+        print("error: no logtype entries found in file", file=sys.stderr)
+        return 1
     max_chars = resolve_max_chars(args.max_chars)
     if max_chars == 0:
         print("error: --max-chars must be a positive integer", file=sys.stderr)
         return 2
-    atomic_store(args.cache_dir, args.key, obj, max_chars)
+    key = app_key_for_logtypes(logtypes, max_chars)
+    warn_legacy(args.cache_dir)
+    db = connect(args.cache_dir)
+
+    if db.execute("SELECT 1 FROM entries WHERE app_key = ?", (key,)).fetchone():
+        print(f"UPTODATE\t{key}\t{len(logtypes)}")
+        return 0
+    exact, best = find_base(db, logtypes)
+    if exact:
+        # Same vocabulary stored under another key (another character limit).
+        print(f"UPTODATE\t{exact}\t{len(logtypes)}")
+        return 0
+    if best:
+        base = {h for (h,) in db.execute("SELECT hash FROM templates WHERE app_key = ?", (best,))}
+        new = sorted(lt for lt in logtypes if template_hash(lt) not in base)
+        if new:
+            print(f"GROWTH\t{key}\t{best}\t{len(logtypes)}\t{len(new)}")
+            for lt in new:
+                print(json.dumps({"logtype": lt}, ensure_ascii=False))
+            return 0
+        # find_base only returns proper subsets, so this is unreachable; never
+        # emit a GROWTH that has nothing to classify.
+        print(f"UPTODATE\t{best}\t{len(logtypes)}")
+        return 0
+
+    # No base: first classification of this application.
+    print(f"NEW\t{key}\t{len(logtypes)}")
+    for lt in sorted(logtypes):
+        print(json.dumps({"logtype": lt}, ensure_ascii=False))
     return 0
 
 
-def cmd_put_merged(args):
-    raw = sys.stdin.read()
-    try:
-        new = json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"error: stdin is not valid JSON: {e}", file=sys.stderr)
-        return 2
-    if not isinstance(new, dict):
-        print("error: classification JSON must be a JSON object", file=sys.stderr)
-        return 2
-    for field in ("templates", "taxonomy", "query_plan"):
-        if field in new and not isinstance(new[field], list):
-            print(f"error: '{field}' must be a JSON array", file=sys.stderr)
-            return 2
-    if refuse_plan(new.get("query_plan", [])):
-        return 2
+def cmd_get(args):
+    obj = load_entry(connect(args.cache_dir), check_key(args.key))
+    if obj is None:
+        return 1
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False))
+    sys.stdout.write("\n")
+    return 0
 
-    base = None
+
+def cmd_merge(args):
+    new, rc = read_classification(sys.stdin)
+    if new is None:
+        return rc
     if args.base_key:
-        base = load_entry(args.cache_dir, args.base_key)
-        if base is None and args.base_key:
-            print(f"warning: base key not found: {args.base_key}; storing as a fresh entry", file=sys.stderr)
+        base = load_entry(connect(args.cache_dir), check_key(args.base_key))
+        if base is None:
+            print(f"warning: base key not found: {args.base_key}; using the new classification alone",
+                  file=sys.stderr)
+        else:
+            # Templates by hash (base first, new overrides/extends).
+            merged = {t["hash"]: t for t in base["templates"]}
+            merged.update({t["hash"]: t for t in new["templates"]})
+            new["templates"] = list(merged.values())
+            # Taxonomy by category (base first, new categories appended).
+            cats = {}
+            for c in base["taxonomy"] + new.get("taxonomy", []):
+                if isinstance(c, dict) and c.get("category") is not None:
+                    cats.setdefault(c["category"], c)
+            new["taxonomy"] = list(cats.values())
+            # Query plan by label (base first; new-only labels appended).
+            labels = {}
+            for q in base["query_plan"] + new.get("query_plan", []):
+                if isinstance(q, dict) and q.get("label") is not None:
+                    labels.setdefault(q["label"], q)
+            new["query_plan"] = list(labels.values())
+            # Keep the base schema if the new classification didn't restate it.
+            if "schema" not in new and "schema" in base:
+                new["schema"] = base["schema"]
+            new.setdefault("max_chars", base["max_chars"])
+            new["grown_from"] = args.base_key
+    sys.stdout.write(json.dumps(new, ensure_ascii=False))
+    sys.stdout.write("\n")
+    return 0
 
-    # Stamp the limit the caller's key was computed at: explicit flag, else the
-    # base entry's recorded limit, else the default.
-    max_chars = args.max_chars
-    if max_chars is None:
-        max_chars = entry_max_chars(base, default_max_chars())
-    elif max_chars < 1:
+
+def cmd_put(args):
+    obj, rc = read_classification(sys.stdin)
+    if obj is None:
+        return rc
+    max_chars = args.max_chars if args.max_chars is not None else obj.get("max_chars", default_max_chars())
+    if not isinstance(max_chars, int) or max_chars < 1:
         print("error: --max-chars must be a positive integer", file=sys.stderr)
         return 2
-
-    if base:
-        # Merge templates by logtype (base first, new overrides/extends).
-        merged = {}
-        for t in dict_list(base, "templates"):
-            if isinstance(t.get("logtype"), str):
-                merged[t["logtype"]] = t
-        for t in dict_list(new, "templates"):
-            if isinstance(t.get("logtype"), str):
-                merged[t["logtype"]] = t
-        new["templates"] = list(merged.values())
-
-        # Merge taxonomy by category (base first, new categories appended).
-        cats = {}
-        for c in dict_list(base, "taxonomy"):
-            if c.get("category") is not None:
-                cats[c["category"]] = c
-        for c in dict_list(new, "taxonomy"):
-            if c.get("category") is not None:
-                cats.setdefault(c["category"], c)
-        new["taxonomy"] = list(cats.values())
-
-        # Merge query_plan by label (base first; new-only labels appended).
-        labels = {}
-        for q in dict_list(base, "query_plan"):
-            if q.get("label") is not None:
-                labels[q["label"]] = q
-        for q in dict_list(new, "query_plan"):
-            if q.get("label") is not None:
-                labels.setdefault(q["label"], q)
-        new["query_plan"] = list(labels.values())
-
-        # Keep the base schema if the new classification didn't restate it.
-        if "schema" not in new and "schema" in base:
-            new["schema"] = base["schema"]
-        new["grown_from"] = args.base_key
-
-    atomic_store(args.cache_dir, args.key, new, max_chars)
+    started = time.monotonic()
+    n = store_entry(connect(args.cache_dir), check_key(args.key), obj, max_chars)
+    print(f"Stored classification for app_key {args.key}: {n} templates in "
+          f"{time.monotonic() - started:.1f}s -> {os.path.join(args.cache_dir, DB_NAME)}", file=sys.stderr)
     return 0
 
 
 def cmd_set_plan(args):
-    raw = sys.stdin.read()
     try:
-        obj = json.loads(raw)
+        obj = json.loads(sys.stdin.read())
     except json.JSONDecodeError as e:
         print(f"error: stdin is not valid JSON: {e}", file=sys.stderr)
         return 2
@@ -800,55 +705,84 @@ def cmd_set_plan(args):
         return 2
     if refuse_plan(plan):
         return 2
-    entry = load_entry(args.cache_dir, args.key)
-    if not isinstance(entry, dict):
+    db = connect(args.cache_dir)
+    with db:
+        updated = db.execute("UPDATE entries SET query_plan = ?, plan_updated_at = ? WHERE app_key = ?",
+                             (json.dumps(plan, ensure_ascii=False), now(), check_key(args.key))).rowcount
+    if not updated:
         print(f"error: no cached classification for key {args.key}", file=sys.stderr)
         return 1
-    entry["query_plan"] = plan
-    entry["plan_updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    atomic_write(args.cache_dir, args.key, entry)
-    print(f"Stored {len(plan)}-entry query_plan for app_key {args.key} -> "
-          f"{entry_path(args.cache_dir, args.key)}", file=sys.stderr)
+    print(f"Stored {len(plan)}-entry query_plan for app_key {args.key}", file=sys.stderr)
     return 0
 
 
 def cmd_list(args):
-    if not os.path.isdir(args.cache_dir):
-        print(f"(cache dir does not exist: {args.cache_dir})", file=sys.stderr)
-        return 0
-    rows = []
-    for name in sorted(os.listdir(args.cache_dir)):
-        if not name.endswith(".json") or not _KEY_RE.match(name[:-5]):
-            continue
-        obj = load_entry(args.cache_dir, name[:-5])
-        if not obj:
-            continue
-        if not isinstance(obj, dict):
-            # Valid JSON but not an object (e.g. a bare list). Surface it as BAD
-            # rather than crashing, so the user can see which file to remove.
-            rows.append((name[:-5], "BAD", "?", "-"))
-            continue
-        templates = obj.get("templates", [])
-        classified_at = obj.get("classified_at", "?")
-        grown_from = obj.get("grown_from", "-")
-        rows.append((name[:-5], len(templates) if isinstance(templates, list) else "BAD", classified_at, grown_from))
+    warn_legacy(args.cache_dir)
+    rows = connect(args.cache_dir).execute(
+        "SELECT e.app_key, COUNT(t.hash), e.classified_at, e.grown_from FROM entries e "
+        "LEFT JOIN templates t ON t.app_key = e.app_key GROUP BY e.app_key ORDER BY e.app_key").fetchall()
     if not rows:
         print(f"(no cached classifications in {args.cache_dir})", file=sys.stderr)
         return 0
     print(f"{'app_key':<66}  templates  classified_at          grown_from")
     for key, n, ts, gf in rows:
-        gf_short = gf[:12] if isinstance(gf, str) and gf != "-" else "-"
-        print(f"{key:<66}  {str(n):>9}  {str(ts):<20}  {gf_short}")
+        print(f"{key:<66}  {n:>9}  {ts:<20}  {gf[:12] if gf else '-'}")
     return 0
 
 
 def cmd_show(args):
-    obj = load_entry(args.cache_dir, args.key)
+    obj = load_entry(connect(args.cache_dir), check_key(args.key))
     if obj is None:
         print(f"error: no cache entry for key {args.key}", file=sys.stderr)
         return 1
     print(json.dumps(obj, indent=2, ensure_ascii=False))
     return 0
+
+
+def cmd_repair(args):
+    """Convert old <KEY>.json entries (template text) into the database."""
+    old = legacy_files(args.cache_dir)
+    if not old:
+        print(f"nothing to repair: no old-format entries in {args.cache_dir}", file=sys.stderr)
+        return 0
+    db = connect(args.cache_dir)
+    failed = 0
+    for name in old:
+        path = os.path.join(args.cache_dir, name)
+        key = name[:-5]
+        size = os.path.getsize(path)
+        started = time.monotonic()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                entry = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"error: {name}: cannot read it ({e}); left in place", file=sys.stderr)
+            failed += 1
+            continue
+        limit = entry.get("max_chars") if isinstance(entry, dict) else None
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            limit = DEFAULT_MAX_CHARS
+        texts = [t for t in (entry.get("templates") if isinstance(entry, dict) else None) or []
+                 if isinstance(t, dict) and isinstance(t.get("logtype"), str) and isinstance(t.get("category"), str)]
+        if not texts:
+            print(f"error: {name}: no templates with text and category; left in place", file=sys.stderr)
+            failed += 1
+            continue
+        obj = {k: entry[k] for k in ("schema", "taxonomy", "query_plan", "plan_updated_at", "grown_from")
+               if k in entry}
+        obj["templates"] = [{"hash": template_hash(t["logtype"]), "prefix_hash": prefix_hash(t["logtype"], limit),
+                             "category": t["category"]} for t in texts]
+        expected = len({t["hash"] for t in obj["templates"]})
+        stored = store_entry(db, key, obj, limit, entry.get("classified_at"))
+        check = db.execute("SELECT COUNT(*) FROM templates WHERE app_key = ?", (key,)).fetchone()[0]
+        if stored != expected or check != expected:
+            print(f"error: {name}: stored {check} of {expected} templates; file left in place", file=sys.stderr)
+            failed += 1
+            continue
+        os.remove(path)
+        print(f"repaired {key[:12]}: {expected} templates from {size:,} bytes in "
+              f"{time.monotonic() - started:.1f}s; old file removed", file=sys.stderr)
+    return 1 if failed else 0
 
 
 def main(argv=None):
@@ -861,19 +795,19 @@ def main(argv=None):
 
     pn = sub.add_parser("normalize", help="Render stats.log_shapes NDJSON to canonical logtype NDJSON.")
     pn.add_argument("--shapes-file", default=None, help="Input file (default: stdin).")
-    pn.set_defaults(func=cmd_normalize, cache_dir=None)
+    pn.set_defaults(func=cmd_normalize)
 
     pf = sub.add_parser("freqs", help="Sum stats.log_shapes counts per canonical logtype.")
     pf.add_argument("--shapes-file", default=None, help="Input file (default: stdin).")
-    pf.set_defaults(func=cmd_freqs, cache_dir=None)
+    pf.set_defaults(func=cmd_freqs)
 
     pk = sub.add_parser("key", help="Compute the app_key for a logtypes NDJSON file.")
     pk.add_argument("--logtypes-file", required=True)
-    pk.set_defaults(func=cmd_key, cache_dir=None)
+    pk.set_defaults(func=cmd_key)
 
     pc = sub.add_parser("count", help="Print the number of distinct logtypes in the logtypes file.")
     pc.add_argument("--logtypes-file", required=True)
-    pc.set_defaults(func=cmd_count, cache_dir=None)
+    pc.set_defaults(func=cmd_count)
 
     pd = sub.add_parser("diff", help="Probe for cache hit/growth/new; emit templates to classify.")
     pd.add_argument("--logtypes-file", required=True)
@@ -883,14 +817,13 @@ def main(argv=None):
     pg.add_argument("key")
     pg.set_defaults(func=cmd_get)
 
-    pp = sub.add_parser("put", help="Store a classification read from stdin.")
-    pp.add_argument("key")
-    pp.set_defaults(func=cmd_put)
+    pm = sub.add_parser("merge", help="Merge a new-template classification into a base entry; print it.")
+    pm.add_argument("--base-key", default=None, help="Base app_key to merge into (absent = print as is).")
+    pm.set_defaults(func=cmd_merge)
 
-    pm = sub.add_parser("put-merged", help="Merge a new-template classification into a base entry and store.")
-    pm.add_argument("--base-key", default=None, help="Base app_key to merge into (absent = fresh store).")
-    pm.add_argument("--key", required=True, help="New app_key to store the merged result under.")
-    pm.set_defaults(func=cmd_put_merged)
+    pp = sub.add_parser("put", help="Store a classification read from stdin.")
+    pp.add_argument("--key", required=True, help="app_key to store it under.")
+    pp.set_defaults(func=cmd_put)
 
     pz = sub.add_parser("set-plan", help="Replace a cached entry's query_plan with one read from stdin.")
     pz.add_argument("--key", required=True, help="app_key of the entry to update.")
@@ -903,24 +836,24 @@ def main(argv=None):
     ps.add_argument("key")
     ps.set_defaults(func=cmd_show)
 
-    # Shared --cache-dir for get/put/put-merged/set-plan/diff/list/show (key/count don't need it).
-    for subp in (pd, pg, pp, pm, pz, pl, ps):
+    pr = sub.add_parser("repair", help="Convert old-format JSON entries into the database, once.")
+    pr.set_defaults(func=cmd_repair)
+
+    for subp in (pd, pg, pm, pp, pz, pl, ps, pr):
         subp.add_argument(
             "--cache-dir",
             default=default_cache_dir(),
             help="Cache directory (default: %(default)s, or $CLP_LOGTYPE_CACHE_DIR).",
         )
 
-    # Shared --max-chars for the subcommands that compute or stamp the
-    # fingerprint (key/diff/put/put-merged). count/get/list/show do not.
-    for subp in (pk, pd, pp, pm):
+    # --max-chars for the subcommands that compute or stamp the fingerprint.
+    for subp in (pk, pd, pp):
         subp.add_argument(
             "--max-chars",
             type=int,
             default=None,
-            help=f"cap each template at this many UTF-8 characters before "
-                 f"fingerprinting (default: {DEFAULT_MAX_CHARS}, or "
-                 f"$CLP_LOGTYPE_MAX_CHARS)",
+            help=f"cap each template at this many characters before fingerprinting "
+                 f"(default: {DEFAULT_MAX_CHARS}, or $CLP_LOGTYPE_MAX_CHARS)",
         )
 
     args = p.parse_args(argv)

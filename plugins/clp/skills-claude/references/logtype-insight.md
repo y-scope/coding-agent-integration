@@ -1,6 +1,6 @@
 # Logtype insight reference (logtype-insights step 7)
 
-Read this when a classification exists (`/tmp/logtype-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE). It covers executing the query plan with per-entry progress, adding the baseline queries, building the report writer's prompt, and the report format.
+Read this when a classification exists (`/tmp/logtype-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE). It covers building the insight inputs, executing the query plan with per-entry progress (the baseline queries already run in their own pool from step 4), building the report writer's prompt, and the report format.
 
 ## Build the prompt from the classification
 
@@ -13,7 +13,7 @@ jq -r '.taxonomy[] | "- \(.category): \(.description)"' /tmp/logtype-classificat
   --freqs-file FREQS_FILE
 ```
 
-(pass `--no-freqs` instead of `--freqs-file` when the bootstrap reported `FREQS=UNAVAILABLE`.) It writes `/tmp/logtype-templates-by-category.txt` (TEMPLATES BY CATEGORY), `/tmp/logtype-category-totals.json` (with frequencies: exact records per category, the stored per-template counts summed, no search needed) and `/tmp/logtype-query-plan.txt` (one query_plan entry per line, the input to `logtype-query-plan-run` below), and prints a `SCHEMA=`/`TEMPLATES=`/`CATEGORIES=`/`QUERY_PLAN_INVALID=` summary — report those counts to the user. Per category it keeps only the top `--max-per-category` templates (default 25) ranked by the frequencies file, each truncated to `--trunc-chars` (default 180); for the overwhelming majority of apps, whose templates are short and few, this changes nothing observable. It exists because a raw `jq -r '.templates | group_by(.category)[] | ...'` loads and sorts the *entire* templates array with no bound on either count or per-template length: an app that logs large near-duplicate blobs as "distinct" templates (observed: CockroachDB serializing multi-line Pebble stats tables as single messages, one category alone holding 9810 of 11558 total templates, mean template length ~184KB) produces a multi-GB classification file that turns that one `jq` call into a 10+ minute (or effectively hung) step. Never fall back to the raw `jq` pipeline to "avoid a dependency" — `logtype-insight-extract` has no third-party dependencies either, it is simply bounded.
+(pass `--no-freqs` instead of `--freqs-file` when the bootstrap reported `FREQS=UNAVAILABLE`; it then reads the template texts from `/tmp/logtypes.ndjson`.) The classification names templates by hash, not by text; the extract streams the archive's own dictionary dump (the frequencies file), hashes each template, and joins it to its category, so it never holds every template at once. It writes `/tmp/logtype-templates-by-category.txt` (TEMPLATES BY CATEGORY), `/tmp/logtype-category-totals.json` (with frequencies: exact records per category, the stored per-template counts summed, no search needed) and `/tmp/logtype-query-plan.txt` (one query_plan entry per line, the input to `logtype-query-plan-run` below), and prints a `SCHEMA=`/`TEMPLATES=`/`CATEGORIES=`/`QUERY_PLAN_INVALID=` summary, plus `UNCLASSIFIED=` when a template matched no classified one — report those counts to the user. Per category it keeps only the top `--max-per-category` templates (default 25) ranked by the frequencies file, each truncated to `--trunc-chars` (default 180). That bound matters for apps that log large near-duplicate blobs as "distinct" templates (observed: CockroachDB serializing multi-line Pebble stats tables as single messages, one category alone holding 9810 of 11558 total templates, mean template length ~184KB); for the overwhelming majority of apps, whose templates are short and few, it changes nothing observable.
 
 ## Repair invalid plan entries
 
@@ -31,19 +31,23 @@ Every query_plan entry carries a structured `match` filter that `kql-build` rend
 
 Report the repaired entries' rendered KQL (the `check-plan` `OK` lines) to the user. The next run of this app reads the repaired plan from the cache, so the repair happens once.
 
-## Add the baseline queries
+## The baseline queries
 
-The severity and logger breakdown, the records behind any rare severity, and one scoped semantic scan need nothing but the schema, so they join the plan as entries instead of being left to the report writer. Run the planner once, after any plan repair; it samples the head of the archive (a few seconds), appends its entries to `/tmp/logtype-query-plan.txt` marked `origin: "baseline"`, and replaces its own earlier entries, so a second run is harmless:
+The severity and logger breakdown, the records behind any rare severity, and one scoped semantic scan need nothing but the schema, so step 4 of the skill already wrote them to their own plan, `/tmp/logtype-baseline-plan.txt`, and started their pool in the background, with results in `/tmp/logtype-baseline-results.ndjson`:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/logtype-baseline-plan" --archive <archive-dir> --schema-json '<the SCHEMA= line from the extract>'
+"${CLAUDE_PLUGIN_ROOT}/bin/logtype-baseline-plan" --archive <archive-dir> \
+  --schema-json '{"timestamp":"<TS>","severity":"<SEV>","logger":"<LOGGER>","message":"<MSG>"}'
+"${CLAUDE_PLUGIN_ROOT}/bin/logtype-query-plan-run" --retry-failed \
+  --query-plan-file /tmp/logtype-baseline-plan.txt \
+  --results-file /tmp/logtype-baseline-results.ndjson <archive-dir>
 ```
 
-Per low-cardinality field (the schema's severity and logger) it adds a `count` per common value and a `count` for the residual (everything else, where rare severities and unexpected loggers hide). A residual of a few hundred records or fewer carries a `then` rule, so the pool fetches those records itself once the count is in. The semantic entry is scoped by that residual. It never uses `--unique`, which scans every record. Report `BASELINE_ENTRIES=` and the sampled vocabulary to the user. Pass `--no-semantic` if the semantic endpoint is unavailable.
+Per low-cardinality field (the schema's severity and logger) the planner adds a `count` per common value and a `count` for the residual (everything else, where rare severities and unexpected loggers hide). A residual of a few hundred records or fewer carries a `then` rule, so the pool fetches those records itself once the count is in. The semantic entry is scoped by that residual. It never uses `--unique`, which scans every record. Pass `--no-semantic` if the semantic endpoint is unavailable. If the baseline pool has not exited when the plan below is ready, wait for it before starting the plan's pool: each pool sizes itself from free memory, and two at once would both count the same memory.
 
 ## Execute the query plan, with progress
 
-Run the plan yourself, before spawning the report writer, with `logtype-query-plan-run`, a query pool: it holds the plan's entries and the baseline entries together and runs as many at once as memory allows. It renders each entry's `match` with `kql-build` — every value quoted and escaped, every group parenthesized — sends the KQL through `clp-s-search-kql`, prints each entry's result as soon as it finishes, and records it in `/tmp/logtype-query-results.ndjson`, one JSON line per entry: `label`, `method`, the rendered `kql`, the exact `command`, `status`, `count`, `pct`, `elapsed_s`, a few `samples` for projecting methods, and `error` for failures. An entry without a valid `match` is recorded as an error without running.
+Run the plan yourself, before spawning the report writer, with `logtype-query-plan-run`, a query pool: it holds the plan's entries and runs as many at once as memory allows. It renders each entry's `match` with `kql-build` — every value quoted and escaped, every group parenthesized — sends the KQL through `clp-s-search-kql`, prints each entry's result as soon as it finishes, and records it in `/tmp/logtype-query-results.ndjson`, one JSON line per entry: `label`, `method`, the rendered `kql`, the exact `command`, `status`, `count`, `pct`, `elapsed_s`, a few `samples` for projecting methods, and `error` for failures. An entry without a valid `match` is recorded as an error without running.
 
 Run it once over the whole plan, as a background Bash call (`run_in_background: true`, no trailing `&`, or the harness reports it finished at once), and read its output file about every 30 seconds until `PLAN_STATUS` appears:
 
@@ -62,13 +66,15 @@ As entries finish, post one line per entry to the user: its number, label, and r
 
 A `non_selective` flag marks an entry matching at least 90% of the records: either its filter is too broad to isolate its category, or that category makes up most of the log.
 
-When the plan is done, print the table and show it to the user verbatim. It is the record of which queries ran and how well each worked:
+When the plan is done, print both tables, save them for the checks below, and show them to the user verbatim. They are the record of which queries ran and how well each worked; each is numbered from 1, so cite an entry as "baseline #N" or "plan #N":
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/logtype-query-plan-run" --print-table
+"${CLAUDE_PLUGIN_ROOT}/bin/logtype-query-plan-run" --print-table \
+  --results-file /tmp/logtype-baseline-results.ndjson | tee /tmp/logtype-baseline-table.md
+"${CLAUDE_PLUGIN_ROOT}/bin/logtype-query-plan-run" --print-table | tee /tmp/logtype-plan-table.md
 ```
 
-Below the table, call out each `error`, `timeout`, `zero`, or `non_selective` entry in one line. Do not fix and re-run them yourself: `--retry-failed` already retried each `error` or `timeout` entry once (marked `retried`), and the subagent may run one corrected query for a loose entry and log it.
+Below the tables, call out each `error`, `timeout`, `zero`, or `non_selective` entry in one line. Do not fix and re-run them yourself: `--retry-failed` already retried each `error` or `timeout` entry once (marked `retried`), and the subagent may run one corrected query for a loose entry and log it.
 
 ## Compute the facts
 
@@ -76,10 +82,10 @@ Every number of the report is computed in code, because a small model asked to a
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/logtype-insight-facts" --schema-json '<the SCHEMA= line from the extract>' \
-  --results-file <RESULTS_FILE> --freqs-file <FREQS_FILE>   # --freqs-file none and --category-totals none when frequencies were unavailable
+  --freqs-file <FREQS_FILE>   # --freqs-file none and --category-totals none when frequencies were unavailable
 ```
 
-It writes `/tmp/logtype-insight-facts.md` in well under a second: total records and templates; the severity and logger breakdowns, each with a check line showing whether it sums to the total; the category table with its sum and the records no template accounts for; the top templates overall (each with its category) and within each category, from `/tmp/logtype-top-templates.json`, which the extract writes; the fetched records grouped by message shape with counts and first/last timestamps; the semantic entries; and the flagged queries. The archive's time span is reported as unavailable unless the archive has a timestamp index. The report writer may quote these figures and no others.
+It reads both results files (`--baseline-results-file`, `--results-file`; the defaults are the paths above) and writes `/tmp/logtype-insight-facts.md` in well under a second: total records and templates; the severity and logger breakdowns, each with a check line showing whether it sums to the total; the category table with its sum and the records no template accounts for; the top templates overall (each with its category) and within each category, from `/tmp/logtype-top-templates.json`, which the extract writes; the fetched records grouped by message shape with counts and first/last timestamps; the semantic entries; and the flagged queries. The archive's time span is reported as unavailable unless the archive has a timestamp index. The report writer may quote these figures and no others.
 
 ## Spawn the report writer
 
@@ -93,7 +99,7 @@ Two checkers read the saved report, and neither edits it. `logtype-report-check`
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/logtype-report-check" /tmp/logtype-insight-report.md \
-     --also <the results table file> > /tmp/logtype-report-flags.txt
+     --also /tmp/logtype-baseline-table.md --also /tmp/logtype-plan-table.md > /tmp/logtype-report-flags.txt
    ```
 
    It flags a figure that is in neither the facts nor the results table (with the two listed figures it sums to, if it does), a percentage the inputs never print as a percentage, a count whose only occurrences in the inputs sit next to different wording, a timestamp the inputs do not contain, and a KQL filter on a field the archive does not have. Exit 0 means nothing flagged; exit 1 means `FLAG` lines.
@@ -106,7 +112,7 @@ Two checkers read the saved report, and neither edits it. `logtype-report-check`
 
 ## Verifier prompt template
 
-Fill in `RESULTS_TABLE` and paste the script's output (or "none"):
+Fill in `RESULTS_TABLE` with both table paths (`/tmp/logtype-baseline-table.md` and `/tmp/logtype-plan-table.md`) and paste the script's output (or "none"):
 
 ```
 Verify a Logtype Insights Report against the files it was written from. Do NOT
@@ -114,7 +120,7 @@ edit or rewrite the report and do NOT run searches: only list what is wrong.
 
 REPORT:         /tmp/logtype-insight-report.md
 FACTS_FILE:     /tmp/logtype-insight-facts.md (computed in code; every figure exact)
-RESULTS_TABLE:  RESULTS_TABLE (each query's own count)
+RESULTS_TABLE:  RESULTS_TABLE (each query's own count; baseline #N and plan #N are numbered apart)
 TEMPLATES_FILE: /tmp/logtype-templates-by-category.txt (template texts only;
                 never a source for counts)
 SCRIPT FLAGS (from logtype-report-check; some may be false positives):
@@ -151,7 +157,7 @@ a valid answer; do not invent issues.
 
 ## Report writer prompt template
 
-Fill in `ARCHIVE`, `GOAL`, `FACTS_FILE` (`/tmp/logtype-insight-facts.md`), `TEMPLATES_FILE` (`/tmp/logtype-templates-by-category.txt`), `RESULTS_TABLE` (the `--print-table` output, or a path to it), the schema fields, and the taxonomy:
+Fill in `ARCHIVE`, `GOAL`, `FACTS_FILE` (`/tmp/logtype-insight-facts.md`), `TEMPLATES_FILE` (`/tmp/logtype-templates-by-category.txt`), `RESULTS_TABLE` (the two saved tables, `/tmp/logtype-baseline-table.md` and `/tmp/logtype-plan-table.md`), the schema fields, and the taxonomy:
 
 ```
 Write the Logtype Insights Report for this CLP archive: ARCHIVE
@@ -179,7 +185,9 @@ FILES
     category does; <*> marks variables, " <NL> " an embedded newline, a
     trailing "…" a template cut for length. Take every count from the facts,
     never from this file.
-  RESULTS_TABLE: the keyword probes and baseline queries with their counts.
+  RESULTS_TABLE: two tables, the baseline queries and the plan's keyword
+    probes, each with its counts and numbered from 1 (cite "baseline #N" or
+    "plan #N").
     The probes are loose keyword filters: prefer the facts' category records
     over a probe's count, and say so when a probe is flagged non-selective.
 
@@ -228,8 +236,8 @@ The report has these sections:
 7. Semantic Search Coverage.
 8. Top 3 follow-up KQL queries, derived from templates (mix keyword and
    semantic).
-9. Query Log -- the baseline and follow-up entries by index, kql and count
-   (from RESULTS_TABLE), and every flagged query. The plan's own entries are
+9. Query Log -- the baseline and follow-up entries by index ("baseline #N"),
+   kql and count (from RESULTS_TABLE), and every flagged query. The plan's own entries are
    already in the table shown to the user.
 ```
 
