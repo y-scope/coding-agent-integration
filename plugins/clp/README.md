@@ -71,6 +71,8 @@ Restricted-passthrough wrappers around `clp-s` — these are the security bounda
 
 The wrappers prefer `CLP_S_BIN`, then plugin-local `bin/clp-s`, then plugin-local `.clp-core/bin/clp-s`, then `clp-s` on `PATH`.
 
+`clp-s` projects leaf columns only: a column inside an array (`message.content.text` when `message.content` is an array of blocks) or an object column (`message`) projects nothing, although a filter on it matches. `clp-s-search-kql` therefore rewrites each `--projection` column from the archive's schema tree (`stats.schema_tree`, read from the archive's metadata in milliseconds) with `bin/lib/projection.py`: a column inside an array becomes the array, which comes back whole; an object becomes the leaf columns under it. Each rewrite is explained on stderr as a `projection: ...` line.
+
 Local helpers (not `clp-s` passthroughs — they invoke `clp-s` only through the wrappers above, or not at all):
 
 - `bin/clp-detect-logs` — reads the first 128 KiB of each log file (read-only). JSON (two or more objects parsed) is reported with its structure, its timestamp field and its first records, every string cut to 128 characters; text is reported with its first lines, each cut to 256 characters, and whether they match a bundled `--structurize` format (vLLM). It suggests a `clp-s-compress-folder` command per group of files that need the same settings. `--parser FILE` dry-runs an agent-written parser on the lines read. See [Log Files](#log-files).
@@ -128,11 +130,12 @@ After compression, report these lines:
 - `Archive bytes`
 - `Compression ratio`
 - `File size reduction`
+- `Time range` (with a timestamp key: the earliest and latest timestamp across every record)
 - `Archives dir`
 - `Selected session`
 - `Archive metadata`
 
-Use the printed top-level `Archives dir` for search and decompression. The wrappers resolve the inner `clp-s` archive directory automatically. Metadata in `.yscope-clp-archive.json` maps archive to session file, agent, roots, timestamp key, SHA-256, compression stats, command, and resolved inner archive.
+Use the printed top-level `Archives dir` for search and decompression. The wrappers resolve the inner `clp-s` archive directory automatically. Metadata in `.yscope-clp-archive.json` maps archive to session file, agent, roots, timestamp key, time range (`timeRange`, from `clp-s --print-archive-stats`, the same as `clp-s-compress-folder` records), SHA-256, compression stats, command, and resolved inner archive.
 
 ## Log Files
 
