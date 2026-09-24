@@ -188,13 +188,13 @@ The counts over all 100 templates sum to 250, the number of records.
 
 ## Step 6 — The classification cache (NEW → UPTODATE → GROWTH)
 
-Analyzing an archive means classifying its templates — expensive the first time, but the same application emits the same templates every run, so the plugin caches the classification, keyed by a fingerprint (SHA-256 of the sorted template set, each template capped at a character limit — 500 by default — and de-duplicated, matching what is sent for embedding). Stored templates stay full and byte-exact. `diff` compares your archive's templates against the cache and prints a tab-separated status header:
+Analyzing an archive means classifying its templates — expensive the first time, but the same application emits the same templates every run, so the plugin caches the classification, keyed by a fingerprint (SHA-256 of the sorted template set, each template capped at a character limit — 500 by default — and de-duplicated, matching what is sent for embedding). The cache is one SQLite database, `cache.sqlite`, and it stores each template as two hashes (of the full text and of its first 500 characters) with its category, never the text itself. `diff` compares your archive's templates against the cache and prints a tab-separated status header:
 
 - `NEW <key> <count>` — never seen this app; all `<count>` templates need classifying.
-- `UPTODATE <key> <count>` — fingerprint hit; nothing to do. (A template whose tail changed only past the character limit is appended to the entry with the category of the truncated form it shares.)
+- `UPTODATE <key> <count>` — fingerprint hit; nothing to do. (A template whose tail changed only past the character limit takes the category of the cached one it shares its first 500 characters with.)
 - `GROWTH <key> <base_key> <count> <new_count>` — a superset of cached entry `<base_key>`; only the `<new_count>` new templates (listed as NDJSON after the header) need classifying.
 
-`<count>` is the true full template count. The GROWTH subset test uses the truncated sets, so a tail-only change reports UPTODATE rather than GROWTH.
+`<count>` is the true full template count. The GROWTH subset test compares the hashes of the first 500 characters, so a tail-only change reports UPTODATE rather than GROWTH.
 
 (`logtype-cache --help` documents all subcommands.)
 
@@ -208,20 +208,30 @@ LC="$B/logtype-cache"
 
 Expected: a line starting with `NEW` — first time seeing this app; all 100 templates would need classifying.
 
-Normally the *agent* classifies the templates (Step 9); here we store a minimal stand-in by hand just to exercise the cache. A stored classification is a JSON object with four keys: `schema` (which record field holds the message), `taxonomy` (the category list), `templates` (each logtype → category), and `query_plan` (suggested follow-up queries). The `jq` below builds the simplest valid one — every template categorized as `other`:
+Normally the *agent* classifies the templates (Step 9): the templates are clustered, the agent labels each cluster by id, and `logtype-cluster expand` gives every member template the label of its cluster, written as the template's hashes. Here we build a minimal stand-in by hand just to exercise the cache: one cluster holding every template, labeled `other`. The `stand_in` function below writes that cluster file and the agent's side of the classification (`schema`, `taxonomy`, the cluster `assignments`, and a one-entry `query_plan`), then runs the real `expand` and prints its output:
 
 ```bash
+stand_in() {   # usage: stand_in LOGTYPES_NDJSON > classification.json
+  W=release-testing/workdir
+  jq -s '{max_chars:500, clusters:[{id:"c1", representative:.[0].logtype,
+          members:[.[].logtype], count:length}]}' "$1" > "$W/clusters.json"
+  echo '{"schema":{"message":"message"},
+         "taxonomy":[{"category":"other","description":"walkthrough"}],
+         "assignments":[{"id":"c1","category":"other"}],
+         "query_plan":[{"label":"All","match":{"field":"message","exists":true},"method":"count"}]}' \
+    > "$W/class.json"
+  "$B/logtype-cluster" expand --clusters "$W/clusters.json" \
+    --classification "$W/class.json" --output "$W/expanded.json" >/dev/null
+  cat "$W/expanded.json"
+}
+
 KEY="$("$LC" key --logtypes-file release-testing/workdir/logtypes.ndjson)"
-jq -s '{schema:{message:"message"},
-        taxonomy:[{category:"other",description:"walkthrough"}],
-        templates:[.[]|{logtype:.logtype,category:"other"}],
-        query_plan:[{label:"All",kql:"*",method:"count"}]}' \
-  release-testing/workdir/logtypes.ndjson | "$LC" put-merged --key "$KEY"
+stand_in release-testing/workdir/logtypes.ndjson | "$LC" put --key "$KEY"
 
 "$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | head -1
 ```
 
-Expected: `put-merged` confirms with `Stored classification for app_key <key> -> ...` (on stderr — not an error), and the second `diff` now prints a line starting with `UPTODATE` — cache hit; nothing to classify.
+Expected: `put` confirms with `Stored classification for app_key <key>: 100 templates in 0.0s -> .../cache.sqlite` (on stderr — not an error), and the second `diff` now prints a line starting with `UPTODATE` — cache hit; nothing to classify.
 
 Now the incremental part. Compress only **two** of the three logs — as if this were an earlier, smaller capture of the same app — and probe with its dictionary. First store its classification, then probe with the full 3-file dictionary:
 
@@ -246,11 +256,7 @@ Expected: `96` — the 2-file archive has 96 templates.
 # Fresh cache so the demo is deterministic; store the 96-template classification:
 export CLP_LOGTYPE_CACHE_DIR=release-testing/workdir/lt-cache-growth
 K2="$("$LC" key --logtypes-file release-testing/workdir/logtypes-2.ndjson)"
-jq -s '{schema:{message:"message"},
-        taxonomy:[{category:"other",description:"walkthrough"}],
-        templates:[.[]|{logtype:.logtype,category:"other"}],
-        query_plan:[{label:"All",kql:"*",method:"count"}]}' \
-  release-testing/workdir/logtypes-2.ndjson | "$LC" put-merged --key "$K2"
+stand_in release-testing/workdir/logtypes-2.ndjson | "$LC" put --key "$K2"
 
 # Probe with the FULL 3-file dictionary — the archive "grew":
 "$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | head -1

@@ -40,7 +40,7 @@ for f in plugins/clp/bin/clp-s-* \
 done
 python3 -m py_compile plugins/clp/bin/logtype-cluster.py \
   plugins/clp/bin/logtype-cache plugins/clp/bin/structurize.py \
-  plugins/clp/bin/clp-detect-logs
+  plugins/clp/bin/clp-detect-logs plugins/clp/bin/lib/logtypes.py
 
 shellcheck \
   plugins/clp/bin/clp-s-list-sessions \
@@ -169,13 +169,22 @@ LC=./plugins/clp/bin/logtype-cache
 "$LC" count --logtypes-file /tmp/smoke-logtypes.ndjson
 "$LC" diff  --logtypes-file /tmp/smoke-logtypes.ndjson | head -1   # -> NEW
 
-# Store a minimal classification for this template set, then re-probe.
+# Store a minimal classification for this template set, then re-probe. The
+# stand-in is one cluster holding every template, labeled "other"; the real
+# `expand` turns it into a classification that names templates by hash.
+stand_in() {   # usage: stand_in LOGTYPES_NDJSON > classification.json
+  jq -s '{max_chars:500, clusters:[{id:"c1", representative:.[0].logtype,
+          members:[.[].logtype], count:length}]}' "$1" > /tmp/smoke-clusters.json
+  echo '{"schema":{"message":"message"},"taxonomy":[{"category":"other","description":"smoke"}],
+         "assignments":[{"id":"c1","category":"other"}],
+         "query_plan":[{"label":"All","match":{"field":"message","exists":true},"method":"count"}]}' \
+    > /tmp/smoke-class.json
+  ./plugins/clp/bin/logtype-cluster expand --clusters /tmp/smoke-clusters.json \
+    --classification /tmp/smoke-class.json --output /tmp/smoke-expanded.json >/dev/null
+  cat /tmp/smoke-expanded.json
+}
 KEY="$("$LC" key --logtypes-file /tmp/smoke-logtypes.ndjson)"
-jq -s '{schema:{message:"message"},
-        taxonomy:[{category:"other",description:"smoke"}],
-        templates:[.[]|{logtype:.logtype,category:"other"}],
-        query_plan:[{label:"All",kql:"*",method:"count"}]}' \
-  /tmp/smoke-logtypes.ndjson | "$LC" put-merged --key "$KEY"
+stand_in /tmp/smoke-logtypes.ndjson | "$LC" put --key "$KEY"
 
 "$LC" diff --logtypes-file /tmp/smoke-logtypes.ndjson | head -1   # -> UPTODATE
 "$LC" list
@@ -213,13 +222,14 @@ printf '{"logtype":"%sAAA"}\n{"logtype":"new within limit"}\n' "$P" > "$D/grown.
   = "$("$LC" key --logtypes-file "$D/other.ndjson")" ] && echo "key OK"
 "$LC" count --logtypes-file "$D/base.ndjson"        # -> 1
 
-jq -s '{schema:{message:"message"},taxonomy:[{category:"other",description:"x"}],
-        templates:[.[]|{logtype:.logtype,category:"other"}],query_plan:[]}' \
-  "$D/base.ndjson" | "$LC" put-merged --max-chars 500 --key "$("$LC" key --logtypes-file "$D/base.ndjson")"
+stand_in "$D/base.ndjson" | "$LC" put --max-chars 500 --key "$("$LC" key --logtypes-file "$D/base.ndjson")"
 
 "$LC" diff --logtypes-file "$D/other.ndjson" | head -1   # -> UPTODATE
-# The post-limit variant is now present in the stored entry (inherited category):
-"$LC" get "$("$LC" key --logtypes-file "$D/other.ndjson")" | jq -r '.templates[].logtype[-3:]'
+# The post-limit variant takes the stored category through the shared prefix hash:
+"$LC" get "$("$LC" key --logtypes-file "$D/other.ndjson")" > "$D/class.json"
+./plugins/clp/bin/logtype-insight-extract --classification-file "$D/class.json" \
+  --no-freqs --logtypes-file "$D/other.ndjson" --out-templates "$D/t.txt" \
+  --out-query-plan "$D/q.txt" | grep CATEGORY   # -> CATEGORY other 1 (no UNCLASSIFIED=)
 "$LC" diff --logtypes-file "$D/grown.ndjson" | head -1   # -> GROWTH ... 1
 ```
 

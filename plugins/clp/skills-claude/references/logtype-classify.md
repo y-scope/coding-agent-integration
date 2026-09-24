@@ -1,12 +1,12 @@
 # Logtype classification reference (logtype-insights step 6)
 
-Read this when the bootstrap reported `CACHE_MODE=GROWTH` or `NEW` (or an UPTODATE schema mismatch downgraded to NEW). It covers the cluster → classify → expand → store pipeline and the full classification subagent prompt.
+Read this when the bootstrap reported `CACHE_MODE=GROWTH` or `NEW` (or an UPTODATE schema mismatch downgraded to NEW). It covers the cluster → classify → expand → merge → store pipeline and the full classification subagent prompt.
 
 ## Cache design in one paragraph
 
-`app_key = sha256(sorted set of distinct logtype strings, each capped at a character limit)` — a fingerprint of the application's *embedded* message vocabulary. Use the bootstrap's `MAX_CHARS` (default 500); the same limit is applied before embedding, so the key identifies exactly what was embedded. The stored `templates[].logtype` are still the FULL, byte-exact strings. The entry stores the discovered `schema`, `taxonomy`, per-template `templates` classification, and `query_plan` (plus `app_key`, `max_chars`, `classified_at`, `grown_from`). `logtype-cache diff` yields **UPTODATE** (same fingerprint → reuse, no subagent; a full template that only differs past the character limit is appended with the category of the truncated form it shares, so the entry stays complete), **GROWTH** (a cached entry's truncated set is a proper subset of the current one → classify only the new templates, merge into the base via `put-merged`), or **NEW** (no compatible base → classify all, store fresh). Cache dir: `~/.config/yscope-clp-plugin/logtype-cache/` (override: `$CLP_LOGTYPE_CACHE_DIR` or `--cache-dir`).
+`app_key = sha256(sorted set of distinct logtype strings, each capped at a character limit)` — a fingerprint of the application's *embedded* message vocabulary. Use the bootstrap's `MAX_CHARS` (default 500); the same limit is applied before embedding, so the key identifies exactly what was embedded. The cache is one SQLite database, `<cache-dir>/cache.sqlite`, holding per entry the discovered `schema`, `taxonomy` and `query_plan` (plus `max_chars`, `classified_at`, `grown_from`) and one row per template: its `hash` (sha256 of the full template), its `prefix_hash` (sha256 of the first `MAX_CHARS` characters) and its `category`. Templates are stored by hash, never by text — CockroachDB templates average ~184 KB, and a text-holding entry grew past 2 GB — and the text stays in the archive's own dictionary dump, which `logtype-insight-extract` joins on the hash. `logtype-cache diff` yields **UPTODATE** (same fingerprint → reuse, no subagent; a template that differs from a cached one only past the character limit takes its category through the shared prefix hash), **GROWTH** (a cached entry's prefix-hash set is a proper subset of the current one → classify only the new templates, merge them into the base), or **NEW** (no compatible base → classify all). Cache dir: `~/.config/yscope-clp-plugin/logtype-cache/` (override: `$CLP_LOGTYPE_CACHE_DIR` or `--cache-dir`). If `diff` warns that entries are in the old JSON format, tell the user and suggest `logtype-cache repair`, which converts them once; do not run it on your own.
 
-GROWTH matching requires the stored `templates[].logtype` strings to be **byte-exact** copies of the normalized NDJSON. The id-based pipeline below guarantees this by construction: the LLM only ever returns cluster ids, and `expand` re-attaches the member logtypes verbatim from the cluster file.
+GROWTH matching needs each stored hash to come from the exact template text in the normalized NDJSON. The id-based pipeline below guarantees this by construction: the LLM only ever returns cluster ids, and `expand` hashes the member templates straight from the cluster file.
 
 ## Cluster contract (`logtype-cluster`)
 
@@ -23,11 +23,11 @@ GROWTH matching requires the stored `templates[].logtype` strings to be **byte-e
 
 `cluster` prints `CLUSTERS=`/`TEMPLATES=`/`EMBEDDED=`/`MAX_CHARS=` then one `{"id","count","representative"}` line per cluster (ids `c1..cN`, largest first; the representative is a real, full template closest to the cluster centroid). `TEMPLATES` is the full count, `EMBEDDED` the distinct truncated texts actually sent. Full memberships are written to `/tmp/logtype-clusters.json`. Tunables: `--threshold` / `$CLP_LOG_CLUSTER_THRESHOLD` (cosine, default 0.80 — raise to 0.85–0.90 if unrelated templates land in one cluster, lower to merge more), `--max-chars` / `$CLP_LOGTYPE_MAX_CHARS` (character cap before embedding and fingerprinting, default 500), `--semantic-endpoint` / `$CLP_SEMANTIC_ENDPOINT` (the embedding server; falls back to the `semantic-endpoint` config file, then the built-in remote endpoints), and `--batch-size` (texts per request, default 256; a separate byte ceiling bounds each request body).
 
-**Raw-NDJSON last resort** (only if no embedding server is reachable): skip clustering; paste `/tmp/logtypes-to-classify.ndjson` directly into the prompt, replace the `assignments` output contract with `"templates": [{"logtype":"<verbatim template>","category":"..."}]`, instruct the subagent to copy each logtype **byte-exact** from the input, skip `expand`, and piped straight into `put-merged --max-chars "$MAX_CHARS"`. Slower and fragile for GROWTH — prefer fixing the endpoint.
+There is no classification without clustering: if the embedding server is unreachable (`cluster` exits 2), report the error to the user verbatim and stop.
 
 ## Classification subagent prompt template
 
-Spawn ONE subagent (Agent tool), model **haiku**; if its output fails the validation below, tell the user ("first classification attempt failed validation — retrying with a stronger model") and retry once with `sonnet`. Fill in `ARCHIVE`, the schema fields, the severity/logger vocabularies (from the bootstrap DIST lines), and paste the cluster lines from `logtype-cluster cluster`; for GROWTH also paste the base taxonomy/plan labels:
+Spawn ONE subagent (Agent tool), model **opus**; if the Agent tool rejects `opus` as unavailable, use `sonnet`, and tell the user which model is classifying. The taxonomy is reused on every later run of the app, so it is worth the strongest model: a fast model lumped 102 of 146 vLLM clusters, per-request lines included, into config/startup. If its output fails the validation below, tell the user ("the classification failed validation — retrying once with the errors") and re-run the same model once with the error lines appended. Fill in `ARCHIVE`, the schema fields, the severity/logger vocabularies (from the bootstrap DIST lines), and paste the cluster lines from `logtype-cluster cluster`; for GROWTH also paste the base taxonomy/plan labels:
 
 ```
 You are classifying message-template clusters for a CLP archive, so a later
@@ -160,11 +160,11 @@ Rules:
 - Use the discovered field names verbatim in `match` and `project`.
 ```
 
-## After the subagent returns: validate → expand → store
+## After the subagent returns: validate → expand → merge → store
 
-Tell the user the classifier returned and you are validating and storing the plan; after `put-merged` succeeds, report the taxonomy and that the classification is now cached.
+Tell the user the classifier returned and you are validating it. The insight pass needs the merged classification now; the cache only needs it by the next run, so storing it runs in the background.
 
-The subagent never writes KQL: each query_plan entry carries a `match` filter that `kql-build` renders, so an unquoted wildcard or an ungrouped AND/OR cannot reach the cache. `put-merged` refuses to store an entry without a valid `match` too, as a backstop.
+The subagent never writes KQL: each query_plan entry carries a `match` filter that `kql-build` renders, so an unquoted wildcard or an ungrouped AND/OR cannot reach the cache. `logtype-cache merge` and `put` refuse an entry without a valid `match` too, as a backstop.
 
 ```bash
 # 1. Shape-validate — the fields must be ARRAYS (a bare `.assignments` test
@@ -174,37 +174,43 @@ jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_pl
 
 # 2. Plan-validate -- every query_plan entry needs a valid `match` filter and
 #    method. check-plan prints one "[i] OK <kql>" or "[i] ERROR <label>: <why>"
-#    line per entry and exits 1 on any ERROR -- in that case do NOT store;
-#    announce the retry to the user and re-run the subagent (sonnet fallback)
-#    with the ERROR lines appended to its prompt:
+#    line per entry and exits 1 on any ERROR -- in that case do NOT go on;
+#    announce the retry to the user and re-run the subagent once with the
+#    ERROR lines appended to its prompt:
 "${CLAUDE_PLUGIN_ROOT}/bin/kql-build" check-plan /tmp/logtype-class.json || exit 1
 
-# 3. Expand id-based assignments to every member template. Exits 2 and writes
-#    NOTHING on missing/unknown/duplicate ids — in that case do NOT store;
-#    announce the retry to the user, re-run the subagent (sonnet fallback),
-#    and expand again:
+# 3. Expand id-based assignments to every member template, by hash. Exits 2
+#    and writes NOTHING on missing/unknown/duplicate ids — in that case do NOT
+#    go on; announce the retry to the user, re-run the subagent once, and
+#    expand again:
 "${CLAUDE_PLUGIN_ROOT}/bin/logtype-cluster" expand \
   --clusters /tmp/logtype-clusters.json \
   --classification /tmp/logtype-class.json \
   --output /tmp/logtype-expanded.json
 
-# 4. Store. Use MODE/APP_KEY/BASE_KEY/MAX_CHARS from the bootstrap output
-#    (re-declare — fresh shell). --max-chars must match the bootstrap's, or the
-#    stored fingerprint won't match the next run. GROWTH merges into the base
-#    entry (templates/taxonomy/query_plan unioned, grown_from recorded); NEW
-#    stores fresh:
+# 4. Merge (milliseconds). Use MODE/BASE_KEY from the bootstrap output
+#    (re-declare — fresh shell). GROWTH merges the new templates into the base
+#    entry (templates by hash, taxonomy and query_plan unioned, grown_from
+#    recorded); NEW passes the expanded classification through. The result is
+#    what step 7 reads:
 CACHE="${CLAUDE_PLUGIN_ROOT}/bin/logtype-cache"
 if [[ "$MODE" == "GROWTH" ]]; then
-  # Guard: an empty BASE_KEY would silently store ONLY the new templates.
+  # Guard: an empty BASE_KEY would silently keep ONLY the new templates.
   [[ -n "$BASE_KEY" ]] || { echo "error: GROWTH with empty BASE_KEY" >&2; exit 1; }
-  "$CACHE" put-merged --max-chars "$MAX_CHARS" \
-    --base-key "$BASE_KEY" --key "$APP_KEY" < /tmp/logtype-expanded.json
+  "$CACHE" merge --base-key "$BASE_KEY" < /tmp/logtype-expanded.json > /tmp/logtype-classification.json
 else
-  "$CACHE" put-merged --max-chars "$MAX_CHARS" \
-    --key "$APP_KEY" < /tmp/logtype-expanded.json
+  "$CACHE" merge < /tmp/logtype-expanded.json > /tmp/logtype-classification.json
 fi
-"$CACHE" get "$APP_KEY" > /tmp/logtype-classification.json   # full plan for step 7
 ```
+
+Then store it for the next run, as a separate background Bash call (`run_in_background`, no trailing `&`), and go straight on to step 7 without waiting. Use APP_KEY and MAX_CHARS from the bootstrap; `--max-chars` must match the bootstrap's, or the stored fingerprint won't match the next run:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/logtype-cache" put --key "$APP_KEY" --max-chars "$MAX_CHARS" \
+  < /tmp/logtype-classification.json
+```
+
+When it finishes, tell the user in a line that the classification is cached (`Stored classification for app_key …: N templates`). If it fails, report the error; this run's report does not depend on it.
 
 On the next run, an unchanged archive returns UPTODATE (no subagent); a grown archive returns GROWTH and only the newly-added templates go through this file again.
 

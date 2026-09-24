@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-logtype-baseline-plan - add app-agnostic baseline queries to a logtype-insights
-query plan (logtype-insights skill, step 7).
+logtype-baseline-plan - write the app-agnostic baseline queries of a
+logtype-insights run to their own plan file (logtype-insights skill, step 4).
 
 The insight subagent used to discover the severity and logger breakdowns by
 running its own searches, one at a time, out of sight. Those queries depend on
-nothing but the schema the classification discovered, so they belong in the
-query pool beside the classified plan entries: they run under the same memory
-control, in parallel, and their results land in the same results file.
+nothing but the schema, which the bootstrap already reveals, so they run in the
+query pool as soon as the schema is chosen -- in the background, while the
+templates are clustered and classified -- under the same memory control as the
+classified plan, which runs later from its own plan file.
 
 Per low-cardinality field (the schema's severity and logger):
   * the field's values are sampled from the head of the archive, cheaply;
@@ -31,13 +32,15 @@ Usage:
 
 Options:
   --archive DIR         Archives directory to sample.
-  --schema-json JSON    The classification schema, e.g. the SCHEMA= line that
-                        logtype-insight-extract prints. Uses its `severity`,
-                        `logger`, `timestamp` and `message` fields.
-  --plan-file F         Plan to add the entries to (default:
-                        /tmp/logtype-query-plan.txt). Entries from an earlier
-                        run (origin "baseline") are replaced, so it is safe to
-                        run twice.
+  --schema-json JSON    The schema chosen from the bootstrap, e.g.
+                        '{"timestamp":"t.$date","severity":"s","logger":"c",
+                        "message":"msg"}'. Uses its `severity`, `logger`,
+                        `timestamp` and `message` fields.
+  --plan-file F         The baseline's own plan file (default:
+                        /tmp/logtype-baseline-plan.txt), run by
+                        logtype-query-plan-run with its own results file.
+                        Entries from an earlier run (origin "baseline") are
+                        replaced, so it is safe to run twice.
   --sample N            Records to sample from the head of the archive
                         (default: 20000).
   --max-values N        Common values counted per field (default: 5).
@@ -134,7 +137,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Add baseline queries to a logtype-insights query plan.")
     parser.add_argument("--archive", required=True)
     parser.add_argument("--schema-json", required=True)
-    parser.add_argument("--plan-file", default="/tmp/logtype-query-plan.txt")
+    parser.add_argument("--plan-file", default="/tmp/logtype-baseline-plan.txt")
     parser.add_argument("--sample", type=int, default=20000)
     parser.add_argument("--max-values", type=int, default=5)
     parser.add_argument("--max-cardinality", type=int, default=40)
@@ -148,8 +151,10 @@ def main(argv=None) -> int:
 
     try:
         schema = json.loads(args.schema_json)
-        with open(args.plan_file, "r", encoding="utf-8") as f:
-            plan = [json.loads(line) for line in f if line.strip()]
+        plan = []
+        if os.path.exists(args.plan_file):
+            with open(args.plan_file, "r", encoding="utf-8") as f:
+                plan = [json.loads(line) for line in f if line.strip()]
     except (OSError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -10,11 +10,16 @@ reported 49 warnings for 92, 5,370 templates for 11,558, and a 9.5-minute span
 for a 74-hour log. Nothing here needs judgement, so nothing here is left to it.
 
 Inputs (all produced earlier in the run):
-  --results-file F       logtype-query-plan-run's NDJSON (default:
-                         /tmp/logtype-query-results.ndjson). Entries marked
-                         origin "baseline" carry the severity and logger
+  --baseline-results-file F
+                         The baseline pool's results (default:
+                         /tmp/logtype-baseline-results.ndjson). Its entries
+                         (origin "baseline") carry the severity and logger
                          breakdown; "follow-up of N" entries carry the fetched
                          records behind a small count.
+  --results-file F       The classified plan's results (default:
+                         /tmp/logtype-query-results.ndjson). The two are
+                         numbered separately, so a query is cited as
+                         [baseline #N] or [plan #N].
   --category-totals F    logtype-insight-extract's {category: {templates,
                          records}} (default: /tmp/logtype-category-totals.json,
                          or "none" when frequencies were unavailable)
@@ -127,7 +132,10 @@ def read_top_templates(path, n, chars=220):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Compute a logtype-insights report's numbers in code.")
-    ap.add_argument("--results-file", default="/tmp/logtype-query-results.ndjson")
+    ap.add_argument("--results-file", default="/tmp/logtype-query-results.ndjson",
+                    help="the classified plan's results")
+    ap.add_argument("--baseline-results-file", default="/tmp/logtype-baseline-results.ndjson",
+                    help="the baseline queries' results, run in their own pool")
     ap.add_argument("--category-totals", default="/tmp/logtype-category-totals.json")
     ap.add_argument("--freqs-file", default="/tmp/logtype-freqs.ndjson")
     ap.add_argument("--top-templates-file", default="/tmp/logtype-top-templates.json")
@@ -138,12 +146,23 @@ def main(argv=None) -> int:
 
     try:
         schema = json.loads(args.schema_json)
-        results = load_results(args.results_file)
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    except json.JSONDecodeError as exc:
+        print(f"error: --schema-json: {exc}", file=sys.stderr)
         return 1
+    # Two tables, numbered separately: the baseline pool's and the plan's.
+    results = []
+    for table, path in (("baseline", args.baseline_results_file), ("plan", args.results_file)):
+        try:
+            for r in load_results(path):
+                r["table"] = table
+                results.append(r)
+        except FileNotFoundError:
+            print(f"warning: no {table} results file: {path}", file=sys.stderr)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"error: {path}: {exc}", file=sys.stderr)
+            return 1
     if not results:
-        print(f"error: no results in {args.results_file}", file=sys.stderr)
+        print(f"error: no results in {args.baseline_results_file} or {args.results_file}", file=sys.stderr)
         return 1
 
     sev, log, ts, msg = (schema.get(k) for k in ("severity", "logger", "timestamp", "message"))
@@ -308,7 +327,7 @@ def main(argv=None) -> int:
     if sem:
         w("## Semantic entries")
         for r in sem:
-            w(f"- [{r['index']}] {r.get('label')}: status {r.get('status')}, {r.get('count') or 0:,} rows; kql `{r.get('kql')}`")
+            w(f"- [{r['table']} #{r['index']}] {r.get('label')}: status {r.get('status')}, {r.get('count') or 0:,} rows; kql `{r.get('kql')}`")
             for s in (r.get("samples") or [])[:3]:
                 try:
                     rec = json.loads(s)
@@ -322,7 +341,7 @@ def main(argv=None) -> int:
         for r in flagged:
             why = [x for x in ("non_selective" if r.get("non_selective") else "", r.get("status") if r.get("status") != "ok" else "",
                                "retried" if r.get("retried") else "") if x]
-            w(f"- [{r['index']}] {r.get('label')}: {', '.join(why)} (count {r.get('count') or 0:,})")
+            w(f"- [{r['table']} #{r['index']}] {r.get('label')}: {', '.join(why)} (count {r.get('count') or 0:,})")
         w("")
 
     with open(args.out, "w", encoding="utf-8") as f:

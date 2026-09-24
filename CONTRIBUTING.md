@@ -24,7 +24,8 @@ plugins/clp/bin/
     logtype-insight-extract, logtype-baseline-plan, logtype-query-plan-run,
     logtype-insight-facts, logtype-report-check, clp-compress-status,
     kql-build,
-    kql-validate-wildcards; shared Python in lib/kql_build.py).
+    kql-validate-wildcards; shared Python in lib/kql_build.py and
+    lib/logtypes.py).
 plugins/clp/skills-claude/
     Claude Code skills: compress, compress-folder, search, logtype-insights,
     decompress, claude-code-trajectory, clpp-compress, clpp-search, dev,
