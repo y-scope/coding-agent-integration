@@ -1,0 +1,634 @@
+#!/usr/bin/env python3
+"""
+log-shape-report-save - save a finished log-insights report where the user
+asked, as Markdown, HTML, PDF, or a page to publish on claude.ai
+(log-insights skill, step 10).
+
+The report writer always writes Markdown to /tmp/log-shape-insight-report.md,
+and the report check reads that file, so the user's choice of place and format
+only matters once the report is final. The skill asks while the writer works
+and runs this afterwards.
+
+  --list-formats  Print FORMATS=<what this machine can write> and
+                  PDF_ENGINE=<the browser used for PDF, or none>, and exit.
+                  The skill offers PDF only when a PDF engine exists.
+  --format F      md, html, pdf or artifact; repeatable, or comma-separated.
+                  "artifact" writes an HTML fragment (no <html>/<head>/<body>)
+                  for the Artifact tool to publish; it goes to /tmp, not to
+                  --dest.
+  --dest D        Where to save: a directory (existing, or ending in "/") gets
+                  log-insights-<name>-<YYYYmmdd-HHMM>.<ext>; anything else is
+                  a file name. A .md/.html/.pdf extension on it is replaced by
+                  each format's own. "~" is expanded; missing parent
+                  directories are created. Default: the current directory.
+  --name N        The <name> part of a default file name (default: taken from
+                  the report's title, e.g. "cockroach.node1.log").
+  --facts F       The facts file whose "Time span" line gives the logs' date
+                  range for the header (default: /tmp/log-shape-insight-facts.md).
+                  With no file, or a span that is unavailable, the header
+                  shows only the generation date.
+
+An existing file is never overwritten: the name gets -2, -3, ... instead.
+Prints SAVED_<FORMAT>=<absolute path> per file written. Exit codes: 0 all
+written, 1 a format failed (PDF_ERROR=... says why; the others are still
+written), 2 input problem.
+
+PDF is printed by a headless Chromium-family browser: $CLP_PDF_BROWSER, then
+chromium/chrome/edge on PATH, the macOS app bundles, Playwright's downloaded
+Chromium, and on WSL the Windows Chrome or Edge. Nothing is installed.
+"""
+
+import argparse
+import datetime
+import glob
+import html
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+DEFAULT_REPORT = "/tmp/log-shape-insight-report.md"
+DEFAULT_FACTS = "/tmp/log-shape-insight-facts.md"
+ARTIFACT_PATH = "/tmp/log-shape-insight-report.artifact.html"
+EXTENSIONS = {"md": ".md", "html": ".html", "pdf": ".pdf"}
+KNOWN_SUFFIXES = (".md", ".markdown", ".html", ".htm", ".pdf")
+
+
+# --------------------------------------------------------------------------
+# Markdown -> HTML (the subset the report writer uses: headings, paragraphs,
+# nested lists, GFM tables, fenced code, block quotes, rules, and inline code,
+# bold, italic and links).
+# --------------------------------------------------------------------------
+
+INLINE_CODE = re.compile(r"(`+)(.+?)\1", re.S)
+LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+BOLD = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
+ITALIC = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])|(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])")
+NUMERIC_CELL = re.compile(r"^[<>~≈]?\s*[\d,]+(\.\d+)?\s*(%|s|ms|x|×)?(\s*\([^)]*\))?$")
+
+
+def inline(text):
+    """Render inline Markdown; code spans are cut out first so nothing inside
+    them is interpreted."""
+    spans = []
+
+    def stash(m):
+        spans.append("<code>" + html.escape(m.group(2).strip() or m.group(2)) + "</code>")
+        return f"\x00{len(spans) - 1}\x00"
+
+    text = INLINE_CODE.sub(stash, text)
+    text = html.escape(text, quote=False)
+
+    def link(m):
+        href = m.group(2)
+        if not re.match(r"^(https?:|#|/|\.)", href):
+            return m.group(0)
+        return f'<a href="{html.escape(href)}">{m.group(1)}</a>'
+
+    text = LINK.sub(link, text)
+    text = BOLD.sub(lambda m: f"<strong>{m.group(1) or m.group(2)}</strong>", text)
+    text = ITALIC.sub(lambda m: f"<em>{m.group(1) or m.group(2)}</em>", text)
+    return re.sub(r"\x00(\d+)\x00", lambda m: spans[int(m.group(1))], text)
+
+
+def slug(text, used):
+    base = re.sub(r"[^a-z0-9]+", "-", re.sub(r"<[^>]+>", "", text).lower()).strip("-") or "section"
+    s, n = base, 2
+    while s in used:
+        s, n = f"{base}-{n}", n + 1
+    used.add(s)
+    return s
+
+
+def split_row(line):
+    line = line.strip()
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|") and not line.endswith("\\|"):
+        line = line[:-1]
+    cells, cur, in_code = [], "", False
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line) and line[i + 1] == "|":
+            cur += "|"
+            i += 2
+            continue
+        if c == "`":
+            in_code = not in_code
+        if c == "|" and not in_code:
+            cells.append(cur.strip())
+            cur = ""
+        else:
+            cur += c
+        i += 1
+    cells.append(cur.strip())
+    return cells
+
+
+TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
+HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+FENCE = re.compile(r"^(\s*)(```+|~~~+)\s*([\w+-]*)\s*$")
+
+
+def render_table(lines):
+    head = split_row(lines[0])
+    aligns = []
+    for cell in split_row(lines[1]):
+        left, right = cell.startswith(":"), cell.endswith(":")
+        aligns.append("center" if left and right else "right" if right else "")
+    rows = [split_row(l) for l in lines[2:]]
+    out = ['<div class="tablewrap"><table>', "<thead><tr>"]
+    for i, cell in enumerate(head):
+        cls = ' class="num"' if i < len(aligns) and aligns[i] == "right" else ""
+        out.append(f"<th{cls}>{inline(cell)}</th>")
+    out.append("</tr></thead><tbody>")
+    for row in rows:
+        out.append("<tr>")
+        for i, cell in enumerate(row):
+            numeric = NUMERIC_CELL.match(re.sub(r"\*\*", "", cell)) is not None
+            cls = ' class="num"' if numeric or (i < len(aligns) and aligns[i] == "right") else ""
+            out.append(f"<td{cls}>{inline(cell)}</td>")
+        out.append("</tr>")
+    out.append("</tbody></table></div>")
+    return "".join(out)
+
+
+def render_list(items):
+    """items: [(indent, marker, text lines)] -> nested <ul>/<ol>."""
+    out, stack = [], []  # stack of (indent, tag)
+
+    def open_list(indent, marker):
+        tag = "ol" if marker[0].isdigit() else "ul"
+        start = ""
+        if tag == "ol":
+            n = int(re.match(r"\d+", marker).group(0))
+            if n != 1:
+                start = f' start="{n}"'
+        out.append(f"<{tag}{start}>")
+        stack.append((indent, tag))
+
+    for indent, marker, body in items:
+        if not stack:
+            open_list(indent, marker)
+        elif indent > stack[-1][0]:
+            out[-1] = out[-1].removesuffix("</li>")
+            open_list(indent, marker)
+        else:
+            while len(stack) > 1 and indent < stack[-1][0]:
+                _, tag = stack.pop()
+                out.append(f"</{tag}></li>")
+        out.append(f"<li>{render_blocks(body, nested=True)}</li>")
+    while stack:
+        _, tag = stack.pop()
+        out.append(f"</{tag}>" + ("</li>" if stack else ""))
+    return "".join(out)
+
+
+def render_blocks(lines, nested=False, toc=None, used=None):
+    out, i, para = [], 0, []
+    used = used if used is not None else set()
+
+    def flush():
+        if para:
+            text = inline(" ".join(l.strip() for l in para))
+            out.append(text if nested and not out else f"<p>{text}</p>")
+            para.clear()
+
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            flush()
+            i += 1
+            continue
+        m = FENCE.match(line)
+        if m:
+            flush()
+            indent, fence = len(m.group(1)), m.group(2)
+            body, i = [], i + 1
+            while i < len(lines) and not lines[i].strip().startswith(fence):
+                body.append(lines[i][indent:] if lines[i][:indent].strip() == "" else lines[i])
+                i += 1
+            i += 1
+            out.append('<div class="codewrap"><pre><code>' + html.escape("\n".join(body)) + "</code></pre></div>")
+            continue
+        m = HEADING.match(line)
+        if m and not nested:
+            flush()
+            level, text = len(m.group(1)), inline(m.group(2))
+            hid = slug(text, used)
+            if toc is not None and level == 2:
+                toc.append((hid, text))
+            out.append(f'<h{level} id="{hid}">{text}</h{level}>')
+            i += 1
+            continue
+        if re.match(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$", line):
+            flush()
+            out.append("<hr>")
+            i += 1
+            continue
+        if "|" in line and i + 1 < len(lines) and TABLE_SEP.match(lines[i + 1]):
+            flush()
+            j = i + 2
+            while j < len(lines) and "|" in lines[j] and lines[j].strip():
+                j += 1
+            out.append(render_table(lines[i:j]))
+            i = j
+            continue
+        if line.lstrip().startswith(">"):
+            flush()
+            quote = []
+            while i < len(lines) and lines[i].lstrip().startswith(">"):
+                quote.append(re.sub(r"^\s*>\s?", "", lines[i]))
+                i += 1
+            out.append("<blockquote>" + render_blocks(quote, used=used) + "</blockquote>")
+            continue
+        m = LIST_ITEM.match(line)
+        if m:
+            flush()
+            items = []
+            base = len(m.group(1))
+            while i < len(lines):
+                m = LIST_ITEM.match(lines[i])
+                if m and len(m.group(1)) >= base:
+                    indent = len(m.group(1))
+                    body_indent = indent + len(m.group(2)) + 1
+                    body = [m.group(3)]
+                    i += 1
+                    # Continuation lines, and fenced code that belongs to the item.
+                    while i < len(lines):
+                        nxt = lines[i]
+                        if not nxt.strip():
+                            if i + 1 < len(lines) and len(lines[i + 1]) - len(lines[i + 1].lstrip()) >= body_indent and not LIST_ITEM.match(lines[i + 1]):
+                                body.append("")
+                                i += 1
+                                continue
+                            break
+                        lead = len(nxt) - len(nxt.lstrip())
+                        if LIST_ITEM.match(nxt) or lead < body_indent and not para_continuation(nxt):
+                            break
+                        body.append(nxt[body_indent:] if lead >= body_indent else nxt.strip())
+                        i += 1
+                    items.append((indent, m.group(2), body))
+                elif not lines[i].strip() and i + 1 < len(lines) and LIST_ITEM.match(lines[i + 1]) and len(LIST_ITEM.match(lines[i + 1]).group(1)) >= base:
+                    i += 1
+                else:
+                    break
+            out.append(render_list(items))
+            continue
+        para.append(line)
+        i += 1
+    flush()
+    return "".join(out)
+
+
+def para_continuation(line):
+    """A lazily indented line that continues the item's paragraph."""
+    return not (HEADING.match(line) or FENCE.match(line) or line.lstrip().startswith(("|", ">")))
+
+
+# --------------------------------------------------------------------------
+# Page
+# --------------------------------------------------------------------------
+
+FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
+         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+         '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500'
+         '&family=IBM+Plex+Sans+Condensed:wght@600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">')
+
+CSS = """
+:root {
+  --bg: #f4f6f8; --surface: #ffffff; --ink: #161a21; --ink-2: #485160; --muted: #6b7482;
+  --rule: #d8dde5; --head: #f7f8fa; --chip: #e8ecf2; --accent: #2a78d6; --quote: #e4eefb;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --cond: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f1216; --surface: #161a20; --ink: #e8ebf0; --ink-2: #b3bbc7; --muted: #8b94a3;
+    --rule: #2a3039; --head: #1b2028; --chip: #232932; --accent: #5b9ef0; --quote: #16263b;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1216; --surface: #161a20; --ink: #e8ebf0; --ink-2: #b3bbc7; --muted: #8b94a3;
+  --rule: #2a3039; --head: #1b2028; --chip: #232932; --accent: #5b9ef0; --quote: #16263b;
+}
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 15px/1.6 var(--sans); }
+.page { max-width: 980px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; display: grid; gap: 28px; }
+header { display: grid; gap: 10px; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1, h2 { font-family: var(--cond); font-weight: 600; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(28px, 4.2vw, 40px); line-height: 1.1; }
+h2 { font-size: 24px; line-height: 1.2; padding-top: 20px; border-top: 1px solid var(--rule); }
+h3 { font: 600 16px/1.35 var(--sans); margin: 8px 0 0; }
+h4, h5, h6 { font: 600 14px/1.4 var(--sans); margin: 4px 0 0; color: var(--ink-2); }
+.meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 18px; }
+nav { display: flex; flex-wrap: wrap; gap: 6px; }
+nav a { font-size: 13px; color: var(--ink-2); text-decoration: none; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 10px; }
+nav a:hover, nav a:focus-visible { color: var(--ink); border-color: var(--muted); }
+article { display: grid; gap: 14px; min-width: 0; }
+article > * { margin: 0; min-width: 0; }
+p, li { max-width: 78ch; }
+ul, ol { padding-left: 22px; display: grid; gap: 4px; }
+li > ul, li > ol { margin-top: 4px; }
+li > p { margin: 0; }
+a { color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+strong { font-weight: 600; }
+code { font-family: var(--mono); font-size: .86em; background: var(--chip); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.codewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+pre { margin: 0; padding: 12px 14px; }
+pre code { background: none; padding: 0; font-size: 13px; overflow-wrap: normal; white-space: pre; }
+blockquote { margin: 0; padding: 10px 14px; background: var(--quote); border-radius: 8px; color: var(--ink-2); }
+hr { border: 0; border-top: 1px solid var(--rule); }
+.tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+tr:last-child td { border-bottom: 0; }
+th { font: 600 12px/1.3 var(--sans); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; background: var(--head); white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td code { font-size: 12.5px; }
+footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+@media (max-width: 560px) { .page { padding-inline: 16px; padding-block: 28px 48px; } h2 { font-size: 21px; } }
+@media print {
+  :root, :root[data-theme="dark"] { color-scheme: light; --bg: #ffffff; --surface: #ffffff; --ink: #161a21; --ink-2: #485160;
+    --muted: #6b7482; --rule: #d8dde5; --head: #f7f8fa; --chip: #eef1f5; --accent: #1f5fae; --quote: #eef4fc; }
+  body { font-size: 11pt; }
+  .page { max-width: none; padding: 0; }
+  nav { display: none; }
+  .tablewrap, .codewrap { overflow: visible; }
+  pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  tr, pre, blockquote { break-inside: avoid; }
+  h2, h3 { break-after: avoid; }
+}
+"""
+
+
+def build_page(markdown, stamps, fragment=False, fonts=True):
+    lines = markdown.splitlines()
+    title = "Log Insights Report"
+    if lines and HEADING.match(lines[0]) and HEADING.match(lines[0]).group(1) == "#":
+        title = HEADING.match(lines[0]).group(2)
+        lines = lines[1:]
+    toc = []
+    body = render_blocks(lines, toc=toc)
+    nav = ""
+    if len(toc) > 2:
+        nav = '<nav aria-label="Sections">' + "".join(
+            f'<a href="#{hid}">{re.sub(r"<[^>]+>", "", text)}</a>' for hid, text in toc) + "</nav>"
+    page_title = "Log Insights Report"
+    subject = title.split(":", 1)[1].strip() if ":" in title else ""
+    if subject:
+        page_title = f"{subject} log insights"
+    content = (
+        f'<div class="page"><header><div class="eyebrow">CLP · log-insights</div>'
+        f"<h1>{inline(title)}</h1>"
+        '<div class="meta">' + "".join(f"<span>{html.escape(k)}: {html.escape(v)}</span>" for k, v in stamps) + "</div>"
+        f"{nav}</header><article>{body}</article>"
+        f"<footer>Written by the CLP plugin's log-insights skill from queries against the archive; "
+        f"the Query Log lists every one.</footer></div>"
+    )
+    head = f"<title>{html.escape(page_title)}</title>" + (FONTS if fonts else "") + f"<style>{CSS}</style>"
+    if fragment:
+        return head + content
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width,initial-scale=1">{head}</head>'
+            f"<body>{content}</body></html>")
+
+
+# --------------------------------------------------------------------------
+# PDF
+# --------------------------------------------------------------------------
+
+def is_wsl():
+    try:
+        with open("/proc/version") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
+def find_pdf_engine():
+    """(path, needs_windows_paths) of a Chromium-family browser, or None."""
+    env = os.environ.get("CLP_PDF_BROWSER")
+    if env:
+        path = shutil.which(env) or env
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path, path.lower().endswith(".exe")
+    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable",
+                 "chrome", "microsoft-edge", "microsoft-edge-stable", "msedge"):
+        path = shutil.which(name)
+        if path:
+            return path, False
+    for path in ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                 "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                 "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"):
+        if os.path.isfile(path):
+            return path, False
+    home = os.path.expanduser("~")
+    for root in (os.path.join(home, ".cache/ms-playwright"), os.path.join(home, "Library/Caches/ms-playwright")):
+        for pattern in ("chromium_headless_shell-*/chrome-*/headless_shell",
+                        "chromium-*/chrome-linux*/chrome",
+                        "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
+                        "chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"):
+            found = sorted(glob.glob(os.path.join(root, pattern)), reverse=True)
+            if found:
+                return found[0], False
+    if is_wsl() and shutil.which("wslpath"):
+        for path in ("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
+                     "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+                     "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+                     "/mnt/c/Program Files/Microsoft/Edge/Application/msedge.exe"):
+            if os.path.isfile(path):
+                return path, True
+    return None
+
+
+def to_windows(path):
+    return subprocess.run(["wslpath", "-w", path], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def write_pdf(page_html, out_path, engine):
+    browser, windows = engine
+    # A Windows browser cannot read the WSL /tmp reliably, so stage next to the output.
+    stage_dir = os.path.dirname(out_path) if windows else None
+    with tempfile.TemporaryDirectory(dir=stage_dir, prefix=".log-insights-pdf-") as tmp:
+        src = os.path.join(tmp, "report.html")
+        pdf = os.path.join(tmp, "report.pdf")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write(page_html)
+        if windows:
+            url = "file:///" + to_windows(src).replace("\\", "/")
+            target = to_windows(pdf)
+        else:
+            url = "file://" + src
+            target = pdf
+        cmd = [browser, "--headless", "--disable-gpu", "--no-sandbox", "--no-first-run",
+               "--no-pdf-header-footer", "--print-to-pdf-no-header",
+               f"--user-data-dir={to_windows(tmp) if windows else tmp}",
+               f"--print-to-pdf={target}", url]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            return "the browser did not finish printing within 120 s"
+        if not os.path.isfile(pdf) or os.path.getsize(pdf) == 0:
+            err = (proc.stderr or proc.stdout).strip().splitlines()
+            return f"{os.path.basename(browser)} exited {proc.returncode} without writing a PDF" + (
+                f": {err[-1]}" if err else "")
+        shutil.move(pdf, out_path)
+    return None
+
+
+# --------------------------------------------------------------------------
+# Destination
+# --------------------------------------------------------------------------
+
+def time_span(facts_path):
+    """The logs' date range from the facts file's "Time span" line, or None
+    when there is no facts file or the span is unavailable."""
+    try:
+        with open(facts_path, encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"^- Time span: (.+? to .+?) \(([^)]+)\)", line)
+                if m:
+                    return f"{m.group(1)} ({m.group(2)})"
+    except OSError:
+        pass
+    return None
+
+
+def stamp_markdown(markdown, stamps):
+    """The report with the header's dates under its title, as the HTML shows."""
+    line = " · ".join(f"{k}: {v}" for k, v in stamps)
+    lines = markdown.splitlines(keepends=True)
+    if lines and HEADING.match(lines[0]) and HEADING.match(lines[0]).group(1) == "#":
+        return lines[0] + "\n" + line + "\n" + "".join(lines[1:])
+    return line + "\n\n" + markdown
+
+
+def default_name(markdown, name):
+    if not name:
+        first = markdown.lstrip().splitlines()[0] if markdown.strip() else ""
+        m = HEADING.match(first)
+        title = m.group(2) if m else ""
+        name = title.split(":", 1)[1] if ":" in title else ""
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip()).strip("-.") or "report"
+    return f"log-insights-{name}-{datetime.datetime.now():%Y%m%d-%H%M}"
+
+
+def unique(path):
+    if not os.path.exists(path):
+        return path
+    stem, ext = os.path.splitext(path)
+    n = 2
+    while os.path.exists(f"{stem}-{n}{ext}"):
+        n += 1
+    return f"{stem}-{n}{ext}"
+
+
+def resolve_stem(dest, markdown, name):
+    """Absolute path without extension for the saved files."""
+    raw = dest if dest else os.getcwd()
+    path = os.path.abspath(os.path.expanduser(raw))
+    if raw.endswith(("/", os.sep)) or os.path.isdir(path):
+        return os.path.join(path, default_name(markdown, name))
+    if path.lower().endswith(KNOWN_SUFFIXES):
+        path = os.path.splitext(path)[0]
+    return path
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("report", nargs="?", default=DEFAULT_REPORT)
+    ap.add_argument("--format", action="append", default=[])
+    ap.add_argument("--dest")
+    ap.add_argument("--name")
+    ap.add_argument("--facts", default=DEFAULT_FACTS)
+    ap.add_argument("--list-formats", action="store_true")
+    args = ap.parse_args()
+
+    engine = find_pdf_engine()
+    if args.list_formats:
+        print("FORMATS=" + ",".join(["md", "html"] + (["pdf"] if engine else [])))
+        print("PDF_ENGINE=" + (engine[0] if engine else "none"))
+        return 0
+
+    formats = []
+    for f in args.format:
+        for part in f.split(","):
+            part = part.strip().lower()
+            part = {"markdown": "md", "htm": "html"}.get(part, part)
+            if part and part not in formats:
+                formats.append(part)
+    bad = [f for f in formats if f not in ("md", "html", "pdf", "artifact")]
+    if not formats or bad:
+        print(f"ERROR: --format must be md, html, pdf or artifact (got {', '.join(bad) or 'nothing'})", file=sys.stderr)
+        return 2
+    try:
+        with open(args.report, encoding="utf-8") as f:
+            markdown = f.read()
+    except OSError as e:
+        print(f"ERROR: cannot read the report: {e}", file=sys.stderr)
+        return 2
+    if not markdown.strip():
+        print(f"ERROR: the report {args.report} is empty", file=sys.stderr)
+        return 2
+
+    now = datetime.datetime.now().astimezone()
+    stamps = []
+    span = time_span(args.facts)
+    if span:
+        stamps.append(("Logs", span))
+    stamps.append(("Generated", f"{now:%Y-%m-%d %H:%M %Z}".strip()))
+    stem = None
+    if any(f in EXTENSIONS for f in formats):
+        stem = resolve_stem(args.dest, markdown, args.name)
+        try:
+            os.makedirs(os.path.dirname(stem), exist_ok=True)
+        except OSError as e:
+            print(f"ERROR: cannot create {os.path.dirname(stem)}: {e}", file=sys.stderr)
+            return 2
+
+    status = 0
+    for fmt in formats:
+        if fmt == "artifact":
+            with open(ARTIFACT_PATH, "w", encoding="utf-8") as f:
+                f.write(build_page(markdown, stamps, fragment=True))
+            print(f"SAVED_ARTIFACT={ARTIFACT_PATH}")
+            continue
+        out = unique(stem + EXTENSIONS[fmt])
+        try:
+            if fmt == "md":
+                with open(out, "w", encoding="utf-8") as f:
+                    f.write(stamp_markdown(markdown, stamps))
+            elif fmt == "html":
+                with open(out, "w", encoding="utf-8") as f:
+                    f.write(build_page(markdown, stamps))
+            else:
+                if not engine:
+                    print("PDF_ERROR=no Chromium-family browser found (Chrome, Chromium or Edge); "
+                          "set CLP_PDF_BROWSER to one to enable PDF")
+                    status = 1
+                    continue
+                # No web fonts: the headless print must not depend on the network.
+                err = write_pdf(build_page(markdown, stamps, fonts=False), out, engine)
+                if err:
+                    print(f"PDF_ERROR={err}")
+                    status = 1
+                    continue
+        except OSError as e:
+            print(f"ERROR: cannot write {out}: {e}", file=sys.stderr)
+            status = 1
+            continue
+        print(f"SAVED_{fmt.upper()}={out}")
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -22,7 +22,8 @@ plugins/clp/bin/
     plus local helpers that are not clp-s passthroughs (clp-detect-logs, structurize.py,
     log-shape-cache, log-shape-insights-bootstrap, log-shape-cluster,
     log-shape-insight-extract, log-shape-baseline-plan, log-shape-query-plan-run,
-    log-shape-insight-facts, log-shape-report-check, clp-compress-status,
+    log-shape-insight-facts, log-shape-report-check, log-shape-report-save,
+    clp-compress-status,
     kql-build,
     kql-validate-wildcards; shared Python in lib/kql_build.py and
     lib/log_shapes.py).
