@@ -23,29 +23,32 @@ For a single ad-hoc KQL query, use the `search` skill. To compress raw logs firs
 
 Each shell invocation is independent — shell variables do not persist between steps. Re-declare them or run dependent commands together in one call.
 
-**Keep the user posted at every step.** Before each command, say in one short line what you are about to do; after it, report the key numbers it produced. Never chain steps silently — steps 5–8 run long, and without your narration the user sees no progress at all. Say the expected duration when you announce a command that can run over a minute (the bootstrap on a multi-GB archive, plan batches, a subagent); run such commands in the background and post a one-line status at least once a minute until they finish, so a slow step is never indistinguishable from a stuck one. When a cache hit or recorded results let you skip steps or plan entries, say which ones and why before skipping them, not afterward.
+**Keep the user posted at every step.** Before each command, say in one short line what you are about to do; after it, report the key numbers it produced. Never chain steps silently — steps 5–8 run long, and without your narration the user sees no progress at all. Say the expected duration when you announce a command that can run over a minute (the bootstrap on a large archive, whose estimate step 3 gives; plan batches; a subagent); run such commands in the background and post a one-line status at least once a minute until they finish, so a slow step is never indistinguishable from a stuck one. When a cache hit or recorded results let you skip steps or plan entries, say which ones and why before skipping them, not afterward.
 
 1. Determine the input: archive path → use it; log files or folders → detect, then compress, as the `compress-folder` skill describes (tell the user in a line what the detector found and which flags you chose); nothing → ask.
 
 2. Report compression stats when you compressed: `Raw input bytes`, `Archive bytes`, `Compression ratio`, `File size reduction`, `Input files`, `Archives dir`, `Archive metadata`.
 
-3. **Bootstrap.** Tell the user you are analyzing and classifying the log shape — then run the one command that does all of it (it also reads the per-template frequencies that clp-s stored in the archive):
+3. **Bootstrap.** Tell the user in one line what the bootstrap does and how long it should take. It reads the field names and value distributions from a sample of up to 20,000 records, gets the per-template counts stored in the archive, then checks the classification cache. It classifies nothing (that is step 6), and it doesn't sample the dictionary: every template is counted. The first time it sees an archive, it dumps the full log shape dictionary and stores each template's counts in the cache database, which takes about 1 minute per 300 MiB of archive (`Archive bytes` from step 2, or `du -sh <archive-dir>`): 1 s for a 1.6 MB vLLM archive, about 1 minute for a 357 MiB CockroachDB archive (9.8 GiB of raw logs). A later run on the same archive reads the stored counts instead, and takes about as long as the sample (15 s for that CockroachDB archive). Then run it:
 
    ```bash
    ~/.codex/marketplaces/yscope/plugins/clp/bin/log-shape-insights-bootstrap <archive-dir>
    ```
 
+   Its first line is its own estimate (`[bootstrap] archive 357.1 MB; expect about 2 min`, or `archive 357.1 MB, analyzed before; expect under a minute`). After that it prints a `[bootstrap]` line as each of its three stages starts and ends, and a heartbeat every 30 s while one runs. Relay the newest `[bootstrap]` line to the user as they arrive, so the user never waits on a silent dump. It ends with `BOOTSTRAP_TIMINGS`; when the total is far from the estimate, say so in a line.
+
 From its `KEY=VALUE` output record:
    - `SAMPLE=` + `DIST field=... distinct=N values=...` → pick the **schema**: timestamp, severity, logger, **message** (the clp-string field — high distinct-count prose), payload leaves if any. Low-distinct fields are severity/logger-like; note their value vocabularies from the DIST lines.
    - `LOG_SHAPE_COUNT=` → report to the user.
-   - `FREQS=OK` + `FREQS_FILE=` → per-template frequencies for the whole archive, summed from the counts clp-s stored at compression time: `{"count":N,"log_shape":"..."}` NDJSON, most frequent first. Step 7 uses this file; never recompute frequencies by projecting and counting messages.
+   - `FREQS=OK` + `FREQS_FILE=` → per-template frequencies for the whole archive, summed from the counts clp-s stored at compression time: `{"count":N,"hash":"...","length":N,"log_shape":"..."}` NDJSON, most frequent first, where `log_shape` is the template's first `MAX_CHARS` characters (all of it when `length` is no longer). Step 7 uses this file; never recompute frequencies by projecting and counting messages.
+   - `SHAPES_SOURCE=stored` → this archive was analyzed before, so its counts came from the cache database and the dictionary was not dumped; `LOG_SHAPES_FILE` (the full template text) is then not written. `SHAPES_SOURCE=dump` → the dictionary was dumped and the archive stored for next time.
    - `FREQS=UNAVAILABLE` → the archive was compressed before clp-s stored per-log-shape counts (`FREQS_HINT=` says so). Tell the user that template frequencies are unavailable for this archive and that recompressing the source logs with the current plugin adds them. Do not compute them another way.
    - `CACHE_MODE=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` / `MAX_CHARS=` → step 4. Pass `MAX_CHARS` through to `log-shape-cluster` and `log-shape-cache` so their fingerprints match.
 
 Then tell the user what the bootstrap found, in 2–3 lines: the log shape count, the schema you picked, whether per-template frequencies are available, and the cache mode.
 
 4. **Branch on `CACHE_MODE`** — and announce the branch to the user: UPTODATE → "cached classification found; skipping straight to the insight pass"; GROWTH → "N of M templates are new; classifying only those"; NEW → "first capture of this app; classifying all N templates".
-   - **UPTODATE** — the cached plan was already fetched to `/tmp/log-shape-classification.json`. Verify its `.schema` matches step 3; if it does, skip to step 7. If it differs, treat as NEW (continue, clustering `/tmp/log-shapes.ndjson`).
+   - **UPTODATE** — the cached plan was already fetched to `/tmp/log-shape-classification.json`. Verify its `.schema` matches step 3; if it does, skip to step 7. If it differs, treat as NEW (continue, clustering `/tmp/log-shapes.ndjson`; with `SHAPES_SOURCE=stored`, first re-run the bootstrap with `--dump` to write it).
    - **GROWTH** — only the new templates in `/tmp/log-shapes-to-classify.ndjson` need classifying; the base plan was fetched to `/tmp/log-shape-base-classification.json`. Continue to step 5.
    - **NEW** — classify all of `/tmp/log-shapes-to-classify.ndjson`. Continue.
 

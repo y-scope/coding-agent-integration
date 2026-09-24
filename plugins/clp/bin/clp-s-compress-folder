@@ -712,10 +712,6 @@ compress_started="$(date +%s)"
 comp_pid=0
 read_bytes=0
 
-human_bytes() {
-  awk -v b="$1" 'BEGIN { n = split("B KB MB GB TB", u, " "); i = 1; while (b >= 1024 && i < n) { b /= 1024; i++ } if (i == 1) printf "%d %s", b, u[i]; else printf "%.1f %s", b, u[i] }'
-}
-
 write_compress_status() {
   local state="$1" exit_code="${2:-null}"
   jq -n \

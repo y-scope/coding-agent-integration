@@ -8,9 +8,9 @@ Read this only when needed: the bootstrap misbehaves (empty dump, missing freque
 - The search wrapper adds the required `--experimental` flag automatically and rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently return nothing for it). It also prints archive-metadata header lines to stdout — always filter with `grep '^{'` before jq (the repo-wide idiom).
 - You **cannot** filter a stats query by substring (`stats.log_shapes:foo` is not valid); it always dumps the whole dictionary. Filter downstream:
   ```bash
-  jq -r 'select(.log_shape|test("failed";"i")) | .log_shape' /tmp/log-shapes.ndjson
+  jq -r 'select(.log_shape|test("failed";"i")) | .log_shape' /tmp/log-shape-freqs.ndjson
   ```
-- Per-template frequencies come from those stored counts, with no scan of the records. The bootstrap writes them to `/tmp/log-shape-freqs.ndjson` (`{"count":N,"log_shape":"..."}`, most frequent first); by hand:
+- Per-template frequencies come from those stored counts, with no scan of the records. The bootstrap writes them to `/tmp/log-shape-freqs.ndjson` (`{"count":N,"hash":"...","length":N,"log_shape":"..."}`, most frequent first). Its `log_shape` is the template's first `MAX_CHARS` characters, all of it when `length` is no longer: the bootstrap stores that much per template in the cache database, so a later analysis of the same archive reads the counts back instead of dumping the dictionary. The full text is in `/tmp/log-shapes.ndjson` when the bootstrap dumped the dictionary (`SHAPES_SOURCE=dump`; `--dump` forces it). By hand, from a dump:
   ```bash
   clp-s-search-kql ARCHIVE 'stats.log_shapes' | grep '^{' | log-shape-cache freqs
   ```
@@ -73,7 +73,7 @@ Rules of thumb: pick the rarest distinctive static text (never a variable or a s
 - **Scoped semantic:** `clp-s-search-kql ARCHIVE 'semantic("...") AND <severity>:<value>'`
 - **Filter the baseline with jq:**
   ```bash
-  jq -r 'select(.log_shape|test("error|fail|exception";"i")).log_shape' /tmp/log-shapes.ndjson
+  jq -r 'select(.log_shape|test("error|fail|exception";"i")).log_shape' /tmp/log-shape-freqs.ndjson
   ```
 
 ## When to still use semantic search
