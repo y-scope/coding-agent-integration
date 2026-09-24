@@ -83,17 +83,71 @@ It writes `/tmp/logtype-insight-facts.md` in well under a second: total records 
 
 ## Spawn the report writer
 
-Every query has run and every number is in the facts file, so the last step only puts them into words. Spawn ONE subagent (Agent tool), model **haiku**; if the report comes back unusable, tell the user before re-spawning with `sonnet`. It runs no searches and does no arithmetic. Hand it absolute file paths (it does not inherit `${CLAUDE_PLUGIN_ROOT}`), the schema, the taxonomy, and the results table (or its path). Announce it ("facts computed; the report writer turns them into the report, about a minute").
+Every query has run and every number is in the facts file, so the last step only puts them into words. The writing is where a stronger model pays off: a small writer drifts into derived figures (sums, rounded shares) and unsupported causes, and each one costs a correction round later (in a trial with haiku: 18 flagged lines and 15 edits, over three minutes). Spawn ONE subagent (Agent tool), model **opus**; if the Agent tool rejects `opus` as unavailable, use `sonnet`, and tell the user which model is writing. It runs no searches and does no arithmetic. Hand it absolute file paths (it does not inherit `${CLAUDE_PLUGIN_ROOT}`), the schema, the taxonomy, and the results table (or its path). It writes the report itself to `/tmp/logtype-insight-report.md` and replies only `DONE`, so the report is never regenerated just to be saved. If the file is missing or unusable, tell the user and re-spawn the writer once. Announce it ("facts computed; the report writer turns them into the report, about two minutes").
 
 ## Check the report
 
-Save the writer's report to `/tmp/logtype-insight-report.md` and check it against its inputs:
+Two checkers read the saved report, and neither edits it. `logtype-report-check` catches figures mechanically. A **haiku** verifier subagent catches what a script cannot: a figure that is in the facts but attached to the wrong thing, a claim in words that no line supports, an inference stated as fact, a follow-up query that filters on a category. It also rules on the script's flags, dismissing the ones the facts support. Checking a report against given files is narrow and fast, so haiku is enough.
 
-```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/logtype-report-check" /tmp/logtype-insight-report.md --also <the results table file>
+1. Run the script (under a second) and keep its output for the verifier:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/logtype-report-check" /tmp/logtype-insight-report.md \
+     --also <the results table file> > /tmp/logtype-report-flags.txt
+   ```
+
+   It flags a figure that is in neither the facts nor the results table (with the two listed figures it sums to, if it does), a percentage the inputs never print as a percentage, a count whose only occurrences in the inputs sit next to different wording, a timestamp the inputs do not contain, and a KQL filter on a field the archive does not have. Exit 0 means nothing flagged; exit 1 means `FLAG` lines.
+
+2. Spawn ONE verifier subagent (Agent tool), model **haiku**, with the verifier prompt below and the script's output. Announce it ("report written; a fast model is checking every claim against the facts, under a minute"). It writes `/tmp/logtype-report-issues.json` and replies `ISSUES=<n>`. If the JSON is missing or malformed, tell the user and re-spawn it once with `sonnet`.
+
+3. If `ISSUES` is above zero, send the writer (SendMessage, same agent) the path `/tmp/logtype-report-issues.json` once, with this instruction: "Fix each issue in `/tmp/logtype-insight-report.md` in place with Edit: use the figure exactly as the facts give it, reword the claim to what the files show, label it "inference", or remove it. Derive nothing. Reply DONE."
+
+4. Re-check once: run the script again and re-spawn the verifier on the corrected report. Do not run a third round. Any issue still listed goes to the user in a short "unverified" note beside the report, one line each, rather than being hidden.
+
+## Verifier prompt template
+
+Fill in `RESULTS_TABLE` and paste the script's output (or "none"):
+
 ```
+Verify a Logtype Insights Report against the files it was written from. Do NOT
+edit or rewrite the report and do NOT run searches: only list what is wrong.
 
-It flags a figure that is in neither the facts nor the results table (with the two listed figures it sums to, if it does), a percentage the inputs never print as a percentage, a count whose only occurrences in the inputs sit next to different wording, a timestamp the inputs do not contain, and a KQL filter on a field the archive does not have. Exit 0 means nothing flagged; exit 1 prints `FLAG` lines. On exit 1, send the flagged lines back to the same writer (SendMessage) once: replace each with the figure exactly as the facts give it, or remove it, and derive nothing. Check again. If lines are still flagged, show the report with a short "unverified figures" note listing them rather than hiding them. The check cannot catch a wrong figure that is also correct somewhere else in the facts, or a wrong claim in words.
+REPORT:         /tmp/logtype-insight-report.md
+FACTS_FILE:     /tmp/logtype-insight-facts.md (computed in code; every figure exact)
+RESULTS_TABLE:  RESULTS_TABLE (each query's own count)
+TEMPLATES_FILE: /tmp/logtype-templates-by-category.txt (template texts only;
+                never a source for counts)
+SCRIPT FLAGS (from logtype-report-check; some may be false positives):
+<paste /tmp/logtype-report-flags.txt, or "none">
+
+Read the report with line numbers (cat -n) and check every statement:
+1. Each number, percentage, count and timestamp appears verbatim in FACTS_FILE
+   or RESULTS_TABLE, attached to the same thing the report attaches it to. A
+   figure that is a sum, difference, rounding or rate of other figures is an
+   issue, even when the arithmetic is right.
+2. A time span is stated only as the facts give it. Timestamps of fetched
+   records are described as first/last seen among those records, never as the
+   archive's span.
+3. A cause, recommendation or characterisation of the environment that no
+   line in the files shows must be labelled "inference"; stated as fact, it is
+   an issue.
+4. The top warning and error templates and their counts match the grouped
+   records in FACTS_FILE.
+5. Follow-up KQL filters only on fields FACTS_FILE lists (or semantic("...")),
+   quotes every wildcard value (field:"*term*"), and never uses a category or
+   template name as a field.
+6. For each SCRIPT FLAG, decide whether it is real. Dismiss it only when
+   FACTS_FILE shows the figure attached to the same thing the report says (for
+   example a category's own record count). Otherwise it is an issue.
+
+Write JSON to /tmp/logtype-report-issues.json:
+  {"issues": [{"line": N, "quote": "<exact report text>",
+               "problem": "<what is wrong; cite the file line that shows it>",
+               "fix": "<the exact figure or wording from the facts | label as inference | remove>"}],
+   "dismissed_flags": [{"line": N, "why": "<the FACTS_FILE line that supports it>"}]}
+Then print ISSUES=<number of issues> and nothing else. An empty issues list is
+a valid answer; do not invent issues.
+```
 
 ## Report writer prompt template
 
@@ -154,7 +208,9 @@ Rules:
 9. Describe only what the files show. No characterisation of the environment
    (for example "production-grade") that no line supports.
 
-Return ONLY a Markdown Logtype Insights Report with these sections:
+Write ONLY the Markdown Logtype Insights Report to
+/tmp/logtype-insight-report.md (Write tool), then reply DONE and nothing else.
+The report has these sections:
 1. Summary -- total records, severity counts, top logger/component, what the
    application appears to be doing (from the dominant templates).
 2. Logtype Baseline -- distinct templates, the top templates by frequency, the
