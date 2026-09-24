@@ -85,6 +85,16 @@ It writes `/tmp/logtype-insight-facts.md` in well under a second: total records 
 
 Every query has run and every number is in the facts file, so the last step only puts them into words. Spawn ONE subagent (Agent tool), model **haiku**; if the report comes back unusable, tell the user before re-spawning with `sonnet`. It runs no searches and does no arithmetic. Hand it absolute file paths (it does not inherit `${CLAUDE_PLUGIN_ROOT}`), the schema, the taxonomy, and the results table (or its path). Announce it ("facts computed; the report writer turns them into the report, about a minute").
 
+## Check the report
+
+Save the writer's report to `/tmp/logtype-insight-report.md` and check it against its inputs:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/logtype-report-check" /tmp/logtype-insight-report.md --also <the results table file>
+```
+
+It flags a figure that is in neither the facts nor the results table (with the two listed figures it sums to, if it does), a percentage the inputs never print as a percentage, a count whose only occurrences in the inputs sit next to different wording, a timestamp the inputs do not contain, and a KQL filter on a field the archive does not have. Exit 0 means nothing flagged; exit 1 prints `FLAG` lines. On exit 1, send the flagged lines back to the same writer (SendMessage) once: replace each with the figure exactly as the facts give it, or remove it, and derive nothing. Check again. If lines are still flagged, show the report with a short "unverified figures" note listing them rather than hiding them. The check cannot catch a wrong figure that is also correct somewhere else in the facts, or a wrong claim in words.
+
 ## Report writer prompt template
 
 Fill in `ARCHIVE`, `GOAL`, `FACTS_FILE` (`/tmp/logtype-insight-facts.md`), `TEMPLATES_FILE` (`/tmp/logtype-templates-by-category.txt`), `RESULTS_TABLE` (the `--print-table` output, or a path to it), the schema fields, and the taxonomy:

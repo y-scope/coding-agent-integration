@@ -22,7 +22,8 @@ plugins/clp/bin/
     plus local helpers that are not clp-s passthroughs (structurize.py,
     logtype-cache, logtype-insights-bootstrap, logtype-cluster,
     logtype-insight-extract, logtype-baseline-plan, logtype-query-plan-run,
-    logtype-insight-facts, clp-compress-status, kql-build,
+    logtype-insight-facts, logtype-report-check, clp-compress-status,
+    kql-build,
     kql-validate-wildcards; shared Python in lib/kql_build.py).
 plugins/clp/skills-claude/
     Claude Code skills: compress, compress-folder, search, logtype-insights,
