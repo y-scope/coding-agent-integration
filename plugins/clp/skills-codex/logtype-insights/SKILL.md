@@ -23,7 +23,7 @@ For a single ad-hoc KQL query, use the `search` skill. To compress raw logs firs
 
 Each shell invocation is independent — shell variables do not persist between steps. Re-declare them or run dependent commands together in one call.
 
-**Keep the user posted at every step.** Before each command, say in one short line what you are about to do; after it, report the key numbers it produced. Never chain steps silently — steps 5–7 run long, and without your narration the user sees no progress at all. Say the expected duration when you announce a command that can run over a minute (the bootstrap on a multi-GB archive, plan batches, a subagent); run such commands in the background and post a one-line status at least once a minute until they finish, so a slow step is never indistinguishable from a stuck one. When a cache hit or recorded results let you skip steps or plan entries, say which ones and why before skipping them, not afterward.
+**Keep the user posted at every step.** Before each command, say in one short line what you are about to do; after it, report the key numbers it produced. Never chain steps silently — steps 5–8 run long, and without your narration the user sees no progress at all. Say the expected duration when you announce a command that can run over a minute (the bootstrap on a multi-GB archive, plan batches, a subagent); run such commands in the background and post a one-line status at least once a minute until they finish, so a slow step is never indistinguishable from a stuck one. When a cache hit or recorded results let you skip steps or plan entries, say which ones and why before skipping them, not afterward.
 
 1. Determine the input: archive path → use it; log files or folders → detect, then compress, as the `compress-folder` skill describes (tell the user in a line what the detector found and which flags you chose); nothing → ask.
 
@@ -71,15 +71,17 @@ Stdout prints a summary then one `{"id","count","representative"}` line per clus
    - security / auth / access
    - other (note but don't deep-search)
 
-Build a QUERY PLAN: targeted queries derived from the representatives, expressed in the discovered field names. Per entry: `label`, the filter as a structured `match` object, the `project` columns, and the `method`. Never write a KQL string: the plan runner renders `match` to KQL itself, quoting and escaping every value and parenthesizing every group, and an entry carrying a `kql` key is rejected. `match` grammar (nest freely): `{"all":[F,...]}` (AND), `{"any":[F,...]}` (OR), `{"not":F}`, `{"field":"<f>","eq":V}` (exact value — fastest, for a scalar field whose full value is known; on the message field it matches only a message equal to V, so it correctly returns 0 otherwise), `{"field":"<f>","contains":"text"}` (substring — what message content almost always needs; the text is literal, spaces and quotes included), `{"field":"<f>","contains":["a","b"]}` (substrings in order, e.g. a template's static fragments around its `<*>`), `{"field":"<f>","prefix":"text"}`, `{"field":"<f>","exists":true}`, `{"field":"<f>","gt":N}` (also `gte`/`lt`/`lte`), and `{"semantic":"text"}` (only inside an `all` beside a concrete filter; never alone, never under `not`). Methods: `count` (run with `--count`) / `project+grep` (fold the text into `match` as an `any` of `contains` nodes; set `grep` only for real regex features) / `project+jq` (with `jq`) / `semantic`. For GROWTH, add entries only for genuinely new signals. Example (Mongo): `{"label":"Slow queries","match":{"field":"attr.durationMillis","exists":true},"project":"t.$date,attr.durationMillis,msg","jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}`. Example (vLLM): `{"label":"Memory or OOM warnings","match":{"all":[{"field":"level","eq":"WARNING"},{"any":[{"field":"message","contains":"memory"},{"field":"message","contains":"OOM"},{"field":"message","contains":"oom-killer"}]}]},"project":"timestamp,level,message","method":"project+grep"}`.
+Build a QUERY PLAN: targeted queries derived from the representatives, expressed in the discovered field names. Per entry: `label`, the filter as a structured `match` object, the `project` columns, and the `method`. Never write a KQL string: the plan runner renders `match` to KQL itself, quoting and escaping every value and parenthesizing every group, and an entry carrying a `kql` key is rejected. `match` grammar (nest freely): `{"all":[F,...]}` (AND), `{"any":[F,...]}` (OR), `{"not":F}`, `{"field":"<f>","eq":V}` (exact value — fastest, for a scalar field whose full value is known; on the message field it matches only a message equal to V, so it correctly returns 0 otherwise), `{"field":"<f>","contains":"text"}` (substring — what message content almost always needs; the text is literal, spaces and quotes included), `{"field":"<f>","contains":["a","b"]}` (substrings in order, e.g. a template's static fragments around its `<*>`), `{"field":"<f>","prefix":"text"}`, `{"field":"<f>","exists":true}`, `{"field":"<f>","gt":N}` (also `gte`/`lt`/`lte`), and `{"semantic":"text"}` (only inside an `all` beside a concrete filter; never alone, never under `not`). Methods: `count` (run with `--count`) / `project+grep` (fold the text into `match` as an `any` of `contains` nodes; set `grep` only for real regex features) / `project+jq` (with `jq`) / `semantic`. For GROWTH, add entries only for genuinely new signals.
+
+Then RANK what you found, by what matters for the application rather than for this one capture (the classification is cached and reused for every later capture). Give every taxonomy category a `priority` — `high` (problems, or what tells whether the application is healthy and doing its job: errors, failures, request outcomes, latency; at most a handful), `medium` (useful context), or `low` (routine or uninformative) — and a one-line `why`: what a reader learns from it. Give every query_plan entry its `category` (a taxonomy category), a `priority` on the same scale, and a `stage`: `core` entries run on every analysis (the overview: counts and the key probes); `drill` entries run only when the user focuses on their category — write 1–3 per high or medium category, the next question a reader would ask once that category matters (the records behind a count, a narrower failure signal, the slow or failed subset). Example (Mongo): `{"label":"Slow queries","match":{"field":"attr.durationMillis","exists":true},"project":"t.$date,attr.durationMillis,msg","jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}`. Example (vLLM): `{"label":"Memory or OOM warnings","match":{"all":[{"field":"level","eq":"WARNING"},{"any":[{"field":"message","contains":"memory"},{"field":"message","contains":"OOM"},{"field":"message","contains":"oom-killer"}]}]},"project":"timestamp,level,message","method":"project+grep"}`.
 
 Write `/tmp/logtype-class.json` with this shape — `assignments` must contain EVERY cluster id exactly once, with ONLY ids, never logtype text (members are re-attached mechanically); omit `schema` for GROWTH:
    ```
    {
      "schema": {"timestamp":"<TS>","severity":"<SEV>","logger":"<LOGGER>","message":"<MSG>","payload":["<leaf>",...]},
-     "taxonomy": [{"category":"<name>","description":"<one line>"}],
+     "taxonomy": [{"category":"<name>","description":"<one line>","priority":"<high|medium|low>","why":"<one line>"}],
      "assignments": [{"id":"c1","category":"<name>"}],
-     "query_plan": [{"label":"...","match":{...},"project":"...","grep":"...","jq":"...","method":"..."}]
+     "query_plan": [{"label":"...","match":{...},"project":"...","grep":"...","jq":"...","method":"...","category":"<name>","priority":"<high|medium|low>","stage":"<core|drill>"}]
    }
    ```
 
@@ -90,9 +92,13 @@ Then validate, expand ids to every member template (by hash, exact by constructi
    # which would poison the cache entry):
    jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_plan|type=="array")' \
      /tmp/logtype-class.json >/dev/null || exit 1
-   # Every query_plan entry needs a valid `match` filter: one "[i] OK <kql>" or
-   # "[i] ERROR <label>: <why>" line per entry, exit 1 on any ERROR — fix
-   # those entries and re-run; do NOT store in that case:
+   # Every query_plan entry needs a valid `match` filter and its ranking
+   # (category, priority, stage), and every taxonomy entry its priority and
+   # why: one "[i] OK <kql>" or "[i] ERROR <label>: <why>" line per entry,
+   # "TAXONOMY ERROR" per unranked category, exit 1 on any error — fix them
+   # and re-run; do NOT store in that case. On GROWTH add
+   # --categories-from /tmp/logtype-base-classification.json, since the new
+   # entries may use the base's categories:
    "$BIN"/kql-build check-plan /tmp/logtype-class.json || exit 1
    # Exits 2 and writes NOTHING on missing/unknown/duplicate ids — fix the
    # assignments and re-run; do NOT store in that case:
@@ -109,33 +115,46 @@ Then validate, expand ids to every member template (by hash, exact by constructi
    "$BIN"/logtype-cache put --key "$APP_KEY" --max-chars "$MAX_CHARS" < /tmp/logtype-classification.json
    ```
 
-After storing, report the taxonomy you produced and that the classification is now cached for future runs.
+After storing, report the taxonomy you produced, with each category's priority, and that the classification is now cached for future runs.
 
-7. **Run the insight pass** (inline, from `/tmp/logtype-classification.json`). Announce it first ("running the insight pass — executing the K planned queries; the runner sizes how many run at once from free memory"). Extract the plan with the bounded extractor, which writes `/tmp/logtype-query-plan.txt` and `/tmp/logtype-templates-by-category.txt` (the top templates per category by frequency). A raw `jq` over the classification file can take minutes when an app logs large near-duplicate blobs. Then execute the whole plan with one plan-runner command; it decides how many searches run at once from free memory (a search holds its whole segment in memory) and prints each entry as it finishes:
+7. **Summarize, ask, and stop.** Extract the plan with the bounded extractor (a raw `jq` over the classification file can take minutes when an app logs large near-duplicate blobs). It writes the core plan (`/tmp/logtype-query-plan.txt`, the `core` entries, high priority first), the drill entries (`/tmp/logtype-drill-plan.txt`), `/tmp/logtype-templates-by-category.txt` (the top templates per category by frequency) and `/tmp/logtype-category-totals.json` (exact records per category, with priority and why), and empties the focus inbox:
 
    ```bash
    BIN=~/.codex/marketplaces/yscope/plugins/clp/bin
    "$BIN"/logtype-insight-extract          # add --no-freqs when FREQS=UNAVAILABLE
-   # Only when the extract printed QUERY_PLAN_INVALID= above zero — see below:
-   "$BIN"/kql-build check-plan /tmp/logtype-query-plan.txt | grep ERROR
-   "$BIN"/kql-build check-plan /tmp/logtype-query-plan-repaired.json || exit 1
-   "$BIN"/logtype-cache set-plan --key "$APP_KEY" < /tmp/logtype-query-plan-repaired.json
-   jq -c '.query_plan[]' /tmp/logtype-query-plan-repaired.json > /tmp/logtype-query-plan.txt
+   ```
+
+   `QUERY_PLAN_INVALID=` is 0 for any classification `logtype-cache` produced; if it is not, report it and stop. Then post a short summary — the logtype count, the categories as a small table (records, templates, priority, from the extract's `CATEGORY` lines), the `why` of each high-priority category, and the severity split as the bootstrap's DIST lines sampled it — and ask two questions in the same message:
+
+   - **What do you already know about these logs?** Chasing a problem (what: a symptom, a time, a component), checking something specific, or just exploring.
+   - **What should the report focus on?** Offer the high-priority categories by name with their record counts, "everything", or their own question.
+
+   Then **end your turn and wait for the answer.** The questions come after classification because the focus options are its categories; asking once keeps it to one stop. In a non-interactive run (`codex exec`, or when told not to ask), skip the questions and treat the answer as "everything, no context".
+
+8. **Queue the focus, then run the queries.** Run `logtype-focus` ONCE with the answer — even for "everything", since it closes the inbox the pool reads:
+
+   ```bash
+   "$BIN"/logtype-focus --category <C> [--category <C2>] [--entries-file /tmp/logtype-focus-entries.ndjson] \
+     --context '<what the user said they know, verbatim, or empty>' --question '<their own question, or empty>'
+   "$BIN"/logtype-focus --everything --context '<...>'           # the whole picture
+   ```
+
+   A category queues its drill entries; `NO_DRILL=<C>` means it has none. For the user's own question, a category with no drill entries, or context that names something specific (a component, a symptom, an error text), write 1–3 entries to `/tmp/logtype-focus-entries.ndjson`, one per line, shaped like plan entries (`label`, `match`, `method`, `project` for projecting methods, `category` when one fits), derived from templates in `/tmp/logtype-templates-by-category.txt`; `logtype-focus` validates them and queues nothing if one is invalid (fix it and re-run). A time the user mentions cannot be a filter (`match` has no time range); keep it for the report. Never fold the answer into the classification: it is cached per app, and the answer is about this capture. Then run the baseline and the plan — the plan's pool takes the focus entries from the inbox ahead of the core plan, so they run first:
+
+   ```bash
    # The severity/logger baseline, as its own plan and pool (samples the archive
    # for a few seconds; SCHEMA= is the extract's line):
    "$BIN"/logtype-baseline-plan --archive <archive-dir> --schema-json '<SCHEMA= line>'
    "$BIN"/logtype-query-plan-run --retry-failed --query-plan-file /tmp/logtype-baseline-plan.txt \
      --results-file /tmp/logtype-baseline-results.ndjson <archive-dir>
-   # Then the classified plan:
-   "$BIN"/logtype-query-plan-run --retry-failed <archive-dir>
-   # Both tables, each numbered from 1 (cite "baseline #N" or "plan #N"):
+   # Then the core plan, with the focus from the inbox first:
+   "$BIN"/logtype-query-plan-run --retry-failed --inbox /tmp/logtype-focus-inbox.ndjson <archive-dir>
+   # Both tables, each numbered from 1 (cite "baseline #N" or "plan #N"; focus entries marked):
    "$BIN"/logtype-query-plan-run --print-table --results-file /tmp/logtype-baseline-results.ndjson | tee /tmp/logtype-baseline-table.md
    "$BIN"/logtype-query-plan-run --print-table | tee /tmp/logtype-plan-table.md
    ```
 
-   `QUERY_PLAN_INVALID=` above zero means entries without a valid `match` filter — typically a plan cached before plans used `match`, whose entries carry hand-written `kql` strings (`QUERY_PLAN_INVALID_ENTRIES=` lists them). Repair them once before running the plan: tell the user, list the reasons with `check-plan ... | grep ERROR`, and write `/tmp/logtype-query-plan-repaired.json` as `{"query_plan":[...]}` holding every entry in order — the valid ones unchanged, each invalid one with the same label, method, project, grep, and jq, its filter rewritten as an equivalent `match` (for a `kql` string that mixes AND and OR without parentheses, the grouping its label means), and no `kql` key. Validate it with `check-plan`, store it with `set-plan` (it replaces only the plan; templates and taxonomy stay), and refresh `/tmp/logtype-query-plan.txt` as shown. The next run reads the repaired plan from the cache.
-
-   The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in its results file (`/tmp/logtype-baseline-results.ndjson` for the baseline, `/tmp/logtype-query-results.ndjson` for the plan); the run also records the archive's total record count. As entries finish, give one line per entry: its number, label, result or status, and elapsed time. The baseline entries (`origin: "baseline"`) give the severity and logger breakdown; when a rare-severity residual is small, a follow-up entry fetches those records, and its `samples` are the errors and warnings themselves. `/tmp/logtype-category-totals.json` holds the exact records per category, so report those instead of a keyword probe's count. Then run `"$BIN"/logtype-insight-facts --schema-json '<SCHEMA= line>' --freqs-file <FREQS_FILE>` (it reads both results files) (add `--freqs-file none --category-totals none` when frequencies are unavailable): it writes `/tmp/logtype-insight-facts.md` with every number of the report computed in code, so quote figures from that file and never add up or derive your own. Before presenting the report, save it and run `"$BIN"/logtype-report-check <report file> --also /tmp/logtype-baseline-table.md --also /tmp/logtype-plan-table.md`; fix or remove any figure it flags. When the pools are done, show both tables verbatim and call out the entries that failed, matched nothing, or matched nearly everything. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give one line with the top templates by frequency, and "queries done, writing the report" before step 8. For the queries you run yourself, pick the method that fits:
+   The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in its results file (`/tmp/logtype-baseline-results.ndjson` for the baseline, `/tmp/logtype-query-results.ndjson` for the plan); the run also records the archive's total record count. As entries finish, give one line per entry: its number, label, result or status, and elapsed time. The baseline entries (`origin: "baseline"`) give the severity and logger breakdown; when a rare-severity residual is small, a follow-up entry fetches those records, and its `samples` are the errors and warnings themselves. `/tmp/logtype-category-totals.json` holds the exact records per category, so report those instead of a keyword probe's count. Then run `"$BIN"/logtype-insight-facts --schema-json '<SCHEMA= line>' --freqs-file <FREQS_FILE>` (it reads both results files and `/tmp/logtype-focus.json`) (add `--freqs-file none --category-totals none` when frequencies are unavailable): it writes `/tmp/logtype-insight-facts.md` with every number of the report computed in code, the user's focus and context first, so quote figures from that file and never add up or derive your own. Before presenting the report, save it and run `"$BIN"/logtype-report-check <report file> --also /tmp/logtype-baseline-table.md --also /tmp/logtype-plan-table.md`; fix or remove any figure it flags. When the pools are done, show both tables verbatim and call out the entries that failed, matched nothing, or matched nearly everything. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give 3–5 lines of early numbers from the facts file, the focus first, and "queries done, writing the report" before step 9. For the queries you run yourself, pick the method that fits:
    - `count`: run the KQL with `--count` (in-engine; cannot be combined with `--projection`), never `--projection ... | grep -c '^{'`. It prints one `{"archive_id":...,"count":N}` line per archive and nothing when zero records match; treat empty output as a real zero.
    - `project+grep`: fold the target into the KQL as `<message>:"*text*"`, and OR the wildcards for a keyword alternation (`<message>:"*a*" OR <message>:"*b*"`). Only when the target needs real regex features (anchors, character classes, backreferences), run the KQL with `--projection`, then `grep '^{' | jq -r '.<message>' | grep -Ei '<grep>'`. Add `--limit N` when a few example records are enough.
    - `project+jq`: run the KQL with `--projection`, then `grep '^{' | jq -r '<jq>'`.
@@ -148,18 +167,19 @@ Then:
    - **Total records**: `total_records` in `/tmp/logtype-query-results.ndjson` (already counted; do not recount). **Severity/logger breakdowns**: the bootstrap DIST lines cover only the sampled records; for exact totals run `--count` per value, including the dominant one (it costs the same as a rare one). List unknown values first with `--unique <field>` (it still scans the matching records). **Group totals**: sum `count` over the matching templates in `/tmp/logtype-freqs.ndjson` instead of scanning records. **Time span**: project the timestamp field and use `head`/`tail` (chronological; do NOT sort), or `--tge`/`--tle` if the timestamp is a real epoch.
    - `<message>:term` is an exact match, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so use it when you know a field's full value; message content is free text and almost always needs a substring wildcard — `<message>:"*term*"`. Combine with a scalar filter in one compound query when you can (`<severity>:<value> AND <message>:"*term*"`, `<logger>:"*<substr>*" AND <message>:"*term*"`). Fall back to projecting message + grep only when the match needs real regex features, never for a plain keyword alternation.
 
-8. Present a Markdown Logtype Insights Report:
+9. Present a Markdown Logtype Insights Report, leading with the focus. The user's context is their account, not a finding: say whether the records support it, contradict it, or say nothing about it, quoting the lines that decide it.
    1. **Summary** — total records, severity counts, time span, top logger/component.
-   2. **Logtype Baseline** — distinct template count, top N templates by frequency, the discovered category breakdown. The spine of the report.
-   3. **Issues & Warnings** — error/warning counts, top 3 warning *templates* (grounded, not guessed), actionable problems; semantic-only findings if any.
-   4. **Notable Categories** — per category of interest, counts + representative templates and what they indicate.
-   5. **Performance Signals** — timing/throughput/slow-operation templates and counts (if any); semantic-only findings if any.
-   6. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
-   7. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
-   8. **Follow-up queries** — 2–3 concrete queries derived from templates.
-   9. **Query Log** — every query you ran beyond the plan (exact KQL + flags), its result, and whether the report uses it, including empty ones and corrected re-runs of failed plan entries. The plan's own entries are not repeated; their table was shown when the plan finished.
+   2. **Focus** — what the user asked for, answered first: the focus categories' records and templates, the focus queries' results, and whether the records bear out the user's context.
+   3. **Logtype Baseline** — distinct template count, top N templates by frequency, the discovered category breakdown. The spine of the report.
+   4. **Issues & Warnings** — error/warning counts, top 3 warning *templates* (grounded, not guessed), actionable problems; semantic-only findings if any.
+   5. **Notable Categories** — per category of interest, counts + representative templates and what they indicate.
+   6. **Performance Signals** — timing/throughput/slow-operation templates and counts (if any); semantic-only findings if any.
+   7. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
+   8. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
+   9. **Follow-up queries** — 2–3 concrete queries derived from templates.
+   10. **Query Log** — every query you ran beyond the plan (exact KQL + flags), its result, and whether the report uses it, including empty ones and corrected re-runs of failed plan entries. The plan's own entries are not repeated; their table was shown when the plan finished.
 
-9. Offer to drill deeper on a finding, note that re-running on the same application skips classification (cached plan reused), or decompress: `~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-decompress <archives-dir> <out-dir>`.
+10. Offer to drill deeper on a finding or another category's drill entries, note that re-running on the same application skips classification (cached plan reused), or decompress: `~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-decompress <archives-dir> <out-dir>`.
 
 ## The message field needs the same wildcard rule as any field
 
@@ -178,11 +198,11 @@ Fall back to projecting the message field and grepping/jq-filtering only when th
   | grep '^{' | jq -rc 'select(.<message>|test("StaticText";"i"))'
 ```
 
-Semantic search (`semantic("…")`) also reads the logtypes directly and is a good complement to wildcard search for concept-shaped questions. The insight pass (step 7) always runs one mandatory scoped semantic cross-check; beyond that, use it only for an ambiguous template, grouping similar templates, or a conceptual user question — always scoped: `semantic("…") AND <severity>:<value>`. Flags: `--semantic-top-k` (default 5) and `--semantic-threshold` (default 0.3; raise for precision).
+Semantic search (`semantic("…")`) also reads the logtypes directly and is a good complement to wildcard search for concept-shaped questions. The insight pass (step 8) always runs one mandatory scoped semantic cross-check; beyond that, use it only for an ambiguous template, grouping similar templates, or a conceptual user question — always scoped: `semantic("…") AND <severity>:<value>`. Flags: `--semantic-top-k` (default 5) and `--semantic-threshold` (default 0.3; raise for precision).
 
 ## Classification cache notes
 
 - `app_key = sha256(sorted set of distinct logtype strings, each capped at `MAX_CHARS` characters)` — the fingerprint of the *embedded* vocabulary, since the same limit is applied before embedding; the cache is `cache.sqlite` in `~/.config/yscope-clp-plugin/logtype-cache/` (`$CLP_LOGTYPE_CACHE_DIR` or `--cache-dir` to override). Entries store `schema`, `taxonomy`, `query_plan`, `max_chars`, `classified_at`, `grown_from` lineage, and per template its `hash` (full text), `prefix_hash` (first `MAX_CHARS` characters) and `category` — never the text, which stays in the archive's dictionary dump and which `logtype-insight-extract` joins on the hash.
-- `diff` modes: **UPTODATE** (reuse, no classifying — but verify the cached schema; a template differing from a cached one only past the character limit takes its category through the shared prefix hash), **GROWTH** (classify only the new templates; `merge` unions them into the base entry), **NEW** (classify all). The bootstrap runs `diff` for you and fetches the relevant entries. If `diff` warns that entries are in the old JSON format, tell the user and suggest `logtype-cache repair` (a one-time conversion); do not run it on your own.
+- `diff` modes: **UPTODATE** (reuse, no classifying — but verify the cached schema; a template differing from a cached one only past the character limit takes its category through the shared prefix hash), **GROWTH** (classify only the new templates; `merge` unions them into the base entry), **NEW** (classify all). The bootstrap runs `diff` for you and fetches the relevant entries. An entry stored before classifications were ranked (no `priority`) is never reused: `diff` warns and reports NEW or GROWTH as if it were absent, and `put` replaces it. If `diff` warns that entries are in the old JSON format, tell the user they are ignored and can be deleted.
 - GROWTH matching compares hashes of the full templates; the subset test behind it uses the prefix hashes. Both are exact when you go through `logtype-cluster expand`, which hashes the members straight from the cluster file.
 - Inspect: `logtype-cache list` (shows lineage), `logtype-cache show <APP_KEY>`.

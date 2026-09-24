@@ -15,14 +15,21 @@ Usage:
                                   {"field":"message","contains":"SQL txn"}]}'
         -> severity:"WARNING" AND message:"*SQL txn*"
 
-  kql-build check-plan FILE
+  kql-build check-plan FILE [--categories-from CLASSIFICATION_FILE]
       Validate every query_plan entry in FILE: a classification JSON object
       with a "query_plan" array, a bare JSON array of entries, or NDJSON with
-      one entry per line. Each entry needs a valid "match" filter and a known
-      "method"; a hand-written "kql" string is not accepted. Prints one line
-      per entry, then PLAN_CHECK entries=N ok=K invalid=M:
+      one entry per line. Each entry needs a valid "match" filter, a known
+      "method", and its ranking: a "category", a "priority" (high, medium,
+      low) and a "stage" (core, drill); a hand-written "kql" string is not
+      accepted (lib/classification.py). When FILE is a classification object,
+      its taxonomy is checked too (every category ranked, with a "why"), and
+      each entry's category must be in it. On GROWTH the new classification
+      may use the base's categories: --categories-from adds the taxonomy of
+      that file to the allowed set. Prints one line per entry, then
+      PLAN_CHECK entries=N ok=K invalid=M:
         [i] OK <kql>              valid; <kql> is what the entry runs
         [i] ERROR <label>: <why>  cannot run; <why> says what to fix
+        TAXONOMY ERROR <why>      a taxonomy entry lacks its ranking
 
 Exit codes: 0 every entry OK, 1 any entry ERROR (or an empty plan), 2 usage or
 unreadable input.
@@ -34,6 +41,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 import kql_build  # noqa: E402
+from classification import category_names, check_ranked_entry, taxonomy_errors  # noqa: E402
 
 
 def usage(stream):
@@ -41,20 +49,22 @@ def usage(stream):
 
 
 def load_plan(path):
+    """(plan, taxonomy): taxonomy is None unless FILE is a classification object."""
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
     try:
         obj = json.loads(text)
     except json.JSONDecodeError:
         # Not one JSON document: read it as NDJSON.
-        return [json.loads(line) for line in text.splitlines() if line.strip()]
+        return [json.loads(line) for line in text.splitlines() if line.strip()], None
     if isinstance(obj, dict):
         plan = obj.get("query_plan")
         if not isinstance(plan, list):
             raise ValueError("the JSON object has no 'query_plan' array")
-        return plan
+        taxonomy = obj.get("taxonomy")
+        return plan, taxonomy if isinstance(taxonomy, list) else None
     if isinstance(obj, list):
-        return obj
+        return obj, None
     raise ValueError("expected a JSON object with 'query_plan', a JSON array, or NDJSON")
 
 
@@ -77,25 +87,39 @@ def cmd_render(argv):
 
 
 def cmd_check_plan(argv):
-    if len(argv) != 1:
+    extra = []
+    if len(argv) == 3 and argv[1] == "--categories-from":
+        extra = [argv[2]]
+    elif len(argv) != 1:
         usage(sys.stderr)
         return 2
     try:
-        plan = load_plan(argv[0])
-    except (OSError, ValueError) as exc:
+        plan, taxonomy = load_plan(argv[0])
+        extra_taxonomy = []
+        for path in extra:
+            with open(path, "r", encoding="utf-8") as f:
+                extra_taxonomy += json.load(f).get("taxonomy", [])
+    except (OSError, ValueError, AttributeError) as exc:
         print(f"error: failed to read {argv[0]}: {exc}", file=sys.stderr)
         return 2
 
+    tax_errors = taxonomy_errors(taxonomy) if taxonomy is not None else []
+    for line in tax_errors:
+        print(f"TAXONOMY ERROR {line}")
+    categories = None
+    if taxonomy is not None or extra_taxonomy:
+        categories = category_names((taxonomy or []) + extra_taxonomy)
     invalid = 0
     for i, entry in enumerate(plan, 1):
         label = entry.get("label", "") if isinstance(entry, dict) else ""
         try:
-            print(f"[{i}] OK {kql_build.check_entry(entry)}")
+            print(f"[{i}] OK {check_ranked_entry(entry, categories)}")
         except kql_build.FilterError as exc:
             invalid += 1
             print(f"[{i}] ERROR {label}: {exc}")
-    print(f"PLAN_CHECK entries={len(plan)} ok={len(plan) - invalid} invalid={invalid}")
-    return 0 if plan and not invalid else 1
+    print(f"PLAN_CHECK entries={len(plan)} ok={len(plan) - invalid} invalid={invalid}"
+          + (f" taxonomy_errors={len(tax_errors)}" if tax_errors else ""))
+    return 0 if plan and not invalid and not tax_errors else 1
 
 
 def main(argv):

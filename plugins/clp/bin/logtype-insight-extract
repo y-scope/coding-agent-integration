@@ -45,30 +45,44 @@ Options:
                              OUTPUT only (default: 180)
   --out-templates F         Where to write the templates-by-category text
                              (default: /tmp/logtype-templates-by-category.txt)
-  --out-query-plan F        Where to write one query_plan entry per line as
-                             compact JSON (default: /tmp/logtype-query-plan.txt)
+  --out-query-plan F        Where to write the core plan: the "core" entries,
+                             one per line as compact JSON, high priority first
+                             (default: /tmp/logtype-query-plan.txt)
+  --out-drill-plan F        Where to write the "drill" entries the same way,
+                             grouped by category; they run only when the user
+                             focuses on their category (logtype-focus)
+                             (default: /tmp/logtype-drill-plan.txt)
+  --focus-inbox F           The inbox the plan runner reads focus entries from
+                             (logtype-query-plan-run --inbox); emptied here,
+                             with the previous run's focus file
+                             (--focus-file), so a new analysis starts with no
+                             focus (defaults: /tmp/logtype-focus-inbox.ndjson,
+                             /tmp/logtype-focus.json)
   --out-top-templates F     With frequencies: the most frequent templates
                              overall (--top-templates, default 30) and per
                              category (--top-per-category, default 5), each
                              with its category and exact count (default:
                              /tmp/logtype-top-templates.json)
   --out-category-totals F   With frequencies: where to write {category:
-                             {templates, records}} JSON, records being the
-                             stored per-template counts summed -- an exact
-                             record count per category with no search
+                             {templates, records, priority, why}} JSON,
+                             records being the stored per-template counts
+                             summed -- an exact record count per category
+                             with no search -- and priority and why the
+                             classifier's ranking of the category
                              (default: /tmp/logtype-category-totals.json)
 
 Prints a KEY=VALUE summary to stdout: SCHEMA=, TEMPLATES=, CATEGORIES=,
-QUERY_PLAN=, QUERY_PLAN_INVALID=, UNCLASSIFIED= when any template has no
-category, and one "CATEGORY <name> <count>" line per category, largest first --
-paste TEMPLATES/CATEGORIES counts into the user-facing narration and use the
-file paths for the report writer's prompt.
+QUERY_PLAN= (core entries), DRILL_PLAN= (drill entries), QUERY_PLAN_INVALID=,
+UNCLASSIFIED= when any template has no category, and one line per category,
+largest first:
+  CATEGORY <name> <templates> records=<records> priority=<p> drill=<entries>
+(records= only with frequencies) -- paste the counts into the user-facing
+summary and use the file paths for the report writer's prompt.
 
-QUERY_PLAN_INVALID counts the plan entries without a valid `match` filter
-(see lib/kql_build.py) -- e.g. a plan cached before plans used `match`, whose
-entries carry hand-written `kql` strings. When it is nonzero, the entry
-numbers follow as QUERY_PLAN_INVALID_ENTRIES=, and the skill repairs those
-entries before running the plan.
+QUERY_PLAN_INVALID counts the plan entries without a valid `match` filter or
+ranking (lib/kql_build.py, lib/classification.py); the numbers follow as
+QUERY_PLAN_INVALID_ENTRIES=. `logtype-cache` stores no such entry, so it is 0
+unless the classification file was edited by hand.
 
 Exit codes: 0 ok, 1 input problem.
 """
@@ -80,7 +94,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
-from kql_build import FilterError, check_entry  # noqa: E402
+from classification import category_names, plan_errors, priority_rank  # noqa: E402
 from logtypes import default_max_chars, prefix_hash, template_hash  # noqa: E402
 
 DEFAULT_CLASSIFICATION_FILE = "/tmp/logtype-classification.json"
@@ -90,6 +104,9 @@ DEFAULT_OUT_TEMPLATES = "/tmp/logtype-templates-by-category.txt"
 DEFAULT_OUT_QUERY_PLAN = "/tmp/logtype-query-plan.txt"
 DEFAULT_OUT_CATEGORY_TOTALS = "/tmp/logtype-category-totals.json"
 DEFAULT_OUT_TOP_TEMPLATES = "/tmp/logtype-top-templates.json"
+DEFAULT_OUT_DRILL_PLAN = "/tmp/logtype-drill-plan.txt"
+DEFAULT_FOCUS_INBOX = "/tmp/logtype-focus-inbox.ndjson"
+DEFAULT_FOCUS_FILE = "/tmp/logtype-focus.json"
 UNCLASSIFIED = "unclassified"
 
 
@@ -155,6 +172,9 @@ def main(argv=None) -> int:
     parser.add_argument("--trunc-chars", type=int, default=180)
     parser.add_argument("--out-templates", default=DEFAULT_OUT_TEMPLATES)
     parser.add_argument("--out-query-plan", default=DEFAULT_OUT_QUERY_PLAN)
+    parser.add_argument("--out-drill-plan", default=DEFAULT_OUT_DRILL_PLAN)
+    parser.add_argument("--focus-inbox", default=DEFAULT_FOCUS_INBOX)
+    parser.add_argument("--focus-file", default=DEFAULT_FOCUS_FILE)
     parser.add_argument("--out-category-totals", default=DEFAULT_OUT_CATEGORY_TOTALS)
     parser.add_argument("--out-top-templates", default=DEFAULT_OUT_TOP_TEMPLATES)
     parser.add_argument("--top-templates", type=int, default=30)
@@ -210,10 +230,15 @@ def main(argv=None) -> int:
         print(f"error: no templates in {source}", file=sys.stderr)
         return 1
 
+    taxonomy = {c["category"]: c for c in classification.get("taxonomy", [])
+                if isinstance(c, dict) and isinstance(c.get("category"), str)}
     if ranked:
         # Exact records per category: the stored per-template counts, summed.
         # No search runs, and no keyword filter has to guess at the category.
-        totals = {cat: {"templates": n, "records": r} for cat, (n, r, _) in per_cat.items()}
+        totals = {cat: {"templates": n, "records": r,
+                        "priority": taxonomy.get(cat, {}).get("priority"),
+                        "why": taxonomy.get(cat, {}).get("why")}
+                  for cat, (n, r, _) in per_cat.items()}
         with open(args.out_category_totals, "w", encoding="utf-8") as f:
             json.dump(totals, f, indent=1, sort_keys=True)
 
@@ -240,32 +265,51 @@ def main(argv=None) -> int:
                 f.write(f"- {f'[{cnt}] ' if ranked else ''}{text}\n")
             f.write("\n")
 
-    query_plan = classification.get("query_plan", [])
-    invalid = []
-    with open(args.out_query_plan, "w", encoding="utf-8") as f:
-        for i, q in enumerate(query_plan, 1):
-            f.write(json.dumps(q) + "\n")
-            try:
-                check_entry(q)
-            except FilterError:
-                invalid.append(i)
+    query_plan = [q for q in classification.get("query_plan", []) if isinstance(q, dict)]
+    names = category_names(list(taxonomy.values()))
+    invalid = [i for i, q in enumerate(query_plan, 1) if plan_errors([q], names)]
+    # Core entries run on every analysis, high priority first (sorted() is
+    # stable, so the classifier's order holds within a priority). Drill
+    # entries wait for the user's focus.
+    core = sorted((q for q in query_plan if q.get("stage") != "drill"), key=priority_rank)
+    drill = sorted((q for q in query_plan if q.get("stage") == "drill"),
+                   key=lambda q: (str(q.get("category")), priority_rank(q)))
+    for path, entries in ((args.out_query_plan, core), (args.out_drill_plan, drill)):
+        with open(path, "w", encoding="utf-8") as f:
+            for q in entries:
+                f.write(json.dumps(q, ensure_ascii=False) + "\n")
+    # A new analysis starts with no focus.
+    open(args.focus_inbox, "w").close()
+    try:
+        os.remove(args.focus_file)
+    except FileNotFoundError:
+        pass
+    drill_per_cat = {}
+    for q in drill:
+        drill_per_cat[q.get("category")] = drill_per_cat.get(q.get("category"), 0) + 1
 
     print(f"SCHEMA={json.dumps(classification.get('schema', {}))}")
     print(f"TEMPLATES={seen}")
     print(f"CATEGORIES={len(per_cat)}")
     if UNCLASSIFIED in per_cat:
         print(f"UNCLASSIFIED={per_cat[UNCLASSIFIED][0]}")
-    print(f"QUERY_PLAN={len(query_plan)}")
+    print(f"QUERY_PLAN={len(core)}")
+    print(f"DRILL_PLAN={len(drill)}")
     print(f"QUERY_PLAN_INVALID={len(invalid)}")
     if invalid:
         print(f"QUERY_PLAN_INVALID_ENTRIES={','.join(map(str, invalid))}")
     print(f"OUT_TEMPLATES={args.out_templates}")
     print(f"OUT_QUERY_PLAN={args.out_query_plan}")
+    print(f"OUT_DRILL_PLAN={args.out_drill_plan}")
+    print(f"FOCUS_INBOX={args.focus_inbox}")
     if ranked:
         print(f"OUT_CATEGORY_TOTALS={args.out_category_totals}")
         print(f"OUT_TOP_TEMPLATES={args.out_top_templates}")
-    for cat, (n, _, _) in sorted(per_cat.items(), key=lambda kv: -kv[1][0]):
-        print(f"CATEGORY {cat} {n}")
+    order = (lambda kv: -kv[1][1]) if ranked else (lambda kv: -kv[1][0])
+    for cat, (n, r, _) in sorted(per_cat.items(), key=order):
+        records = f" records={r}" if ranked else ""
+        print(f"CATEGORY {cat} {n}{records} priority={taxonomy.get(cat, {}).get('priority', '-')} "
+              f"drill={drill_per_cat.get(cat, 0)}")
 
     return 0
 
