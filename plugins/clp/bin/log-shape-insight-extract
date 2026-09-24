@@ -7,10 +7,12 @@ The classification (`log-shape-cache get`, `log-shape-cache merge`, or
 `log-shape-cluster expand` output, e.g. /tmp/log-shape-classification.json) names
 each template by hash, not by text (see lib/log_shapes.py): `hash` of the full
 template and `prefix_hash` of its first max_chars characters, with its
-category. The text comes from the archive's own dictionary dump, which this
-tool streams one line at a time -- the bootstrap's frequencies file, or its
-log shapes file when the archive has no stored counts -- hashing each template
-and joining it to its category. A template whose full hash is not in the
+category. The text comes from the bootstrap's frequencies file, read from the
+stored archive (`log-shape-cache freqs --archive-ids`): each line carries the
+template's hash, its full length and its first max_chars characters, so the
+join needs no hashing. When the archive has no stored counts, the text comes
+from the bootstrap's log shapes file instead, and each template is hashed.
+Either file is streamed one line at a time. A template whose full hash is not in the
 classification takes the category of one that shares its prefix hash (it
 differs only past the limit); one with neither is "unclassified".
 
@@ -110,16 +112,20 @@ DEFAULT_FOCUS_FILE = "/tmp/log-shape-focus.json"
 UNCLASSIFIED = "unclassified"
 
 
-def truncate(text: str, limit: int) -> str:
+def truncate(text: str, limit: int, cut: bool = False) -> str:
+    """text for display, at most limit characters; "…" marks a cut, including
+    one made before (cut: text is only the start of the template)."""
     text = text.replace("\n", " <NL> ")
     if len(text) > limit:
         return text[:limit] + "…"
-    return text
+    return text + "…" if cut else text
 
 
 def read_templates(path: str):
-    """(count, text) per template, one NDJSON line at a time. A log shapes file
-    has no counts; they read as 0."""
+    """(count, text, hash, cut) per template, one NDJSON line at a time: hash
+    is the stored full-template hash (None when the line has none), and cut
+    says text is only the template's start. A log shapes file has no counts;
+    they read as 0."""
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -131,7 +137,11 @@ def read_templates(path: str):
                 continue
             if isinstance(rec, dict) and isinstance(rec.get("log_shape"), str):
                 count = rec.get("count", 0)
-                yield (count if isinstance(count, int) else 0), rec["log_shape"]
+                text = rec["log_shape"]
+                h = rec.get("hash") if isinstance(rec.get("hash"), str) else None
+                length = rec.get("length")
+                cut = isinstance(length, int) and length > len(text)
+                yield (count if isinstance(count, int) else 0), text, h, cut
 
 
 class Top:
@@ -142,16 +152,16 @@ class Top:
         self.n, self.trunc_chars, self.ranked = n, trunc_chars, ranked
         self.items, self.seq = [], 0
 
-    def add(self, count, text, category):
+    def add(self, count, text, category, cut=False):
         self.seq += 1
         key = (count, -self.seq)  # ties keep the earlier template
         if not self.ranked:
             if len(self.items) < self.n:
-                self.items.append((*key, truncate(text, self.trunc_chars), category))
+                self.items.append((*key, truncate(text, self.trunc_chars, cut), category))
         elif len(self.items) < self.n:
-            heapq.heappush(self.items, (*key, truncate(text, self.trunc_chars), category))
+            heapq.heappush(self.items, (*key, truncate(text, self.trunc_chars, cut), category))
         elif key > self.items[0][:2]:
-            heapq.heapreplace(self.items, (*key, truncate(text, self.trunc_chars), category))
+            heapq.heapreplace(self.items, (*key, truncate(text, self.trunc_chars, cut), category))
 
     def sorted(self):
         items = sorted(self.items, reverse=True) if self.ranked else self.items
@@ -208,9 +218,11 @@ def main(argv=None) -> int:
     overall = Top(args.top_templates, args.trunc_chars, ranked)
     seen = 0
     try:
-        for count, text in read_templates(source):
+        for count, text, h, cut in read_templates(source):
             seen += 1
-            cat = by_hash.get(template_hash(text))
+            # A stored prefix is at least max_chars long, so its prefix hash is
+            # the template's.
+            cat = by_hash.get(h or template_hash(text))
             if cat is None:
                 cat = by_prefix.get(prefix_hash(text, max_chars), UNCLASSIFIED)
             entry = per_cat.get(cat)
@@ -219,9 +231,9 @@ def main(argv=None) -> int:
                                                   args.trunc_chars, ranked)]
             entry[0] += 1
             entry[1] += count
-            entry[2].add(count, text, cat)
+            entry[2].add(count, text, cat, cut)
             if ranked:
-                overall.add(count, text, cat)
+                overall.add(count, text, cat, cut)
     except OSError as exc:
         hint = " (pass --no-freqs if frequencies are unavailable)" if ranked else ""
         print(f"error: failed to read {source}: {exc}{hint}", file=sys.stderr)

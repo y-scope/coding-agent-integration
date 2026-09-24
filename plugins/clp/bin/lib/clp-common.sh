@@ -232,6 +232,10 @@ directory_file_bytes() {
   printf '%s\n' "$total"
 }
 
+human_bytes() {
+  awk -v b="$1" 'BEGIN { n = split("B KB MB GB TB", u, " "); i = 1; while (b >= 1024 && i < n) { b /= 1024; i++ } if (i == 1) printf "%d %s", b, u[i]; else printf "%.1f %s", b, u[i] }'
+}
+
 file_size_bytes() {
   local path="$1"
   if stat -c %s "$path" >/dev/null 2>&1; then

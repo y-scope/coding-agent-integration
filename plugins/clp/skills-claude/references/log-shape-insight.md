@@ -24,7 +24,7 @@ jq -r '.taxonomy[] | "- \(.category) [\(.priority)]: \(.description) -- \(.why)"
   --freqs-file FREQS_FILE
 ```
 
-(pass `--no-freqs` instead of `--freqs-file` when the bootstrap reported `FREQS=UNAVAILABLE`; it then reads the template texts from `/tmp/log-shapes.ndjson`.) The classification names templates by hash, not by text; the extract streams the archive's own dictionary dump (the frequencies file), hashes each template, and joins it to its category, so it never holds every template at once. It writes:
+(pass `--no-freqs` instead of `--freqs-file` when the bootstrap reported `FREQS=UNAVAILABLE`; it then reads the template texts from `/tmp/log-shapes.ndjson`.) The classification names templates by hash, not by text; the extract streams the frequencies file, whose lines carry each template's hash, and joins it to its category, so it never holds every template at once. It writes:
 
 - `/tmp/log-shape-templates-by-category.txt` (TEMPLATES BY CATEGORY);
 - `/tmp/log-shape-category-totals.json` (with frequencies: exact records per category, the stored per-template counts summed, no search needed, with each category's `priority` and `why`);

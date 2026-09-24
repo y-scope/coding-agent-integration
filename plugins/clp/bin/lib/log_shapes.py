@@ -10,8 +10,11 @@ and the classification files identify each template by two hashes:
                log-shape-cluster embeds and what the cache fingerprint is built
                from; templates that differ only past the limit share it
 
-The full text stays in the archive's own dictionary dump (the bootstrap's
-log shapes and freqs files); whoever needs it joins on `hash`.
+The full text stays in the archive's own dictionary dump (the bootstrap's log
+shapes file); whoever needs it joins on `hash`. The cache database stores, per
+analyzed archive, each template's hash, count, length and first max_chars
+characters (log-shape-cache ingest), which is all the fingerprint and a report
+read.
 
 Stdlib only, like the other log-shape-* helpers.
 """

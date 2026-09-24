@@ -276,7 +276,7 @@ The skill's mechanical preamble is packaged as one command:
 ./plugins/clp/bin/log-shape-insights-bootstrap /tmp/archive
 ```
 
-It samples records for schema discovery, prints per-field value distributions, dumps + normalizes the dictionary, sums the per-template counts that clp-s stored at compression time, probes the classification cache, and prints a grep-able `KEY=VALUE` summary (`LOG_SHAPE_COUNT=`, `FREQS=`, `CACHE_MODE=`, `TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths). `FREQS=UNAVAILABLE` means an archive was compressed before clp-s stored those counts; recompress it to get frequencies.
+It samples records for schema discovery, prints per-field value distributions, dumps + normalizes the dictionary, sums the per-template counts that clp-s stored at compression time, probes the classification cache, and prints a grep-able `KEY=VALUE` summary (`LOG_SHAPE_COUNT=`, `FREQS=`, `CACHE_MODE=`, `TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths). The first time it sees an archive it renders the dictionary once (`log-shape-cache ingest`) and stores each template's hash, count, length and first `MAX_CHARS` characters in the cache database; a later run on the same archive (`SHAPES_SOURCE=stored`) reads them back and skips the dump. It first prints an estimate from the archive's size (`ESTIMATE_SECONDS=`: about 1 minute per 300 MiB of archive on a first run, about the sample's time after), then a `[bootstrap]` line as each of its three stages starts and ends, a heartbeat every 30 s while one runs (`--heartbeat`), and the measured `BOOTSTRAP_TIMINGS` at the end. `FREQS=UNAVAILABLE` means an archive was compressed before clp-s stored those counts; recompress it to get frequencies.
 
 Note that `message:term` is an exact match against the whole field value, same as `field:term` on any field, so it correctly returns 0 unless a message equals exactly `term` — the message field being stored as a CLP-string doesn't change that. Exact match is faster, so prefer it whenever you know a field's full value; **wildcard** only for a substring match — `message:"*term*"` works and returns real hits, and message content almost always needs it, since it's free text. `semantic("…")` also searches the log shapes directly and is a good complement to wildcard search for concept-shaped questions.
 
@@ -285,6 +285,8 @@ Note that `message:term` is an exact match against the whole field value, same a
 Classifying templates into categories and deriving a query plan is the expensive step, and it is a property of the *application*, not the individual capture — the same build emits the same templates every run. `bin/log-shape-cache` persists that classification, keyed by `sha256` of the sorted distinct log shape strings **capped at a character limit** (default 500, `--max-chars` / `$CLP_LOG_SHAPE_MAX_CHARS`) and de-duplicated — the same treatment the templates get before they are embedded, so the key fingerprints the *embedded* vocabulary. The placeholder-rendered form is hashed, so fingerprints are stable across binary generations. (Consequence of the limit: a template whose tail changes beyond it does not change the fingerprint, so it does not register as growth.)
 
 The cache is one SQLite database, `cache.sqlite` in the cache directory. Each entry holds the schema, taxonomy and query plan, and one row per template: its `hash` (sha256 of the full template), its `prefix_hash` (sha256 of the first `--max-chars` characters) and its category. Templates are stored by hash, never by text: some apps log templates of hundreds of KB (CockroachDB's Pebble stats tables average ~184 KB), and an entry that held their text grew to 2.28 GB, which every lookup parsed in full. That entry is 2.2 MB as rows, and looking it up, storing it or merging into it each takes well under a second. The text stays in the archive's own dictionary dump; `log-shape-insight-extract` joins it on the hash. The shared hashing lives in `bin/lib/log_shapes.py`.
+
+The same database stores what each analyzed archive's dictionary holds, in the `archives` and `archive_shapes` tables: per template its hash, its count, its full length and its first `--max-chars` characters, which is all the fingerprint, the prefix hashes and a report's truncated templates read. `ingest` renders a `stats.log_shapes` dump once, in one streaming pass, and stores it; the bootstrap does this the first time it sees an archive. An archive never changes, so a later run on the same archive reads the rows back (`freqs --archive-ids`, `diff --archive-ids`) instead of dumping the dictionary again. On the 357 MiB CockroachDB archive, 11,558 templates totalling 2.4 GB take 14 MB of rows; the first bootstrap takes 63 s and a later one 15 s (the dump and two rendering passes took 190 s before). `diff --archive-ids` answers UPTODATE only: when templates need classifying, their full text is not stored, so it exits 3 and the bootstrap dumps the dictionary. An archive nobody has analyzed for 30 days is dropped on the next `ingest`.
 
 ```bash
 LC=./plugins/clp/bin/log-shape-cache
@@ -295,6 +297,12 @@ LC=./plugins/clp/bin/log-shape-cache
 ./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
   | grep '^{' | "$LC" freqs                         # {"count":N,"log_shape":...}, most frequent first
 "$LC" diff  --log-shapes-file /tmp/log-shapes.ndjson   # UPTODATE | GROWTH | NEW
+# Render a dump once and store its archives; then read them back with no dump:
+./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
+  | grep '^{' | "$LC" ingest --log-shapes-out /tmp/log-shapes.ndjson   # ARCHIVE_IDS=, LOG_SHAPE_COUNT=, COUNTS=
+"$LC" stored --archive-ids <ID>                      # exit 0 when stored with counts
+"$LC" freqs  --archive-ids <ID>                      # {"count","hash","length","log_shape":<prefix>}
+"$LC" diff   --archive-ids <ID>                      # UPTODATE, or exit 3 when the full text is needed
 "$LC" list                                          # cached entries + lineage
 "$LC" show <APP_KEY>
 ```
@@ -317,7 +325,7 @@ Every stored classification is ranked: each taxonomy category carries a `priorit
 
 Files of the old format (one `<APP_KEY>.json` file per entry, with template text) are ignored, and `diff` and `list` say so; they hold no ranking, so delete them.
 
-Cache location: `~/.config/yscope-clp-plugin/log-shape-cache/`, overridable with `$CLP_LOG_SHAPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`diff`, `get`, `merge`, `put`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 500, or `$CLP_LOG_SHAPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint (`key`, `diff`, `put`); it must match the limit given to `log-shape-cluster`, or embedding and cache fingerprints diverge.
+Cache location: `~/.config/yscope-clp-plugin/log-shape-cache/`, overridable with `$CLP_LOG_SHAPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`freqs`, `ingest`, `stored`, `diff`, `get`, `merge`, `put`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 500, or `$CLP_LOG_SHAPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint or cut the stored prefixes (`key`, `ingest`, `stored`, `diff`, `put`); it must match the limit given to `log-shape-cluster`, or embedding and cache fingerprints diverge.
 
 ### Log Shape Cluster
 

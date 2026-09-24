@@ -130,8 +130,11 @@ def read_top_templates(path, n, chars=220):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            text = rec.get("log_shape", "").replace("\n", " <NL> ")
-            out.append((rec.get("count", 0), text[:chars] + ("…" if len(text) > chars else "")))
+            raw = rec.get("log_shape", "")
+            # A stored template's "log_shape" is its prefix; "length" is the whole.
+            cut = isinstance(rec.get("length"), int) and rec["length"] > len(raw)
+            text = raw.replace("\n", " <NL> ")
+            out.append((rec.get("count", 0), text[:chars] + ("…" if cut or len(text) > chars else "")))
     return out
 
 
