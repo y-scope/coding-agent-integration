@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-logtype-insight-extract - build the insight subagent's prompt pieces from a
+logtype-insight-extract - build the report writer's prompt pieces from a
 cached classification (logtype-insights skill, step 7).
 
 The classification file (`logtype-cache get`'s output, e.g.
@@ -51,11 +51,21 @@ Options:
                              (default: /tmp/logtype-templates-by-category.txt)
   --out-query-plan F        Where to write one query_plan entry per line as
                              compact JSON (default: /tmp/logtype-query-plan.txt)
+  --out-top-templates F     With frequencies: the most frequent templates
+                             overall (--top-templates, default 30) and per
+                             category (--top-per-category, default 5), each
+                             with its category and exact count (default:
+                             /tmp/logtype-top-templates.json)
+  --out-category-totals F   With frequencies: where to write {category:
+                             {templates, records}} JSON, records being the
+                             stored per-template counts summed -- an exact
+                             record count per category with no search
+                             (default: /tmp/logtype-category-totals.json)
 
 Prints a KEY=VALUE summary to stdout: SCHEMA=, TEMPLATES=, CATEGORIES=,
 QUERY_PLAN=, QUERY_PLAN_INVALID=, and one "CATEGORY <name> <count>" line per
 category, largest first -- paste TEMPLATES/CATEGORIES counts into the
-user-facing narration and use the file paths for the insight subagent prompt.
+user-facing narration and use the file paths for the report writer's prompt.
 
 QUERY_PLAN_INVALID counts the plan entries without a valid `match` filter
 (see lib/kql_build.py) -- e.g. a plan cached before plans used `match`, whose
@@ -79,6 +89,8 @@ DEFAULT_CLASSIFICATION_FILE = "/tmp/logtype-classification.json"
 DEFAULT_FREQS_FILE = "/tmp/logtype-freqs.ndjson"
 DEFAULT_OUT_TEMPLATES = "/tmp/logtype-templates-by-category.txt"
 DEFAULT_OUT_QUERY_PLAN = "/tmp/logtype-query-plan.txt"
+DEFAULT_OUT_CATEGORY_TOTALS = "/tmp/logtype-category-totals.json"
+DEFAULT_OUT_TOP_TEMPLATES = "/tmp/logtype-top-templates.json"
 
 
 def truncate(text: str, limit: int) -> str:
@@ -116,6 +128,10 @@ def main(argv=None) -> int:
     parser.add_argument("--trunc-chars", type=int, default=180)
     parser.add_argument("--out-templates", default=DEFAULT_OUT_TEMPLATES)
     parser.add_argument("--out-query-plan", default=DEFAULT_OUT_QUERY_PLAN)
+    parser.add_argument("--out-category-totals", default=DEFAULT_OUT_CATEGORY_TOTALS)
+    parser.add_argument("--out-top-templates", default=DEFAULT_OUT_TOP_TEMPLATES)
+    parser.add_argument("--top-templates", type=int, default=30)
+    parser.add_argument("--top-per-category", type=int, default=5)
     args = parser.parse_args(argv)
 
     try:
@@ -142,6 +158,34 @@ def main(argv=None) -> int:
     for t in templates:
         logtype = t["logtype"]
         by_cat[t["category"]].append((freq.get(logtype, 0), logtype))
+
+    if freq:
+        # Exact records per category: the stored per-template counts, summed.
+        # No search runs, and no keyword filter has to guess at the category.
+        totals = {
+            cat: {"templates": len(items), "records": sum(c for c, _ in items)}
+            for cat, items in by_cat.items()
+        }
+        with open(args.out_category_totals, "w", encoding="utf-8") as f:
+            json.dump(totals, f, indent=1, sort_keys=True)
+
+        # The most frequent templates overall and per category, each with its
+        # category and its exact archive-wide count, so a report can name a
+        # template's count and category without anyone re-deriving them.
+        def brief(c, logtype, cat):
+            return {"count": c, "category": cat, "logtype": truncate(logtype, args.trunc_chars)}
+
+        ranked = sorted(((c, lt, cat) for cat, items in by_cat.items() for c, lt in items),
+                        key=lambda x: -x[0])
+        top = {
+            "overall": [brief(*x) for x in ranked[: args.top_templates]],
+            "by_category": {
+                cat: [brief(c, lt, cat) for c, lt in sorted(items, key=lambda x: -x[0])[: args.top_per_category]]
+                for cat, items in by_cat.items()
+            },
+        }
+        with open(args.out_top_templates, "w", encoding="utf-8") as f:
+            json.dump(top, f, indent=1)
 
     with open(args.out_templates, "w", encoding="utf-8") as f:
         for cat, items in by_cat.items():
@@ -179,6 +223,9 @@ def main(argv=None) -> int:
         print(f"QUERY_PLAN_INVALID_ENTRIES={','.join(map(str, invalid))}")
     print(f"OUT_TEMPLATES={args.out_templates}")
     print(f"OUT_QUERY_PLAN={args.out_query_plan}")
+    if freq:
+        print(f"OUT_CATEGORY_TOTALS={args.out_category_totals}")
+        print(f"OUT_TOP_TEMPLATES={args.out_top_templates}")
     for cat, items in sorted(by_cat.items(), key=lambda kv: -len(kv[1])):
         print(f"CATEGORY {cat} {len(items)}")
 

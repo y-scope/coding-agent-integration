@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# clp-compress-status - report the state of a clp-s-compress-folder run.
+#
+# Usage: clp-compress-status ARCHIVES_DIR
+#
+# Reads ARCHIVES_DIR.compress-status.json, which the compress wrapper keeps up
+# to date. A run whose process is gone without a final state is reported as
+# "died", so a crashed compression is never mistaken for a running one (the
+# check is a `kill -0` on the recorded pid, not a `pgrep -f` that could match
+# the checking command itself).
+#
+# Prints KEY=VALUE lines: STATE (running|done|failed|died), ELAPSED_S,
+# INPUT_BYTES, READ_BYTES, PROGRESS_PCT, ARCHIVE_BYTES, and EXIT_CODE when known.
+# Exit codes: 0 done, 3 running, 1 failed or died, 2 usage or no status found.
+
+set -euo pipefail
+
+[[ $# -eq 1 && "$1" != -* ]] || { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+status_file="${1%/}.compress-status.json"
+[[ -f "$status_file" ]] || { echo "error: no status file at $status_file" >&2; exit 2; }
+
+state="$(jq -r .state "$status_file")"
+pid="$(jq -r .pid "$status_file")"
+if [[ "$state" == "running" ]] && ! kill -0 "$pid" 2>/dev/null; then
+  state="died"
+fi
+started="$(jq -r .startedAt "$status_file")"
+updated="$(jq -r .updatedAt "$status_file")"
+if [[ "$state" == "running" ]]; then
+  elapsed=$(( $(date +%s) - started ))
+else
+  elapsed=$(( updated - started ))
+fi
+
+echo "STATE=$state"
+echo "ELAPSED_S=$elapsed"
+jq -r '"INPUT_BYTES=\(.inputBytes)\nREAD_BYTES=\(.readBytes)\nPROGRESS_PCT=\(if .inputBytes > 0 then (.readBytes * 100 / .inputBytes | floor) else 0 end)\nARCHIVE_BYTES=\(.archiveBytes)"' "$status_file"
+exit_code="$(jq -r '.exitCode // empty' "$status_file")"
+[[ -z "$exit_code" ]] || echo "EXIT_CODE=$exit_code"
+
+case "$state" in
+  done) exit 0 ;;
+  running) exit 3 ;;
+  *) exit 1 ;;
+esac

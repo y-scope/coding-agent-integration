@@ -39,6 +39,12 @@ Options:
                              convert unstructured text logs into structured
                              JSONL before compression. Automatically sets
                              --timestamp-key timestamp.
+  --heartbeat SECONDS        While clp-s runs, print a progress line every
+                             SECONDS (default: 30; 0 = none): elapsed time,
+                             input read so far, archive size so far, and an
+                             estimated time left. The same numbers are kept in
+                             <archive dir>.compress-status.json, which
+                             clp-compress-status reads.
   --dry-run                  Print the planned compression operation only.
   -h, --help                 Show this help.
 
@@ -74,6 +80,7 @@ set_archives_root=""
 show_archives_root=0
 print_archive_stats=0
 dry_run=0
+heartbeat=30
 structurize=0
 structurize_tmpdir=""
 jsonl_stage_dir=""
@@ -141,6 +148,11 @@ while [[ $# -gt 0 ]]; do
     --dry-run)
       dry_run=1
       shift
+      ;;
+    --heartbeat)
+      [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || { echo "error: --heartbeat requires a whole number of seconds" >&2; exit 2; }
+      heartbeat="$2"
+      shift 2
       ;;
     --structurize)
       structurize=1
@@ -552,7 +564,76 @@ fi
 # --- Run compression ---
 
 mkdir -p "$output_dir"
-"${cmd[@]}"
+
+# clp-s runs in the background so this script can report progress: a compression
+# of a multi-GB log takes minutes and prints nothing itself. Progress is the
+# bytes the process has read (/proc/PID/io, Linux only) over the input size. The
+# status file sits beside the archive directory, so it never changes the archive
+# size reported below.
+status_file="${output_dir%/}.compress-status.json"
+compress_started="$(date +%s)"
+comp_pid=0
+read_bytes=0
+
+human_bytes() {
+  awk -v b="$1" 'BEGIN { n = split("B KB MB GB TB", u, " "); i = 1; while (b >= 1024 && i < n) { b /= 1024; i++ } if (i == 1) printf "%d %s", b, u[i]; else printf "%.1f %s", b, u[i] }'
+}
+
+write_compress_status() {
+  local state="$1" exit_code="${2:-null}"
+  jq -n \
+    --arg state "$state" \
+    --argjson pid "$comp_pid" \
+    --argjson startedAt "$compress_started" \
+    --argjson updatedAt "$(date +%s)" \
+    --argjson inputBytes "$total_bytes" \
+    --argjson readBytes "$read_bytes" \
+    --argjson archiveBytes "$(directory_file_bytes "$output_dir")" \
+    --argjson exitCode "$exit_code" \
+    '{state: $state, pid: $pid, startedAt: $startedAt, updatedAt: $updatedAt,
+      inputBytes: $inputBytes, readBytes: $readBytes, archiveBytes: $archiveBytes,
+      exitCode: $exitCode}' > "$status_file.tmp" && mv "$status_file.tmp" "$status_file"
+}
+
+"${cmd[@]}" &
+comp_pid=$!
+trap 'kill "$comp_pid" 2>/dev/null || true' INT TERM
+write_compress_status running
+
+if [[ "$heartbeat" -gt 0 ]]; then
+  while kill -0 "$comp_pid" 2>/dev/null; do
+    waited=0
+    while [[ "$waited" -lt "$heartbeat" ]] && kill -0 "$comp_pid" 2>/dev/null; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    kill -0 "$comp_pid" 2>/dev/null || break
+    read_bytes="$(awk '/^rchar:/ { print $2 }' "/proc/$comp_pid/io" 2>/dev/null || true)"
+    read_bytes="${read_bytes:-0}"
+    [[ "$read_bytes" -le "$total_bytes" ]] || read_bytes="$total_bytes"
+    elapsed=$(( $(date +%s) - compress_started ))
+    archive_so_far="$(directory_file_bytes "$output_dir")"
+    line="[compress] ${elapsed}s elapsed"
+    if [[ "$read_bytes" -gt 0 && "$total_bytes" -gt 0 ]]; then
+      line+=", $(human_bytes "$read_bytes") of $(human_bytes "$total_bytes") read ($(( read_bytes * 100 / total_bytes ))%)"
+      line+=", about $(( elapsed * (total_bytes - read_bytes) / read_bytes ))s left"
+    fi
+    line+=", archive $(human_bytes "$archive_so_far") so far"
+    echo "$line"
+    write_compress_status running
+  done
+fi
+
+compress_rc=0
+wait "$comp_pid" || compress_rc=$?
+trap - INT TERM
+if [[ "$compress_rc" -ne 0 ]]; then
+  write_compress_status failed "$compress_rc"
+  echo "error: clp-s exited with status $compress_rc" >&2
+  exit "$compress_rc"
+fi
+read_bytes="$total_bytes"
+write_compress_status done 0
 
 # --- Compute stats and write metadata ---
 

@@ -3,11 +3,11 @@
 logtype-query-plan-run - execute a logtype-insights query plan and report each
 entry's result as it completes (logtype-insights skill, step 7).
 
-The insight subagent used to execute the plan itself, out of sight: the user
+The insight pass used to execute the plan itself, out of sight: the user
 saw a spinner for minutes, and nobody could tell afterwards which KQL had run,
 what it returned, how long it took, or whether it failed. This tool runs each
 entry through clp-s-search-kql, prints one block per entry as soon as it
-finishes, and records every entry in a results file that the insight subagent
+finishes, and records every entry in a results file that the report writer
 reads instead of re-running the plan.
 
 An entry's filter is its structured `match`, rendered to KQL by
@@ -32,6 +32,25 @@ Options:
                         re-run after a fix.
   --timeout SECONDS     Wall-clock limit per query (default: 100). A query
                         that hits it is killed and recorded as "timeout".
+  --jobs N|auto         Searches to run at once. auto (default) sizes it from
+                        memory, see below; N pins it (still capped at the CPU
+                        count).
+  --mem-per-job GIB     Assume this much memory per search and skip the
+                        measurement.
+  --reserve-gib GIB     Memory to leave free for everything else (default: 2).
+  --max-jobs N          Upper bound for auto (default: 8).
+  --retry-failed        Re-run an entry that ended in error or timeout once,
+                        and mark it retried.
+  --max-followups N     Cap on queries added by `then` rules (default: 20).
+
+A plan entry may also carry:
+  samples, sample_chars  Keep more or longer example lines for this entry.
+  origin                 Free text recorded with the result (e.g. baseline).
+  then                   [{"when": {"count_gt": A, "count_lte": B},
+                          "run": <entry>}]: once this entry has a result whose
+                         count is in that range, add the `run` entry to the
+                         pool. Follow-ups get indexes after the plan's last
+                         entry and origin "follow-up of N".
   --samples N           Example output lines kept per projecting entry
                         (default: 3)
   --sample-chars N      Truncate each example to N characters (default: 200)
@@ -58,8 +77,20 @@ exited non-zero; its stderr is kept), or timeout. An entry matching at least
 is too broad to isolate its category, or that category makes up most of the
 log -- worth a look either way.
 
-Stdout: TOTAL_RECORDS=, then one block per entry run, then a PLAN_STATUS
-line (over every recorded entry, not just this batch) and RESULTS_FILE=.
+Concurrency. A search holds its whole segment in memory (about 9 GiB for a
+10 GB log), so memory, not cores, limits how many can run together. The first
+search runs alone -- the total-record probe, or the first entry when the total
+is already recorded -- and the runner measures its real peak resident memory.
+It then starts another search only while free memory (MemAvailable, capped by
+any cgroup limit) minus the room the running searches have yet to grow into,
+minus --reserve-gib, still fits one more at the measured peak plus 15%. Memory
+is sampled twice a second for the whole run. Should free memory drop below
+1 GiB with more than one search running, the newest is stopped and requeued
+(a search preempted twice runs alone). Each result records peak_rss_mb.
+
+Stdout: TOTAL_RECORDS= (with the probe's peak memory), one block per entry as
+it finishes (in completion order), PEAK_CONCURRENCY=, then a PLAN_STATUS line
+(over every recorded entry, not just this run) and RESULTS_FILE=.
 
 Exit codes: 0 the requested entries ran (failed entries are results, not
 tool failures), 1 input problem.
@@ -69,6 +100,7 @@ import argparse
 import datetime
 import json
 import os
+import resource
 import shlex
 import signal
 import subprocess
@@ -76,6 +108,7 @@ import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from kql_build import METHODS, FilterError, entry_kql  # noqa: E402
@@ -100,13 +133,29 @@ def parse_ranges(spec: str, n: int) -> list:
     return sorted(picked)
 
 
+def clip_record(line: str, chars: int) -> str:
+    """Shorten an over-long record by clipping its long string values, so the
+    sample stays valid JSON (cutting the raw line would leave it unparseable)."""
+    if len(line) <= chars:
+        return line
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        return line[:chars]
+    if not isinstance(rec, dict):
+        return line[:chars]
+    clipped = {k: (v[:chars] + "…" if isinstance(v, str) and len(v) > chars else v)
+               for k, v in rec.items()}
+    return json.dumps(clipped, ensure_ascii=False)
+
+
 def first_lines(data: bytes, limit: int = 5) -> str:
     lines = [ln.strip() for ln in data.decode("utf-8", "replace").splitlines() if ln.strip()]
     text = " | ".join(lines[:limit])
     return text[:500]
 
 
-def run_pipeline(stages, timeout, on_line):
+def run_pipeline(stages, timeout, on_line, run=None):
     """Run stages as a pipeline, feed each stdout line of the last stage to
     on_line, and return (exit codes, stderr per stage, timed_out)."""
     procs, errs = [], []
@@ -126,6 +175,9 @@ def run_pipeline(stages, timeout, on_line):
         procs.append(proc)
         errs.append(err)
 
+    if run is not None:
+        run.pgid = procs[0].pid
+
     timed_out = threading.Event()
 
     def kill_all():
@@ -137,6 +189,8 @@ def run_pipeline(stages, timeout, on_line):
         for proc in procs[1:]:
             proc.kill()
 
+    if run is not None:
+        run.kill = kill_all
     timer = threading.Timer(timeout, kill_all)
     timer.start()
     try:
@@ -197,10 +251,10 @@ def plan_kql(entry):
         return None
 
 
-def run_entry(entry, index, n, args, total):
+def run_entry(entry, index, n, args, total, lines, run=None):
     method = entry.get("method", "")
     label = entry.get("label", f"entry {index}")
-    print(f"[{index}/{n}] {label}", flush=True)
+    lines.append(f"[{index}/{n}] {label}")
 
     result = {
         "index": index,
@@ -210,7 +264,7 @@ def run_entry(entry, index, n, args, total):
         "total_records": total,
         "ran_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     }
-    for key in ("match", "project", "grep", "jq"):
+    for key in ("match", "project", "grep", "jq", "origin"):
         if entry.get(key):
             result[key] = entry[key]
 
@@ -219,16 +273,16 @@ def run_entry(entry, index, n, args, total):
     except FilterError as exc:
         result.update(kql="", status="error", count=None, elapsed_s=0.0, command="",
                       error=f"invalid plan entry: {exc}")
-        print(f"       -> ERROR: {result['error']}", flush=True)
+        lines.append(f"       -> ERROR: {result['error']}")
         return result
     result["kql"] = kql
-    print(f"       {method or '?'}  {kql}", flush=True)
+    lines.append(f"       {method or '?'}  {kql}")
 
     if method not in METHODS:
         result.update(status="error", count=None, elapsed_s=0.0,
                       error=f"unknown method {method!r} (expected one of {', '.join(METHODS)})")
         result["command"] = ""
-        print(f"       -> ERROR: {result['error']}", flush=True)
+        lines.append(f"       -> ERROR: {result['error']}")
         return result
 
     stages = build_stages(entry, kql, args.search_wrapper, args.archive)
@@ -236,19 +290,23 @@ def run_entry(entry, index, n, args, total):
 
     acc = {"count": 0}
     samples = []
+    keep = int(entry.get("samples", args.samples))
+    chars = int(entry.get("sample_chars", args.sample_chars))
     if method == "count":
         on_line = count_lines_into(acc)
     else:
         def on_line(line):
             acc["count"] += 1
-            if len(samples) < args.samples:
-                samples.append(line[: args.sample_chars])
+            if len(samples) < keep:
+                samples.append(clip_record(line, chars))
 
     start = time.monotonic()
-    codes, stderr, timed_out = run_pipeline(stages, args.timeout, on_line)
+    codes, stderr, timed_out = run_pipeline(stages, args.timeout, on_line, run)
     elapsed = round(time.monotonic() - start, 1)
     count = acc["count"]
     result.update(count=count, elapsed_s=elapsed)
+    if run is not None and run.peak_kib:
+        result["peak_rss_mb"] = run.peak_kib // 1024
     if samples:
         result["samples"] = samples
 
@@ -256,14 +314,14 @@ def run_entry(entry, index, n, args, total):
               if stage_failed(argv, code)]
     if timed_out:
         result["status"] = "timeout"
-        print(f"       -> TIMEOUT after {args.timeout}s (partial: {count:,} rows)", flush=True)
+        lines.append(f"       -> TIMEOUT after {args.timeout}s (partial: {count:,} rows)")
         return result
     if failed:
         argv, code, err = failed[0]
         stage = "search" if argv is stages[0] else argv[0]
         result["status"] = "error"
         result["error"] = f"{stage} exited {code}: {first_lines(err) or '(no stderr)'}"
-        print(f"       -> ERROR in {elapsed}s: {result['error']}", flush=True)
+        lines.append(f"       -> ERROR in {elapsed}s: {result['error']}")
         return result
 
     unit = "records" if method == "count" else "rows"
@@ -282,10 +340,108 @@ def run_entry(entry, index, n, args, total):
         result["status"] = "ok"
         if result.get("non_selective"):
             line += f"  [NON-SELECTIVE: >= {NON_SELECTIVE_PCT:g}% of records]"
-    print(line, flush=True)
-    for sample in samples:
-        print(f"          e.g. {sample}", flush=True)
+    lines.append(line)
+    for sample in samples[:3]:
+        lines.append(f"          e.g. {sample}")
     return result
+
+
+def mem_available_kib():
+    """Memory a new process can claim: MemAvailable, capped by a cgroup limit
+    (container or systemd slice) when one is set. None when neither is known."""
+    avail = None
+    try:
+        with open("/proc/meminfo", "r", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    avail = int(line.split()[1])
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    for limit_file, usage_file in (
+        ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
+        ("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+    ):
+        try:
+            with open(limit_file, "r", encoding="ascii") as f:
+                limit = f.read().strip()
+            with open(usage_file, "r", encoding="ascii") as f:
+                usage = int(f.read().strip())
+            if limit.isdigit() and int(limit) < (1 << 60):
+                room = (int(limit) - usage) // 1024
+                avail = room if avail is None else min(avail, room)
+            break
+        except (OSError, ValueError):
+            continue
+    return avail
+
+
+PAGE_KIB = os.sysconf("SC_PAGE_SIZE") // 1024
+
+
+def group_rss_kib(pgid):
+    """Resident memory of every process in a process group (the search wrapper
+    and the clp-s it spawns), read from /proc."""
+    total = 0
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", "r", encoding="ascii", errors="replace") as f:
+                fields = f.read().rsplit(")", 1)[1].split()
+            if int(fields[2]) != pgid:
+                continue
+            with open(f"/proc/{name}/statm", "r", encoding="ascii") as f:
+                total += int(f.read().split()[1]) * PAGE_KIB
+        except (OSError, ValueError, IndexError):
+            continue
+    return total
+
+
+class Run:
+    """One search pipeline in flight, as the memory monitor sees it."""
+
+    def __init__(self):
+        self.pgid = None
+        self.kill = None
+        self.rss_kib = 0
+        self.peak_kib = 0
+        self.started = time.monotonic()
+        self.preempted = threading.Event()
+
+    def preempt(self):
+        self.preempted.set()
+        if self.kill:
+            self.kill()
+
+
+class Monitor(threading.Thread):
+    """Samples the resident memory of every registered run twice a second, so
+    the scheduler knows what a search really costs and what running ones have
+    yet to grow into."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.runs = set()
+        self.lock = threading.Lock()
+
+    def add(self, run):
+        with self.lock:
+            self.runs.add(run)
+
+    def remove(self, run):
+        with self.lock:
+            self.runs.discard(run)
+
+    def run(self):
+        while True:
+            time.sleep(0.5)
+            with self.lock:
+                runs = list(self.runs)
+            for r in runs:
+                if r.pgid:
+                    r.rss_kib = group_rss_kib(r.pgid)
+                    r.peak_kib = max(r.peak_kib, r.rss_kib)
 
 
 def load_results(path):
@@ -366,6 +522,12 @@ def main(argv=None) -> int:
     parser.add_argument("--results-file", default=DEFAULT_RESULTS_FILE)
     parser.add_argument("--entries", default="")
     parser.add_argument("--timeout", type=int, default=100)
+    parser.add_argument("--jobs", default="auto")
+    parser.add_argument("--mem-per-job", type=float, default=None, metavar="GIB")
+    parser.add_argument("--reserve-gib", type=float, default=2.0)
+    parser.add_argument("--max-jobs", type=int, default=8)
+    parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument("--max-followups", type=int, default=20)
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--sample-chars", type=int, default=200)
     parser.add_argument(
@@ -405,33 +567,141 @@ def main(argv=None) -> int:
         and r.get("kql") == plan_kql(plan[i - 1]) and r.get("label") == plan[i - 1].get("label")
     }
 
+    monitor = Monitor()
+    monitor.start()
+    lock = threading.Lock()
+    est = {"kib": int(args.mem_per_job * 1024 * 1024) if args.mem_per_job else 0}
+
+    def calibrate(run):
+        """A search that finished cleanly tells us what one costs."""
+        if run.peak_kib > est["kib"] and not args.mem_per_job:
+            est["kib"] = run.peak_kib
+
     total = next((r["total_records"] for r in results.values() if r.get("total_records")), None)
     if total is None:
+        # The record count is a full search, so it doubles as the calibration probe.
         acc = {"count": 0}
+        run = Run()
+        monitor.add(run)
         start = time.monotonic()
         codes, stderr, timed_out = run_pipeline(
-            [[args.search_wrapper, "--count", args.archive, "*"]], args.timeout, count_lines_into(acc)
+            [[args.search_wrapper, "--count", args.archive, "*"]], args.timeout, count_lines_into(acc), run
         )
+        monitor.remove(run)
         elapsed = round(time.monotonic() - start, 1)
         if timed_out or codes[0] != 0:
             reason = "timeout" if timed_out else first_lines(stderr[0]) or f"exit {codes[0]}"
             print(f"TOTAL_RECORDS=unknown ({reason}; percentages omitted)", flush=True)
         else:
             total = acc["count"]
-            print(f"TOTAL_RECORDS={total} ({elapsed}s)", flush=True)
+            calibrate(run)
+            print(f"TOTAL_RECORDS={total} ({elapsed}s, peak {run.peak_kib / 1048576:.1f} GiB)", flush=True)
     else:
         print(f"TOTAL_RECORDS={total} (recorded)", flush=True)
 
-    for index in picked:
-        results[index] = run_entry(plan[index - 1], index, n, args, total)
-        # Rewrite after every entry so an interrupted batch keeps what finished.
-        tmp = args.results_file + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            for i in sorted(results):
-                f.write(json.dumps(results[i], ensure_ascii=False) + "\n")
-        os.replace(tmp, args.results_file)
+    followup_budget = [args.max_followups]
 
-    print(plan_status(results, n))
+    def followups(index, result):
+        """An entry may carry `then` rules -- {"when": {"count_gt": A,
+        "count_lte": B}, "run": <entry>} -- that add a query to the pool once
+        its result is in: inspect a result as it lands and ask the next
+        question while other searches still run. The budget bounds the growth."""
+        count = result.get("count") or 0
+        for rule in plan[index - 1].get("then", []):
+            when = rule.get("when", {})
+            if not (when.get("count_gt", -1) < count <= when.get("count_lte", float("inf"))):
+                continue
+            with lock:
+                if followup_budget[0] <= 0 or not isinstance(rule.get("run"), dict):
+                    continue
+                followup_budget[0] -= 1
+                plan.append(dict(rule["run"], origin=f"follow-up of {index}"))
+                queue.append(len(plan))
+
+    def execute(index, run):
+        """Run one entry. Returns None when the memory guard preempted it."""
+        lines = []
+        try:
+            result = run_entry(plan[index - 1], index, len(plan), args, total, lines, run)
+            if (args.retry_failed and not run.preempted.is_set()
+                    and result.get("status") in ("error", "timeout") and result.get("command")):
+                lines.append(f"       -> {result['status']}; retrying once")
+                run.pgid, run.kill = None, None
+                result = run_entry(plan[index - 1], index, len(plan), args, total, lines, run)
+                result["retried"] = True
+        finally:
+            monitor.remove(run)
+        if run.preempted.is_set():
+            return None
+        if result.get("status") in ("ok", "zero"):
+            calibrate(run)
+            followups(index, result)
+        with lock:
+            results[index] = result
+            print("\n".join(lines), flush=True)
+            # Rewrite after every entry so an interrupted run keeps what finished.
+            tmp = args.results_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                for i in sorted(results):
+                    f.write(json.dumps(results[i], ensure_ascii=False) + "\n")
+            os.replace(tmp, args.results_file)
+        return result
+
+    reserve_kib = int(args.reserve_gib * 1024 * 1024)
+    hard_floor_kib = 1024 * 1024
+    fixed_jobs = None if args.jobs == "auto" else max(1, int(args.jobs))
+    cap = min(fixed_jobs or args.max_jobs, os.cpu_count() or 1)
+
+    def may_start(runs):
+        """Start another search only when memory can take one more. A search
+        holds its segment in memory and grows into it over several seconds, so
+        the room a running search has yet to fill counts as already spoken for."""
+        if not runs:
+            return True
+        if len(runs) >= cap:
+            return False
+        if fixed_jobs:
+            return True
+        if not est["kib"]:
+            return False  # nothing measured yet: stay serial
+        avail = mem_available_kib()
+        if avail is None:
+            return False
+        unfilled = sum(max(0, est["kib"] - r.rss_kib) for r in runs)
+        return avail - unfilled - reserve_kib >= est["kib"] * 1.15
+
+    queue = list(picked)
+    preempts = {}
+    running = {}  # future -> (entry index, Run)
+    peak_jobs = 0
+    with ThreadPoolExecutor(max_workers=cap) as pool:
+        while queue or running:
+            for fut in [f for f in running if f.done()]:
+                index, _ = running.pop(fut)
+                if fut.result() is None:  # preempted by the memory guard
+                    preempts[index] = preempts.get(index, 0) + 1
+                    queue.insert(0, index)
+                    print(f"       [{index}] paused for memory; will retry", flush=True)
+            runs = [r for _, r in running.values()]
+            if queue and may_start(runs) and not (preempts.get(queue[0], 0) >= 2 and runs):
+                index = queue.pop(0)
+                run = Run()
+                monitor.add(run)
+                running[pool.submit(execute, index, run)] = (index, run)
+                peak_jobs = max(peak_jobs, len(running))
+                # Let it start allocating before deciding whether another fits.
+                time.sleep(0.5)
+                continue
+            if len(runs) > 1:
+                avail = mem_available_kib()
+                if avail is not None and avail < hard_floor_kib:
+                    newest = max(runs, key=lambda r: r.started)
+                    if not newest.preempted.is_set():
+                        newest.preempt()
+            time.sleep(0.25)
+    print(f"PEAK_CONCURRENCY={peak_jobs} (about {est['kib'] / 1048576:.1f} GiB per search)", flush=True)
+
+    print(plan_status(results, len(plan)))
     print(f"RESULTS_FILE={args.results_file}")
     return 0
 

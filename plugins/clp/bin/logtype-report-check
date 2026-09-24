@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""
+logtype-report-check - flag figures and KQL fields in a logtype-insights report
+that its own inputs do not support (logtype-insights skill, step 7).
+
+The report writer is told to quote figures from the facts file and to derive
+none. It mostly obeys, but a small model still sometimes adds two counts
+together ("388 records", which was 209 + 179), turns shares into a new
+percentage ("about 61%"), or filters a follow-up query on a field the archive
+does not have (`category:"import-backfill"`). None of that needs judgement to
+catch, so this checks it mechanically.
+
+Two checks:
+  * Every figure in the report -- an integer of two or more digits, a decimal,
+    or a percentage -- must also appear in the facts file or in one of the
+    --also files (the results table). One that does not is reported with its
+    line, and, when it equals the sum of two figures the inputs do contain, with
+    that sum. Numbers that are only list or heading numbering are ignored.
+  * In a query shown as code (a code block or span with AND/OR/NOT, semantic(...),
+    or field:"value" filters), every `field:` must be one of the fields the
+    facts list under "Fields a KQL query may filter on".
+
+Usage:
+  logtype-report-check REPORT [--facts F] [--also F ...]
+
+  --facts F   The facts file (default: /tmp/logtype-insight-facts.md)
+  --also F    Another file whose figures the report may use, e.g. the results
+              table; repeatable.
+
+Exit codes: 0 nothing flagged, 1 something flagged (printed as FLAG lines),
+2 input problem. Only what is checkable is checked: a wrong figure that also
+appears elsewhere in the facts, or a wrong claim in words, is not caught.
+"""
+
+import argparse
+import re
+import sys
+from decimal import Decimal, InvalidOperation
+
+DATETIME = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?")
+NUMBER = re.compile(r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(%?)")
+LIST_PREFIX = re.compile(r"^\s{0,3}(?:#+\s*)?\d+[.)]\s+")
+CODE_BLOCK = re.compile(r"```.*?```", re.S)
+CODE_SPAN = re.compile(r"`([^`\n]+)`")
+FIELD = re.compile(r"(?<![\w.‹<])([A-Za-z_][\w.]*)\s*:\s*(?=[\"*(])")
+FIELDS_LINE = re.compile(r"Fields a KQL query may filter on:(.*?)\. Nothing else", re.S)
+
+
+def norm(token):
+    try:
+        d = Decimal(token.replace(",", ""))
+    except InvalidOperation:
+        return None
+    return format(d.normalize(), "f")
+
+
+def numbers(text, keep_line_numbers=False):
+    """[(normalized value, raw text, is_percent, line number)] for a text."""
+    out = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not keep_line_numbers:
+            line = LIST_PREFIX.sub("", line)
+        line = DATETIME.sub(" ", line)  # timestamps are checked whole, not as loose numbers
+        for m in NUMBER.finditer(line):
+            value = norm(m.group(1))
+            if value is not None:
+                out.append((value, m.group(1) + m.group(2), bool(m.group(2)), lineno))
+    return out
+
+
+STOP = {"with", "from", "that", "this", "each", "other", "across", "than", "into", "over", "under",
+        "about", "their", "which", "count", "counts"}
+
+
+def words(text):
+    """The content words of a line: lower-case words of three or more letters."""
+    return {w for w in re.findall(r"[A-Za-z]{3,}", text.lower()) if w not in STOP}
+
+
+def looks_like_kql(text):
+    return bool(re.search(r"\b(AND|OR|NOT)\b|semantic\(", text) or re.match(r"\s*[\w.]+\s*:\s*[\"*]", text))
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Flag unsupported figures and KQL fields in a report.")
+    ap.add_argument("report")
+    ap.add_argument("--facts", default="/tmp/logtype-insight-facts.md")
+    ap.add_argument("--also", action="append", default=[])
+    args = ap.parse_args(argv)
+
+    try:
+        report = open(args.report, "r", encoding="utf-8").read()
+        facts = open(args.facts, "r", encoding="utf-8").read()
+        extra = [open(p, "r", encoding="utf-8").read() for p in args.also]
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    # Where each figure occurs in the inputs: value -> the input lines carrying it,
+    # kept apart for percentages (a share must be printed as a share).
+    where_plain, where_pct = {}, {}
+    for text in [facts] + extra:
+        lines = text.splitlines()
+        for value, raw, is_pct, lineno in numbers(text, keep_line_numbers=True):
+            (where_pct if is_pct else where_plain).setdefault(value, []).append(lines[lineno - 1])
+    allowed = set(where_plain) | set(where_pct)
+    ints = sorted({int(v) for v in where_plain if re.fullmatch(r"\d+", v)})
+    int_set = set(ints)
+    report_lines = report.splitlines()
+
+    flags = []
+    known_times = {m.group(0) for text in [facts] + extra for m in DATETIME.finditer(text)}
+    for lineno, line in enumerate(report_lines, 1):
+        for m in DATETIME.finditer(line):
+            if m.group(0) not in known_times:
+                flags.append(f"FLAG line {lineno}: timestamp {m.group(0)} is not in the facts or the results")
+    for value, raw, is_pct, lineno in numbers(report):
+        # Single digits are counting words, date parts and the like; the figures
+        # worth checking are two digits or more, decimals and percentages.
+        if re.fullmatch(r"\d", value) and not is_pct:
+            continue
+        if is_pct:
+            if value not in where_pct:
+                flags.append(f"FLAG line {lineno}: share {raw} is not printed as a share in the facts or the results")
+            continue
+        if value not in where_plain:
+            note = ""
+            if re.fullmatch(r"\d+", value):
+                n = int(value)
+                for a in ints:
+                    if a > n // 2:
+                        break
+                    if (n - a) in int_set:
+                        note = f" (= {a:,} + {n - a:,}, both in the inputs)"
+                        break
+            flags.append(f"FLAG line {lineno}: figure {raw} is not in the facts or the results{note}")
+            continue
+        # The figure exists, but it may belong to something else: a count of 100 or
+        # more must sit, in the inputs, on a line that shares a content word with
+        # the line that uses it in the report.
+        if re.fullmatch(r"\d+", value) and int(value) >= 100:
+            mine = words(report_lines[lineno - 1])
+            # A line with no words of its own (a bare table row) cannot be judged.
+            if mine and not any(mine & words(line) for line in where_plain[value]):
+                flags.append(f"FLAG line {lineno}: figure {raw} occurs in the inputs only next to different wording "
+                             f"(e.g. {where_plain[value][0].strip()[:90]!r}); it may belong to something else")
+
+    m = FIELDS_LINE.search(facts)
+    fields = set(re.findall(r"`([^`]+)`", m.group(1))) if m else None
+    if fields is not None:
+        spans = [(s[3:-3], report[: report.find(s)].count("\n") + 1) for s in CODE_BLOCK.findall(report)]
+        stripped = CODE_BLOCK.sub(lambda mm: "\n" * mm.group(0).count("\n"), report)
+        spans += [(s, stripped[: stripped.find("`" + s + "`")].count("\n") + 1) for s in CODE_SPAN.findall(stripped)]
+        for text, lineno in spans:
+            if not looks_like_kql(text):
+                continue
+            unquoted = re.sub(r'"[^"]*"', '""', text)  # a colon inside a value is not a field
+            for field in dict.fromkeys(FIELD.findall(unquoted)):
+                if field not in fields and field != "semantic":
+                    flags.append(f"FLAG line {lineno}: query filters on `{field}`, which is not a field of this archive")
+
+    for f in flags:
+        print(f)
+    print(f"CHECKED figures against {1 + len(extra)} file(s); flagged {len(flags)}")
+    return 1 if flags else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
