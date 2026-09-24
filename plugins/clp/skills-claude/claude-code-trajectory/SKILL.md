@@ -6,6 +6,7 @@ allowed-tools:
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql:*)"
+  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-session-turns:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress:*)"
 ---
 
@@ -75,7 +76,7 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
    - Fields: PLUGIN_BIN/clp-s-schema-tree ARCHIVE lists every field with its type and record count
    - Tool call breakdown: --count per tool with message.content.name:TOOL (Bash, Edit, Read, Write, Agent, ...); --unique returns nothing for a field inside an array
    - Failures: toolUseResult.success:false OR toolUseResult.stderr:* OR level:error
-   - Long turns: subtype:turn_duration AND durationMs >= 30000
+   - Turn time: PLUGIN_BIN/clp-s-session-turns ARCHIVE splits each turn (one human prompt to the next) into human wait, tool, model, idle and other time, and lists the longest tool waits. Do not add up subtype:turn_duration records: they nest inside each other and can be negative.
    - Compaction: subtype:compact_boundary
 
    Return ONLY (no raw JSON, no header lines):
@@ -108,7 +109,8 @@ For broad trajectory debugging, suggest using a subagent and ask it to return on
 | Claude tool results | `message.content.type:tool_result OR toolUseResult:*` |
 | Claude failures | `toolUseResult.success:false OR toolUseResult.stderr:* OR level:error` |
 | Claude API/transport errors | `isApiErrorMessage:true OR subtype:api_error OR cause:"*ECONNRESET*"` |
-| Claude long turns | `subtype:turn_duration AND durationMs >= 30000` |
+| Claude time per turn | `clp-s-session-turns ARCHIVE` (not a KQL query) |
+| Claude turn_duration records | `subtype:turn_duration AND durationMs >= 30000` (these nest inside each other, so use them only to find a moment, not to add up time) |
 | Claude compaction | `subtype:compact_boundary` |
 | Harness runs | `"swebench.harness.run_evaluation" OR "run_evaluation"` |
 | Harness reports | `"report.json" OR "instance_results.jsonl" OR "results.json"` |
