@@ -63,7 +63,7 @@ Each Bash call runs in its own shell, so shell variables do not persist between 
 
 2. **Report compression stats** when you compressed the folder: `Raw input bytes`, `Archive bytes`, `Compression ratio`, `File size reduction`, `Input files`, `Archives dir`, `Archive metadata`.
 
-3. **Bootstrap.** Tell the user you are sampling the schema, dumping the logtype dictionary, and probing the classification cache — then run the one command that does all of it:
+3. **Bootstrap.** Tell the user you are analyzing and classifying the log shape — then run the one command that does all of it:
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/logtype-insights-bootstrap" <archive-dir>
