@@ -32,7 +32,7 @@ B=./plugins/clp/bin      # the plugin's command wrappers
 
 > **Keep one shell open for the whole walkthrough.** Later steps reuse variables defined earlier (`B`, `ARCHIVE`, `LC`, `KEY`, `A2`, `K2`, `CLP_LOG_SHAPE_CACHE_DIR`). If you lose your shell, re-run the Setup block above and the `ARCHIVE=` line in Step 1, then continue where you left off.
 
-One output convention used throughout: the wrappers print human-readable header lines (archive path, metadata, the underlying command) to **stdout** before the JSON results. `grep '^{'` keeps only the JSON records — that is why it appears in every pipeline below. (The `2>/dev/null` merely silences occasional wrapper warnings; it is *not* what removes the headers.)
+One output convention used throughout: the search wrapper prints its human-readable header lines (archive metadata, the underlying command) to **stderr**, so stdout carries only the JSON results and pipes straight into `jq`. The `2>/dev/null` below hides those headers and clp-s's own log lines.
 
 ## Step 1 — Compress the logs into an archive
 
@@ -90,10 +90,10 @@ echo "$ARCHIVE"
 
 ## Step 2 — See what a record looks like
 
-A search with the query `*` returns every record, one JSON object per line (after the `grep '^{'` header filter explained in Setup):
+A search with the query `*` returns every record, one JSON object per line:
 
 ```bash
-"$B/clp-s-search-kql" "$ARCHIVE" '*' 2>/dev/null | grep '^{' | head -2
+"$B/clp-s-search-kql" "$ARCHIVE" '*' 2>/dev/null | head -2
 ```
 
 Expected: two records with exactly these four fields. The first is special — `--structurize` preserves the log's pre-timestamp preamble (here, the `vllm serve` launch command, newlines escaped as `\n`) as a record with `"logger":"preamble"`; the second is a normal parsed line:
@@ -127,7 +127,7 @@ Expected: `35`
 # matching record (like SELECT level FROM ...) — cheaper than full records,
 # and the workhorse of the next step:
 "$B/clp-s-search-kql" --projection level "$ARCHIVE" '*' 2>/dev/null \
-  | grep '^{' | jq -r '.level' | sort | uniq -c
+  | jq -r '.level' | sort | uniq -c
 ```
 
 Expected:
@@ -151,7 +151,7 @@ To search message content, *project* the field and grep it:
 
 ```bash
 "$B/clp-s-search-kql" --projection message "$ARCHIVE" '*' 2>/dev/null \
-  | grep '^{' | jq -r '.message' | grep -c 'Triton'
+  | jq -r '.message' | grep -c 'Triton'
 ```
 
 Expected: `18` — the text was there all along; you just have to reach it this way. Tip: narrow with a searchable field first (`level:WARNING`) and then grep the projected messages — cheaper than scanning everything.
@@ -165,7 +165,7 @@ A *log shape* is a message template with variables replaced by `<*>`. The dictio
 ```bash
 LC="$B/log-shape-cache"
 "$B/clp-s-search-kql" "$ARCHIVE" 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$LC" normalize > release-testing/workdir/log-shapes.ndjson
+  | "$LC" normalize > release-testing/workdir/log-shapes.ndjson
 jq -s 'length' release-testing/workdir/log-shapes.ndjson
 ```
 
@@ -175,7 +175,7 @@ Which templates repeat most? The archive stores a count per template at compress
 
 ```bash
 "$B/clp-s-search-kql" "$ARCHIVE" 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$B/log-shape-cache" freqs | head -3
+  | "$B/log-shape-cache" freqs | head -3
 ```
 
 Expected (top entry):
@@ -247,7 +247,7 @@ cp release-testing/sample-logs/vllm/macos-m1-smoke-failure-2026-06-15.log \
 
 A2="$(ls -dt release-testing/workdir/archives2/folder-* | head -1)"
 "$B/clp-s-search-kql" "$A2" 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$LC" normalize > release-testing/workdir/log-shapes-2.ndjson
+  | "$LC" normalize > release-testing/workdir/log-shapes-2.ndjson
 jq -s 'length' release-testing/workdir/log-shapes-2.ndjson
 ```
 
@@ -298,7 +298,7 @@ Expected: the estimate line says `analyzed before`, `SHAPES_SOURCE=stored`, `CAC
 
 ```bash
 "$B/clp-s-search-kql" "$ARCHIVE" 'semantic("GPU features unavailable")' 2>/dev/null \
-  | grep '^{' | jq -r '.message' | sort -u | grep 'Triton'
+  | jq -r '.message' | sort -u | grep 'Triton'
 ```
 
 Expected:
@@ -366,7 +366,6 @@ rm -f /tmp/log-shape-* /tmp/log-shapes*.ndjson /tmp/lt-diff.out
 | Symptom | Cause / fix |
 | --- | --- |
 | `error: clp-s binary not found` | Install CLP or set `CLP_S_BIN=/path/to/clp-s`. |
-| `jq: parse error: Invalid numeric literal` | You piped wrapper output straight into `jq`. The wrapper prints header lines first — always filter with `grep '^{'`. |
 | `message:<word>` returns 0 | Expected (Step 4). Message content is not KQL-searchable; project + grep instead. |
 | Step 5 prints `error: no log shape entries found in input` and the count is 0 | Your `clp-s` predates the shapes API (e.g. clp-core 0.12.x) — the underlying error (`--experimental flag set but archive was not created with --experimental`) is hidden by the `2>/dev/null` in the pipeline. Your archive is fine and Steps 1–4/7–8 remain valid; only the binary is too old. Point `CLP_S_BIN` at a 0.13+ build and re-run Step 5 — no recompression needed. |
 | `log-shape-insights-bootstrap` exits 1 with `error: stats.log_shapes emitted no log shapes` | Same 0.12.x cause as above. Point `CLP_S_BIN` at a 0.13+ build and re-run. |

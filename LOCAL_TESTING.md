@@ -149,14 +149,13 @@ ARCHIVE="$(ls -dt "$FOLDER_DIR"/folder-* | head -1)"
 
 # One full record reveals the field names (structurize yields
 # timestamp/logger/level/message):
-./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" '*' 2>/dev/null | grep '^{' | head -1
+./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" '*' 2>/dev/null | head -1
 
-# The wrapper prints metadata header lines to stdout, so filter with grep '^{'.
 # stats.log_shapes emits raw shape lines (placeholder bytes, not <*>);
 # log-shape-cache normalize renders them to canonical {"log_shape":...} NDJSON.
 # The wrapper adds the required --experimental flag automatically.
 ./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | ./plugins/clp/bin/log-shape-cache normalize > /tmp/smoke-log-shapes.ndjson
+  | ./plugins/clp/bin/log-shape-cache normalize > /tmp/smoke-log-shapes.ndjson
 jq -s 'length' /tmp/smoke-log-shapes.ndjson
 ```
 
@@ -251,7 +250,7 @@ Note that the message field is a CLP-string: `message:term` returns 0 by design.
 ```bash
 ./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" 'level:WARNING' 2>/dev/null | grep -c '^{'
 ./plugins/clp/bin/clp-s-search-kql --projection message "$ARCHIVE" '*' 2>/dev/null \
-  | grep '^{' | jq -r '.message' | grep -c 'SomeStaticText'
+  | jq -r '.message' | grep -c 'SomeStaticText'
 ```
 
 ### Cleanup

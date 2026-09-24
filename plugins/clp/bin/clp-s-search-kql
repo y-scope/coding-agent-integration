@@ -275,7 +275,7 @@ case "$trimmed_query" in
   stats.logtypes)
     echo "error: stats.logtypes was renamed to stats.log_shapes (clp-core >= 0.13 shapes API)." >&2
     echo "  Dump the dictionary with:  clp-s-search-kql ARCHIVE 'stats.log_shapes'" >&2
-    echo "  then render placeholders:  ... | grep '^{' | log-shape-cache normalize" >&2
+    echo "  then render placeholders:  ... | log-shape-cache normalize" >&2
     exit 2
     ;;
 esac
@@ -301,7 +301,8 @@ if [[ ! -e "$archives_dir" ]]; then
   echo "error: archives path does not exist: $archives_dir" >&2
   exit 1
 fi
-print_archive_metadata_summary "$archives_dir"
+# Header lines go to stderr so stdout carries only clp-s JSON results.
+print_archive_metadata_summary "$archives_dir" >&2
 input_archives_dir="$archives_dir"
 # Both stable and --experimental (clpp) paths pass the inner clp-s archive directory
 # to clp-s. clpp archives require --experimental to open, and the binary recognizes a
@@ -314,7 +315,7 @@ archives_dir="$(resolve_clp_s_archive_dir "$archives_dir")" || {
   exit 1
 }
 if [[ "$archives_dir" != "$input_archives_dir" ]]; then
-  echo "Resolved clp-s archive dir: $archives_dir"
+  echo "Resolved clp-s archive dir: $archives_dir" >&2
 fi
 
 if [[ "$semantic_active" -eq 1 ]]; then
@@ -369,9 +370,11 @@ if [[ ${#projections[@]} -gt 0 ]]; then
   cmd+=(--projection "${projections[@]}")
 fi
 
-printf 'Command:'
-printf ' %q' "${cmd[@]}"
-echo
+{
+  printf 'Command:'
+  printf ' %q' "${cmd[@]}"
+  echo
+} >&2
 if [[ "$semantic_active" -eq 1 ]]; then
   export CLP_SEMANTIC_ENDPOINT="$semantic_endpoint"
   if [[ -z "${CLP_SEMANTIC_BATCH_SIZE:-}" ]]; then

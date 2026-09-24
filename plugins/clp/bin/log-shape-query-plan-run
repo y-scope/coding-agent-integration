@@ -74,12 +74,12 @@ Methods, as defined by the classification contract (KQL is the rendered
 `match`):
   count          wrapper --count ARCHIVES_DIR KQL; the per-archive counts are
                  summed.
-  project+grep   wrapper --projection P ARCHIVES_DIR KQL | grep '^{'
-                 [| grep -Ei GREP]; matching lines are counted.
-  project+jq     wrapper --projection P ARCHIVES_DIR KQL | grep '^{'
-                 | jq -c JQ; output lines are counted.
-  semantic       wrapper --projection P ARCHIVES_DIR KQL | grep '^{'; the
-                 match carries the semantic node itself.
+  project+grep   wrapper --projection P ARCHIVES_DIR KQL [| grep -Ei GREP];
+                 matching lines are counted.
+  project+jq     wrapper --projection P ARCHIVES_DIR KQL | jq -c JQ; output
+                 lines are counted.
+  semantic       wrapper --projection P ARCHIVES_DIR KQL; the match carries
+                 the semantic node itself.
 
 Each entry gets a status: ok, zero (ran and matched nothing -- suspicious,
 since every entry is derived from a template that exists), error (a stage
@@ -239,7 +239,7 @@ def build_stages(entry, kql, wrapper, archive):
     if entry.get("project"):
         search += ["--projection", entry["project"]]
     search += [archive, kql]
-    stages = [search, ["grep", "^{"]]
+    stages = [search]
     if method == "project+grep" and entry.get("grep"):
         stages.append(["grep", "-Ei", entry["grep"]])
     elif method == "project+jq":

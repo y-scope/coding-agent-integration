@@ -5,14 +5,14 @@ Read this only when needed: the bootstrap misbehaves (empty dump, missing freque
 ## stats.log_shapes details
 
 - `stats.log_shapes` dumps the log shape dictionary: one raw JSON object per line, `{"archive_id":"...","count":N,"id":N,"shape":"..."}`. `count` is how many values in that archive carried the template, stored by clp-s at compression time; it is `null` only for archives compressed before clp-s stored these counts. `id` numbers the templates within one archive, so aggregate across archives by template, never by `id`. Shapes mark variables as `%int%`/`%str%`/`%float%` on regular archives and `%rule.name%` on clpp/`--experimental` archives (older clp-s builds emitted raw placeholder bytes instead). `log-shape-cache normalize` detects the encoding per line and renders all of them to the canonical `{"log_shape":"...<*>..."}` NDJSON used by this skill and the cache, and `log-shape-cache freqs` sums the counts per template. Works on structurized text archives and native-JSON archives alike (log shapes come from the message field).
-- The search wrapper adds the required `--experimental` flag automatically and rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently return nothing for it). It also prints archive-metadata header lines to stdout — always filter with `grep '^{'` before jq (the repo-wide idiom).
+- The search wrapper adds the required `--experimental` flag automatically and rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently return nothing for it).
 - You **cannot** filter a stats query by substring (`stats.log_shapes:foo` is not valid); it always dumps the whole dictionary. Filter downstream:
   ```bash
   jq -r 'select(.log_shape|test("failed";"i")) | .log_shape' /tmp/log-shape-freqs.ndjson
   ```
 - Per-template frequencies come from those stored counts, with no scan of the records. The bootstrap writes them to `/tmp/log-shape-freqs.ndjson` (`{"count":N,"hash":"...","length":N,"log_shape":"..."}`, most frequent first). Its `log_shape` is the template's first `MAX_CHARS` characters, all of it when `length` is no longer: the bootstrap stores that much per template in the cache database, so a later analysis of the same archive reads the counts back instead of dumping the dictionary. The full text is in `/tmp/log-shapes.ndjson` when the bootstrap dumped the dictionary (`SHAPES_SOURCE=dump`; `--dump` forces it). By hand, from a dump:
   ```bash
-  clp-s-search-kql ARCHIVE 'stats.log_shapes' | grep '^{' | log-shape-cache freqs
+  clp-s-search-kql ARCHIVE 'stats.log_shapes' | log-shape-cache freqs
   ```
   `freqs` exits 1 when any archive has `null` counts. Report frequencies as unavailable for such an archive and suggest recompressing it; do not approximate them by projecting and counting messages.
 - An empty `stats.log_shapes` dump means the clp-s binary predates the shapes API. The bootstrap then exits 1; reinstalling the plugin fixes it.
@@ -50,7 +50,7 @@ Fall back to project + grep/jq only when the distinctive text needs real regex f
 
 ```bash
 "$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '*' \
-  | grep '^{' | jq -rc --arg f "$MSG" 'select(.[$f]|test("DistinctiveStaticText";"i"))'
+  | jq -rc --arg f "$MSG" 'select(.[$f]|test("DistinctiveStaticText";"i"))'
 ```
 
 Narrow with a working scalar field first when you can — `<severity>:` and `<logger>:` are also searchable, and combine with the message wildcard in one compound query:

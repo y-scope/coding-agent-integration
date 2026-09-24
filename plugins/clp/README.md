@@ -258,11 +258,9 @@ Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T`
 # %rule.name% TextShape placeholders on clpp archives) — `log-shape-cache
 # normalize` detects the encoding per line and renders both to the canonical
 # {"log_shape":"...<*>..."} NDJSON.
-# The wrapper prints archive-metadata header lines to stdout, so filter to
-# JSON records with grep '^{' first. The legacy `stats.logtypes` spelling is
-# rejected: shapes-API binaries silently return nothing for it.
+# The legacy `stats.logtypes` spelling is rejected: shapes-API binaries silently return nothing for it.
 ./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | ./plugins/clp/bin/log-shape-cache normalize > /tmp/log-shapes.ndjson
+  | ./plugins/clp/bin/log-shape-cache normalize > /tmp/log-shapes.ndjson
 jq -s 'length' /tmp/log-shapes.ndjson
 ```
 
@@ -292,14 +290,14 @@ The same database stores what each analyzed archive's dictionary holds, in the `
 LC=./plugins/clp/bin/log-shape-cache
 # Dump the dictionary and render it to canonical log shape NDJSON in one pipe:
 ./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$LC" normalize > /tmp/log-shapes.ndjson
+  | "$LC" normalize > /tmp/log-shapes.ndjson
 "$LC" count --log-shapes-file /tmp/log-shapes.ndjson   # distinct templates
 ./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$LC" freqs                         # {"count":N,"log_shape":...}, most frequent first
+  | "$LC" freqs                         # {"count":N,"log_shape":...}, most frequent first
 "$LC" diff  --log-shapes-file /tmp/log-shapes.ndjson   # UPTODATE | GROWTH | NEW
 # Render a dump once and store its archives; then read them back with no dump:
 ./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$LC" ingest --log-shapes-out /tmp/log-shapes.ndjson   # ARCHIVE_IDS=, LOG_SHAPE_COUNT=, COUNTS=
+  | "$LC" ingest --log-shapes-out /tmp/log-shapes.ndjson   # ARCHIVE_IDS=, LOG_SHAPE_COUNT=, COUNTS=
 "$LC" stored --archive-ids <ID>                      # exit 0 when stored with counts
 "$LC" freqs  --archive-ids <ID>                      # {"count","hash","length","log_shape":<prefix>}
 "$LC" diff   --archive-ids <ID>                      # UPTODATE, or exit 3 when the full text is needed
