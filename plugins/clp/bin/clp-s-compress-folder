@@ -776,18 +776,9 @@ if [[ "$print_archive_stats" -eq 1 ]]; then
   cat "$stats_out"
 fi
 
-# clp-s prints one stats line per archive (several when --target-encoded-size
-# splits it), not in time order. An archive where no record has the timestamp
-# key reports 0 for both ends, so it is left out.
 time_range_json=null
 if [[ -n "$timestamp_key" ]]; then
-  if ! time_range_json="$(jq -s -c '
-      [.[] | select(.begin_timestamp != 0 or .end_timestamp != 0)]
-      | if length == 0 then null else
-          {beginMs: (map(.begin_timestamp) | min), endMs: (map(.end_timestamp) | max)}
-          | .begin = (.beginMs / 1000 | floor | todate)
-          | .end = (.endMs / 1000 | floor | todate)
-        end' "$stats_out")"; then
+  if ! time_range_json="$(archive_time_range_json "$stats_out")"; then
     echo "warning: could not read the clp-s archive stats; the time range is not recorded" >&2
     time_range_json=null
   fi
@@ -876,7 +867,7 @@ echo "Compression ratio: $compression_ratio"
 echo "File size reduction: $reduction_bytes bytes ($reduction_percent)"
 echo "Input files: $file_count"
 if [[ -n "$timestamp_key" ]]; then
-  echo "Time range: $(jq -r --arg key "$timestamp_key" 'if . == null then "none (no record has the timestamp key \($key))" else "\(.begin) to \(.end)" end' <<<"$time_range_json")"
+  print_time_range "$timestamp_key" "$time_range_json"
 fi
 if [[ "$structurize" -eq 1 ]]; then
   echo "Structurize: yes (converted to structured JSONL)"

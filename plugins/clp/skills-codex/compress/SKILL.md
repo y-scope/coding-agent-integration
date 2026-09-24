@@ -50,6 +50,7 @@ Use `--agent claude` or `--agent codex` if the user asks for one agent.
    - `Archive bytes`
    - `Compression ratio`
    - `File size reduction`
+   - `Time range` (the earliest and latest timestamp across every record, also stored as `timeRange` in the metadata)
    - `Archives dir`
    - `Selected session`
    - `Archive metadata`

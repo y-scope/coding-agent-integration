@@ -275,7 +275,7 @@ case "$trimmed_query" in
   stats.logtypes)
     echo "error: stats.logtypes was renamed to stats.log_shapes (clp-core >= 0.13 shapes API)." >&2
     echo "  Dump the dictionary with:  clp-s-search-kql ARCHIVE 'stats.log_shapes'" >&2
-    echo "  then render placeholders:  ... | grep '^{' | log-shape-cache normalize" >&2
+    echo "  then render placeholders:  ... | log-shape-cache normalize" >&2
     exit 2
     ;;
 esac
@@ -301,7 +301,8 @@ if [[ ! -e "$archives_dir" ]]; then
   echo "error: archives path does not exist: $archives_dir" >&2
   exit 1
 fi
-print_archive_metadata_summary "$archives_dir"
+# Header lines go to stderr so stdout carries only clp-s JSON results.
+print_archive_metadata_summary "$archives_dir" >&2
 input_archives_dir="$archives_dir"
 # Both stable and --experimental (clpp) paths pass the inner clp-s archive directory
 # to clp-s. clpp archives require --experimental to open, and the binary recognizes a
@@ -314,7 +315,7 @@ archives_dir="$(resolve_clp_s_archive_dir "$archives_dir")" || {
   exit 1
 }
 if [[ "$archives_dir" != "$input_archives_dir" ]]; then
-  echo "Resolved clp-s archive dir: $archives_dir"
+  echo "Resolved clp-s archive dir: $archives_dir" >&2
 fi
 
 if [[ "$semantic_active" -eq 1 ]]; then
@@ -363,15 +364,31 @@ if [[ -n "$embedding_batch_size" ]]; then
   search_options+=(--embedding-batch-size "$embedding_batch_size")
 fi
 
+# clp-s projects leaf columns only: a column inside an array, or an object,
+# projects nothing although a filter on it matches. Rewrite such columns from
+# the archive's schema tree, which clp-s reads from the archive's metadata in
+# milliseconds even on a large archive (lib/projection.py). Without a schema
+# tree the columns stay as given.
+if [[ ${#projections[@]} -gt 0 ]]; then
+  if schema_tree="$("$clp_s_bin" s --experimental "$archives_dir" stats.schema_tree 2>/dev/null)" \
+      && resolved_projections="$(python3 "${CLP_PLUGIN_BIN_DIR}/lib/projection.py" "${projections[@]}" \
+           <<<"$schema_tree")" \
+      && [[ -n "$resolved_projections" ]]; then
+    mapfile -t projections <<<"$resolved_projections"
+  fi
+fi
+
 cmd=("$clp_s_bin" s ${search_options[@]+"${search_options[@]}"} "$archives_dir" "$kql_query")
 
 if [[ ${#projections[@]} -gt 0 ]]; then
   cmd+=(--projection "${projections[@]}")
 fi
 
-printf 'Command:'
-printf ' %q' "${cmd[@]}"
-echo
+{
+  printf 'Command:'
+  printf ' %q' "${cmd[@]}"
+  echo
+} >&2
 if [[ "$semantic_active" -eq 1 ]]; then
   export CLP_SEMANTIC_ENDPOINT="$semantic_endpoint"
   if [[ -z "${CLP_SEMANTIC_BATCH_SIZE:-}" ]]; then

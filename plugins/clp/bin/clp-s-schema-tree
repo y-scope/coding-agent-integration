@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""
+clp-s-schema-tree - list every field of a clp-s archive from its merged schema
+tree: the KQL path, the type, and how many records carry it.
+
+Usage:
+  clp-s-schema-tree [options] ARCHIVES_DIR
+
+Options:
+  --log-shapes-file F   A raw stats.log_shapes dump of the same archive. When its
+                        lines carry node_counts (clp-s builds that store
+                        per-field log shape counts), each text field also gets
+                        how many values were templated in it and how many
+                        distinct templates they use.
+  --max-children N      Collapse an object with more than N children (data used
+                        as keys, such as one key per file path) into one `*`
+                        row. Default: 50.
+  --tree-file F         Read the stats.schema_tree output from F instead of
+                        running the query.
+  --top N               Print only the N fields with the most records (the
+                        JSON output and TEXT_FIELDS keep them all).
+  --json-out F          Also write the rows as JSON to F.
+  --search-wrapper P    Search wrapper (default: clp-s-search-kql next to this
+                        script).
+
+Output, one line each:
+  TREE_ARCHIVES=N
+  TREE_FIELDS=N          rows after collapsing
+  FIELD path=P type=T records=N [values=V templates=K] [collapsed_keys=C] [shown=D]
+                         one per field, most records first. P is the KQL path;
+                         D, printed when it differs, marks array elements with
+                         [] (message.content[].name is queried as
+                         message.content.name). Containers
+                         (Object, StructuredArray) are left out except for a
+                         collapsed row
+  TEXT_FIELDS=P1,P2,...  the ClpString fields (the ones templated into log
+                         shapes), most values first when node counts are known,
+                         else most records first
+
+Why: the log-insights bootstrap used to guess the schema from the top-level
+keys of a sample's first record. The tree is exact and whole-archive: every
+path, including the fields inside structured arrays that a session record
+keeps its text in.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+
+from schema_tree import (  # noqa: E402
+    CONTAINER_TYPES,
+    DEFAULT_MAX_CHILDREN,
+    load_trees,
+    node_fields,
+    summarize,
+)
+
+
+def read_trees(wrapper, archives_dir):
+    proc = subprocess.run(
+        [wrapper, archives_dir, "stats.schema_tree"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    trees = load_trees(proc.stdout.splitlines())
+    if not trees:
+        sys.stderr.write(proc.stderr)
+        print(f"error: stats.schema_tree returned no tree for {archives_dir}", file=sys.stderr)
+        sys.exit(1)
+    return trees
+
+
+def field_value_counts(log_shapes_file, trees, max_children):
+    """{display_path: [values, templates]} from the dump's node_counts, or None
+    when no line carries them."""
+    fields_by_archive = {
+        t.get("archive_id"): node_fields(t, max_children) for t in trees
+    }
+    counts = {}
+    seen = False
+    with open(log_shapes_file, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            node_counts = obj.get("node_counts")
+            if not isinstance(node_counts, dict):
+                continue
+            seen = True
+            fields = fields_by_archive.get(obj.get("archive_id"), {})
+            for node_id, n in node_counts.items():
+                field = fields.get(int(node_id))
+                if field is None:
+                    continue
+                entry = counts.setdefault(field[1], [0, 0])
+                entry[0] += n
+                entry[1] += 1
+    return counts if seen else None
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("archives_dir")
+    parser.add_argument("--log-shapes-file")
+    parser.add_argument("--max-children", type=int, default=DEFAULT_MAX_CHILDREN)
+    parser.add_argument("--tree-file")
+    parser.add_argument("--top", type=int, default=0)
+    parser.add_argument("--json-out")
+    parser.add_argument(
+        "--search-wrapper",
+        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"),
+    )
+    args = parser.parse_args()
+
+    if args.tree_file:
+        with open(args.tree_file, "r", encoding="utf-8") as f:
+            trees = load_trees(f)
+        if not trees:
+            print(f"error: no schema tree in {args.tree_file}", file=sys.stderr)
+            return 1
+    else:
+        trees = read_trees(args.search_wrapper, args.archives_dir)
+    rows = summarize(trees, args.max_children)
+    counts = None
+    if args.log_shapes_file:
+        counts = field_value_counts(args.log_shapes_file, trees, args.max_children)
+
+    out = []
+    for row in rows.values():
+        if row["type"] in CONTAINER_TYPES and not row["collapsed_keys"]:
+            continue
+        item = {
+            "path": row["path"], "display": row["display"], "type": row["type"],
+            "records": row["records"],
+        }
+        if counts is not None and row["type"] == "ClpString":
+            values, templates = counts.get(row["display"], [0, 0])
+            item["values"] = values
+            item["templates"] = templates
+        if row["collapsed_keys"]:
+            item["collapsed_keys"] = len(row["collapsed_keys"])
+        out.append(item)
+    out.sort(key=lambda r: (-r["records"], r["display"]))
+
+    print(f"TREE_ARCHIVES={len(trees)}")
+    print(f"TREE_FIELDS={len(out)}")
+    for item in out[:args.top] if args.top > 0 else out:
+        extra = ""
+        if "values" in item:
+            extra += f" values={item['values']} templates={item['templates']}"
+        if "collapsed_keys" in item:
+            extra += f" collapsed_keys={item['collapsed_keys']}"
+        if item["display"] != item["path"]:
+            extra += f" shown={item['display']}"
+        print(f"FIELD path={item['path']} type={item['type']} records={item['records']}{extra}")
+    text = [r for r in out if r["type"] == "ClpString"]
+    text.sort(key=lambda r: (-r.get("values", r["records"]), r["display"]))
+    print("TEXT_FIELDS=" + ",".join(dict.fromkeys(r["path"] for r in text)))
+
+    if args.json_out:
+        with open(args.json_out, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=1)
+            f.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

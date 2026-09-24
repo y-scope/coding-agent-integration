@@ -121,10 +121,11 @@ Every number of the report is computed in code, because a small model asked to a
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-insight-facts" --schema-json '<the SCHEMA= line from the extract>' \
   --archive-dir <archive-dir> \
+  --schema-tree-file /tmp/log-shape-schema-tree.json \
   --freqs-file <FREQS_FILE>   # --freqs-file none and --category-totals none when frequencies were unavailable
 ```
 
-It reads both results files (`--baseline-results-file`, `--results-file`; the defaults are the paths above) and `log-shape-focus`'s `/tmp/log-shape-focus.json`, and writes `/tmp/log-shape-insight-facts.md` in well under a second: first the user's focus — its categories with their records and the classifier's `why`, the user's question and context verbatim, and the focus queries' results with samples — then total records and templates; the severity and logger breakdowns, each with a check line showing whether it sums to the total; the category table with its sum and the records no template accounts for; the top templates overall (each with its category) and within each category, from `/tmp/log-shape-top-templates.json`, which the extract writes; the fetched records grouped by message shape with counts and first/last timestamps; the semantic entries; and the flagged queries. The archive's time span comes from `timeRange` in its `.yscope-clp-archive.json`: the earliest and latest timestamp across every record, which `clp-s-compress-folder` records when it compresses with `--timestamp-key`. Without one the span is given as unavailable, with the reason. The report writer may quote these figures and no others.
+It reads both results files (`--baseline-results-file`, `--results-file`; the defaults are the paths above) and `log-shape-focus`'s `/tmp/log-shape-focus.json`, and writes `/tmp/log-shape-insight-facts.md` in well under a second: first the user's focus — its categories with their records and the classifier's `why`, the user's question and context verbatim, and the focus queries' results with samples — then total records and templates; the severity and logger breakdowns, each with a check line showing whether it sums to the total; the category table with its sum and the records no template accounts for; the top templates overall (each with its category) and within each category, from `/tmp/log-shape-top-templates.json`, which the extract writes; the fetched records grouped by message shape with counts and first/last timestamps; the semantic entries; and the flagged queries. The archive's time span comes from `timeRange` in its `.yscope-clp-archive.json`: the earliest and latest timestamp across every record, which `clp-s-compress-folder` and `clp-s-compress-session` record when they compress with a timestamp key. Without one the span is given as unavailable, with the reason. A sample or example shows what its record says: the strings at the schema's message field, stepping through arrays (a list of content blocks), else at the nearest ancestor of that field the record has, preferring text over ids and enum values; a record with no message (a duration or status record) is shown by its other fields as `key=value`. The report writer may quote these figures and no others.
 
 Then post the **early numbers**: 3 to 5 lines quoted from the facts file, the focus first — the focus queries' counts, what their samples show, then the one or two figures that matter most elsewhere. The writer takes about two minutes; this way the user has the headline while it works. Quote figures as the facts file gives them, and draw no conclusions the writer has not been asked to check.
 
@@ -164,7 +165,8 @@ When the user picks only "claude.ai page", the location answer is not used. When
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-report-check" /tmp/log-shape-insight-report.md \
-     --also /tmp/log-shape-baseline-table.md --also /tmp/log-shape-plan-table.md > /tmp/log-shape-report-flags.txt
+     --also /tmp/log-shape-baseline-table.md --also /tmp/log-shape-plan-table.md \
+     --schema-tree-file /tmp/log-shape-schema-tree.json > /tmp/log-shape-report-flags.txt
    ```
 
    It flags a figure that is in neither the facts nor the results table (with the two listed figures it sums to, if it does), a percentage the inputs never print as a percentage, a count whose only occurrences in the inputs sit next to different wording, a timestamp the inputs do not contain, and a KQL filter on a field the archive does not have. Exit 0 means nothing flagged; exit 1 means `FLAG` lines.

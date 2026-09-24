@@ -44,10 +44,11 @@ expect_endpoint_value=0
 end_of_flags=0
 
 case "${1:-}" in
-  # `expand` only propagates categories to cluster members — stdlib-only and
-  # fully offline. Help and the bare usage path must stay offline and instant,
-  # so never health-check the network just to print text.
-  expand|-h|--help|"") needs_endpoint=0 ;;
+  # `expand` only propagates categories to cluster members and `fields` only
+  # summarizes files — both stdlib-only and fully offline. Help and the bare
+  # usage path must stay offline and instant, so never health-check the network
+  # just to print text.
+  expand|fields|-h|--help|"") needs_endpoint=0 ;;
 esac
 
 for arg in "$@"; do

@@ -35,7 +35,9 @@ Options:
   --save-archives-root      Save --archives-root as the future default.
   --set-archives-root DIR   Save DIR as the future default and exit.
   --show-archives-root      Print the current archive root setting and exit.
-  --timestamp-key KEY       Pass --timestamp-key KEY to clp-s.
+  --timestamp-key KEY       Pass --timestamp-key KEY to clp-s, and record the
+                            earliest and latest KEY across every record as
+                            the archive's timeRange in its metadata.
                             Default: timestamp
   --compression-level LEVEL Pass --compression-level LEVEL to clp-s.
   --target-encoded-size N   Pass --target-encoded-size N to clp-s.
@@ -399,7 +401,7 @@ case "$session_real" in
 esac
 
 file_list="$(mktemp "${TMPDIR:-/tmp}/clp-s-files.XXXXXX")"
-trap 'rm -f "$file_list"' EXIT
+trap 'rm -f "$file_list" "${stats_out:-}"' EXIT
 
 session_file="$session_real"
 printf '%s\n' "$session_file" > "$file_list"
@@ -459,7 +461,11 @@ fi
 
 clp_s_bin="$(resolve_clp_s)" || exit $?
 
-cmd=("$clp_s_bin" c)
+# A session record keeps its prompts, replies, tool calls and tool output in the
+# message.content array. --structurize-arrays stores each array element's fields
+# as schema-tree columns, so their text is templated into log shapes and each
+# field can be queried and counted; without it the array is one opaque string.
+cmd=("$clp_s_bin" c --structurize-arrays)
 if [[ -n "$parsing_specification" ]]; then
   cmd+=(--parsing-specification "$parsing_specification")
 fi
@@ -475,7 +481,9 @@ fi
 if [[ -n "$target_encoded_size" ]]; then
   cmd+=(--target-encoded-size "$target_encoded_size")
 fi
-if [[ "$print_archive_stats" -eq 1 ]]; then
+# With a timestamp key, clp-s's stats carry each archive's earliest and latest
+# timestamp, which the metadata records as the archive's time range.
+if [[ "$print_archive_stats" -eq 1 || -n "$timestamp_key" ]]; then
   cmd+=(--print-archive-stats)
 fi
 cmd+=(-f "$file_list" "$output_dir")
@@ -501,7 +509,19 @@ if [[ "$dry_run" -eq 1 ]]; then
 fi
 
 mkdir -p "$output_dir"
-"${cmd[@]}"
+stats_out="$(mktemp "${TMPDIR:-/tmp}/clp-s-stats.XXXXXX")"
+"${cmd[@]}" > "$stats_out"
+if [[ "$print_archive_stats" -eq 1 ]]; then
+  cat "$stats_out"
+fi
+
+time_range_json=null
+if [[ -n "$timestamp_key" ]]; then
+  if ! time_range_json="$(archive_time_range_json "$stats_out")"; then
+    echo "warning: could not read the clp-s archive stats; the time range is not recorded" >&2
+    time_range_json=null
+  fi
+fi
 
 archive_bytes="$(directory_file_bytes "$output_dir")"
 compression_ratio="$(awk -v raw="$total_bytes" -v archive="$archive_bytes" 'BEGIN { if (archive > 0) printf "%.2fx", raw / archive; else printf "n/a" }')"
@@ -522,6 +542,7 @@ jq -n \
   --arg archiveDir "$output_dir" \
   --arg clpArchiveDir "$clp_archive_dir" \
   --arg timestampKey "$timestamp_key" \
+  --argjson timeRange "$time_range_json" \
   --arg selectionFile "$selection_file" \
   --arg sessionIndex "$session_index" \
   --arg sessionFile "$session_file" \
@@ -543,7 +564,8 @@ jq -n \
     archiveRootSource: $archiveRootSource,
     archiveDir: $archiveDir,
     clpArchiveDir: (if $clpArchiveDir == "" then null else $clpArchiveDir end),
-    timestampKey: $timestampKey,
+    timestampKey: (if $timestampKey == "" then null else $timestampKey end),
+    timeRange: $timeRange,
     selection: {
       file: (if $selectionFile == "" then null else $selectionFile end),
       index: (if $sessionIndex == "" then null else ($sessionIndex | tonumber) end)
@@ -568,6 +590,9 @@ echo "Raw input bytes: $total_bytes"
 echo "Archive bytes: $archive_bytes"
 echo "Compression ratio: $compression_ratio"
 echo "File size reduction: $reduction_bytes bytes ($reduction_percent)"
+if [[ -n "$timestamp_key" ]]; then
+  print_time_range "$timestamp_key" "$time_range_json"
+fi
 if [[ -n "$clp_archive_dir" && "$clp_archive_dir" != "$output_dir" ]]; then
   echo "Resolved clp-s archive dir: $clp_archive_dir"
 fi

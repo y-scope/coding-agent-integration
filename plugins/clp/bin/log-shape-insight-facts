@@ -102,6 +102,81 @@ def dig(record, path):
     return cur
 
 
+def values_at(obj, keys):
+    """Every value at a key path, stepping through arrays: in a record whose
+    `message.content` is a list of blocks, `message.content.text` is each
+    block's text. A key may also hold the dotted path whole."""
+    if not keys:
+        return [obj]
+    if isinstance(obj, list):
+        return [v for item in obj for v in values_at(item, keys)]
+    if not isinstance(obj, dict):
+        return []
+    for i in range(len(keys), 0, -1):
+        key = ".".join(keys[:i])
+        if key in obj:
+            return values_at(obj[key], keys[i:])
+    return []
+
+
+def strings_in(value):
+    """The string values in a value, at any depth, in order (keys excluded)."""
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in strings_in(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in strings_in(v)]
+    return []
+
+
+def leaf_items(value, prefix=""):
+    """(dotted key, value) for each scalar in a record, arrays kept whole."""
+    if isinstance(value, dict):
+        return [item for k, v in value.items() for item in leaf_items(v, f"{prefix}.{k}" if prefix else k)]
+    return [(prefix, value)] if prefix else []
+
+
+def record_text(rec, msg, ts=None):
+    """What a record says, for a sample or an example line. The message field
+    may not be a flat string: its text can sit in arrays of blocks, or the
+    record can hold it one level up (a string where other records hold a list
+    of blocks). So: the strings at the message path; else at the nearest
+    ancestor of it that the record has; and among those, the ones with
+    whitespace in them (text, not ids or enum values) when there are any. A
+    record with no message at all (a duration or a status record) is shown by
+    its other fields, as key=value."""
+    if not isinstance(rec, dict):
+        return str(rec)
+    keys = msg.split(".") if msg else []
+    for i in range(len(keys), 0, -1):
+        found = values_at(rec, keys[:i])
+        if not found:
+            continue
+        texts = [s for v in found for s in strings_in(v)]
+        if not texts:
+            scalars = [str(v) for v in found if v is not None and not isinstance(v, (dict, list))]
+            if scalars:
+                return " | ".join(scalars)
+            continue
+        prose = [t for t in texts if any(c.isspace() for c in t.strip())]
+        return " | ".join(prose or texts)
+    others = [(k, v) for k, v in leaf_items(rec) if k != ts]
+    if not others:
+        return "(no fields)"
+    return ", ".join(f"{k}={json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v}"
+                     for k, v in others)
+
+
+def sample_text(sample, msg, ts=None, chars=200):
+    """One recorded sample line, as text on one line."""
+    try:
+        text = record_text(json.loads(sample), msg, ts)
+    except json.JSONDecodeError:
+        text = sample
+    return text.replace("\n", " <NL> ")[:chars]
+
+
 def fmt_ts(value):
     try:
         return datetime.datetime.fromtimestamp(float(value), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -131,14 +206,15 @@ def time_span(archive_dir):
         except (OSError, json.JSONDecodeError):
             continue
     if meta is None:
-        return ("unavailable. The archive has no .yscope-clp-archive.json, so clp-s-compress-folder did not "
-                "compress it; recompress it with that and --timestamp-key to record the span.")
+        return ("unavailable. The archive has no .yscope-clp-archive.json, so neither clp-s-compress-folder "
+                "nor clp-s-compress-session compressed it; recompress it with one of them and a timestamp "
+                "key to record the span.")
     key = meta.get("timestampKey")
     if not key:
         return "unavailable. The archive was compressed without --timestamp-key; recompress it with one to record the span."
     if "timeRange" not in meta:
-        return ("unavailable. The archive was compressed before clp-s-compress-folder recorded time ranges; "
-                "recompress it to record the span.")
+        return ("unavailable. The archive was compressed by a version of the plugin's compression wrappers "
+                "that did not record time ranges; recompress it to record the span.")
     if meta["timeRange"] is None:
         return f"unavailable. No record has the timestamp key `{key}`."
     begin, end = meta["timeRange"]["beginMs"] / 1000, meta["timeRange"]["endMs"] / 1000
@@ -193,6 +269,9 @@ def main(argv=None) -> int:
     ap.add_argument("--schema-json", required=True)
     ap.add_argument("--archive-dir", required=True,
                     help="the top-level archive directory; its metadata gives the time span")
+    ap.add_argument("--schema-tree-file", default=None,
+                    help="clp-s-schema-tree --json-out file: the facts then name the text fields, "
+                         "and every path in it counts as a field")
     ap.add_argument("--top", type=int, default=20)
     ap.add_argument("--out", default="/tmp/log-shape-insight-facts.md")
     args = ap.parse_args(argv)
@@ -240,7 +319,19 @@ def main(argv=None) -> int:
     w(f"- Time span: {time_span(args.archive_dir)}")
     names = ", ".join(f"{role} = `{schema[role]}`" for role in ("timestamp", "severity", "logger", "message") if schema.get(role))
     payload = ", ".join(f"`{p}`" for p in schema.get("payload", []) or [])
+    tree_note = ""
+    if args.schema_tree_file:
+        try:
+            with open(args.schema_tree_file, "r", encoding="utf-8") as f:
+                tree_rows = json.load(f)
+            text = [r["path"] for r in tree_rows if r.get("type") == "ClpString"]
+            tree_note = (f"; text fields: {', '.join(f'`{p}`' for p in dict.fromkeys(text))}; "
+                         f"and any other path listed in `{args.schema_tree_file}`")
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+            print(f"error: cannot read --schema-tree-file {args.schema_tree_file}: {e}", file=sys.stderr)
+            return 2
     w(f"- Fields a KQL query may filter on: {names}" + (f"; payload: {payload}" if payload else "")
+      + tree_note
       + ". Nothing else is a field: the classification's categories exist only in the analysis, "
       "so a query cannot filter on a category name.\n")
 
@@ -281,12 +372,7 @@ def main(argv=None) -> int:
                 w(f"  - [plan #{r['index']}] {r.get('label')}: status {r.get('status')}, "
                   f"{r.get('count') or 0:,} ({pct(r.get('count') or 0, total)}); kql `{r.get('kql')}`")
                 for smp in (r.get("samples") or [])[:3]:
-                    try:
-                        rec = json.loads(smp)
-                        text = str(dig(rec, msg) if msg else smp)
-                    except json.JSONDecodeError:
-                        text = smp
-                    w(f"    - sample: `{text.replace(chr(10), ' <NL> ')[:200]}`")
+                    w(f"    - sample: `{sample_text(smp, msg, ts)}`")
         elif focus.get("entries"):
             w("- Focus queries: queued but no results recorded.")
         w("")
@@ -351,21 +437,29 @@ def main(argv=None) -> int:
 
     # -- categories
     if totals:
+        rec_sum = sum(c["records"] for c in totals.values())
+        # A record with several text fields (a session record's prompt, reply and
+        # tool output) carries one templated value per field, so the counts are
+        # values, not records, once they exceed the record count.
+        per_value = bool(total) and rec_sum > total
+        base = rec_sum if per_value else total
+        unit = "Values" if per_value else "Records"
         w("## Categories (exact: the stored per-template counts, summed; no keyword involved)")
-        w("| Category | Priority | Templates | Records | Share of records |")
+        w(f"| Category | Priority | Templates | {unit} | Share of {unit.lower()} |")
         w("|---|---|---|---|---|")
-        rec_sum = 0
         for cat, c in sorted(totals.items(), key=lambda kv: -kv[1]["records"]):
-            rec_sum += c["records"]
             w(f"| {cat} | {c.get('priority') or '-'} | {c['templates']:,} | {c['records']:,} "
-              f"| {pct(c['records'], total)} |")
-        w(f"| **sum** | | {sum(c['templates'] for c in totals.values()):,} | {rec_sum:,} | {pct(rec_sum, total)} |")
+              f"| {pct(c['records'], base)} |")
+        w(f"| **sum** | | {sum(c['templates'] for c in totals.values()):,} | {rec_sum:,} | {pct(rec_sum, base)} |")
         whys = [(cat, c) for cat, c in totals.items() if c.get("why") and c.get("priority") == "high"]
         if whys:
             w("\nWhy the classifier ranked these categories high (its judgement, not a finding):")
             for cat, c in whys:
                 w(f"- `{cat}`: {c['why']}")
-        if total:
+        if per_value:
+            w(f"\nTemplated values: {rec_sum:,} in {total:,} records. A record carries one value per "
+              "text field, so the values outnumber the records and every share above is a share of values.")
+        elif total:
             w(f"\nRecords no template accounts for: {total - rec_sum:,} ({pct(total - rec_sum, total)}).")
         blobs = [(cat, c) for cat, c in totals.items() if c["templates"] > 500 and c["templates"] > 0.9 * c["records"]]
         for cat, c in blobs:
@@ -408,7 +502,8 @@ def main(argv=None) -> int:
     if fetched_all:
         groups = defaultdict(lambda: {"n": 0, "first": None, "last": None, "example": None})
         for rec in fetched_all:
-            key = (dig(rec, sev) if sev else None, shape(dig(rec, msg) if msg else ""))
+            text = record_text(rec, msg, ts)
+            key = (dig(rec, sev) if sev else None, shape(text))
             g = groups[key]
             g["n"] += 1
             t = dig(rec, ts) if ts else None
@@ -418,7 +513,7 @@ def main(argv=None) -> int:
                 g["last"] = tv if g["last"] is None else max(g["last"], tv)
             except (TypeError, ValueError):
                 pass
-            g["example"] = g["example"] or str(dig(rec, msg) if msg else "").replace("\n", " <NL> ")[:260]
+            g["example"] = g["example"] or text.replace("\n", " <NL> ")[:260]
         w(f"## The fetched non-dominant-severity records, grouped by message shape (numbers masked as N, quoted names as \"S\")")
         w(f"{len(fetched_all):,} records fetched; {len(groups):,} distinct shapes. "
           "First/last are the timestamps of these records only, not the archive's span.")
@@ -434,11 +529,7 @@ def main(argv=None) -> int:
         for r in sem:
             w(f"- [{r['table']} #{r['index']}] {r.get('label')}: status {r.get('status')}, {r.get('count') or 0:,} rows; kql `{r.get('kql')}`")
             for s in (r.get("samples") or [])[:3]:
-                try:
-                    rec = json.loads(s)
-                    w(f"  - `{str(dig(rec, msg) if msg else s).replace(chr(10), ' <NL> ')[:200]}`")
-                except json.JSONDecodeError:
-                    w(f"  - `{s[:200]}`")
+                w(f"  - `{sample_text(s, msg, ts)}`")
         w("")
     flagged = [r for r in results if r.get("non_selective") or r.get("status") in ("error", "timeout", "zero") or r.get("retried")]
     if flagged:

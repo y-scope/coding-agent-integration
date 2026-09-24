@@ -291,6 +291,33 @@ clp_archive_metadata_file() {
   printf '%s/.yscope-clp-archive.json\n' "$archives_dir"
 }
 
+# archive_time_range_json STATS_FILE: the earliest and latest timestamp across
+# every archive `clp-s c --timestamp-key K --print-archive-stats` reported into
+# STATS_FILE, as {beginMs, endMs, begin, end}; null when no record had the key.
+# clp-s prints one stats line per archive (several when --target-encoded-size
+# splits it), not in time order. An archive where no record has the timestamp
+# key reports 0 for both ends, so it is left out. Fails when STATS_FILE is not
+# the stats JSON.
+archive_time_range_json() {
+  local stats_file="$1"
+  jq -s -c '
+    [.[] | select(.begin_timestamp != 0 or .end_timestamp != 0)]
+    | if length == 0 then null else
+        {beginMs: (map(.begin_timestamp) | min), endMs: (map(.end_timestamp) | max)}
+        | .begin = (.beginMs / 1000 | floor | todate)
+        | .end = (.endMs / 1000 | floor | todate)
+      end' "$stats_file"
+}
+
+# print_time_range TIMESTAMP_KEY TIME_RANGE_JSON: the "Time range:" line a
+# compression wrapper prints for archive_time_range_json's result.
+print_time_range() {
+  local timestamp_key="$1" time_range_json="$2"
+  echo "Time range: $(jq -r --arg key "$timestamp_key" \
+    'if . == null then "none (no record has the timestamp key \($key))" else "\(.begin) to \(.end)" end' \
+    <<<"$time_range_json")"
+}
+
 looks_like_clp_s_archive_dir() {
   local path="$1"
 

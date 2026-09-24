@@ -49,6 +49,12 @@ Logger values seen:   <e.g. NETWORK,REPL,... or sflow.task.vllm_worker_3,...>
 CLUSTERS TO CLASSIFY (one {"id","count","representative"} per line):
 <PASTE the cluster lines printed by log-shape-cluster cluster>
 
+[Only with field rules] FIELD RULES (already decided): every template whose
+values sit in these fields already has the rule's category and is not among the
+clusters above. Your taxonomy MUST include each of these categories, with a priority and a
+why; you may also assign clusters to them:
+<PASTE one line per category: "<category>: <field>, <field>, ...">
+
 [Only for GROWTH] Existing categories from the previous classification — REUSE
 these where a representative fits; add a new category only if none fits.
 Existing query-plan labels (do not duplicate): <paste base taxonomy categories
@@ -76,6 +82,12 @@ Method:
 2. Build a QUERY PLAN: targeted queries derived from the representatives,
    expressed in the discovered field names. Per entry: label, the filter as
    a structured `match` object, the columns to --projection, and the method.
+   clp-s projects leaf columns only, and an array is a leaf returned whole:
+   a column inside an array, or an object, projects nothing. The search
+   wrapper rewrites such a column to the array that holds it (or the leaf
+   columns under the object) and notes it in the result's
+   projection_notes; a "jq" program sees the rewritten shape, so index into
+   an array as `.message.content[]?.text`, not `.message.content.text`.
    Never write a KQL string: the plan runner renders `match` to KQL itself,
    quoting and escaping every value and parenthesizing every group, and an
    entry carrying a "kql" key is rejected. `match` grammar (nest freely):
@@ -182,6 +194,7 @@ Rules:
 - Use the discovered field names verbatim in `match` and `project`.
 - Every taxonomy entry has "priority" and "why"; every query_plan entry has
   "category" (a taxonomy category), "priority", and "stage".
+- [Only with field rules] The taxonomy includes every field-rule category.
 ```
 
 ## After the subagent returns: validate → expand → merge → store
@@ -211,11 +224,19 @@ jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_pl
 # 3. Expand id-based assignments to every member template, by hash. Exits 2
 #    and writes NOTHING on missing/unknown/duplicate ids — in that case do NOT
 #    go on; announce the retry to the user, re-run the subagent once, and
-#    expand again:
+#    expand again. On GROWTH add
+#    --categories-from /tmp/log-shape-base-classification.json: the classifier
+#    lists only the categories it adds, so a field rule's category that the base
+#    already ranks would otherwise be refused:
 "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-cluster" expand \
   --clusters /tmp/log-shape-clusters.json \
   --classification /tmp/log-shape-class.json \
-  --output /tmp/log-shape-expanded.json
+  --output /tmp/log-shape-expanded.json                                       # NEW
+"${CLAUDE_PLUGIN_ROOT}/bin/log-shape-cluster" expand \
+  --clusters /tmp/log-shape-clusters.json \
+  --classification /tmp/log-shape-class.json \
+  --categories-from /tmp/log-shape-base-classification.json \
+  --output /tmp/log-shape-expanded.json                                       # GROWTH
 
 # 4. Merge (milliseconds). Use MODE/BASE_KEY from the bootstrap output
 #    (re-declare — fresh shell). GROWTH merges the new templates into the base

@@ -129,6 +129,7 @@ mkdir -p "$out_dir"
 
 SEARCH="${CLP_PLUGIN_BIN_DIR}/clp-s-search-kql"
 CACHE_BIN="${CLP_PLUGIN_BIN_DIR}/log-shape-cache"
+TREE_BIN="${CLP_PLUGIN_BIN_DIR}/clp-s-schema-tree"
 cache_args=()
 [[ -n "$cache_dir" ]] && cache_args=(--cache-dir "$cache_dir")
 
@@ -144,6 +145,10 @@ count_file="${out_dir}/log-shape-count.txt"
 freqs_unavailable_file="${out_dir}/log-shape-freqs.unavailable"
 ingest_file="${out_dir}/log-shape-ingest.out"
 ingest_err_file="${out_dir}/log-shape-ingest.err"
+tree_raw_file="${out_dir}/log-shape-schema-tree-raw.ndjson"
+tree_json_file="${out_dir}/log-shape-schema-tree.json"
+tree_summary_file="${out_dir}/log-shape-schema-tree.txt"
+template_fields_file="${out_dir}/log-shape-template-fields.ndjson"
 
 # --- Stored archives ----------------------------------------------------------
 # An archive is immutable. When every archive here was analyzed before, its
@@ -229,26 +234,34 @@ run_stage() {
   return "$rc"
 }
 
-# --- 1. Sample records for schema discovery + value distributions ------------
+# --- 1. Schema tree, and a sample for value distributions ----------------------
 # Every stage runs in the background (run_stage), so it hands its results to the
 # rest of the script through files, not variables.
+# The merged schema tree lists every field of the whole archive with its type
+# and record count, so the candidate fields come from it rather than from one
+# sampled record: a sample from the start of a log can miss whole kinds of
+# records. Only the value distributions come from the sample.
 # --limit stops the search after $sample_cap records, even on huge archives.
-# grep exits 1 when nothing matched; the emptiness check below reports that.
+# An empty sample is reported by the emptiness check below.
 describe_sample() {
-  "$SEARCH" --limit "$sample_cap" "$archives_dir" '*' 2>/dev/null | grep '^{' > "$sample_file" || true
+  "$SEARCH" "$archives_dir" 'stats.schema_tree' 2>/dev/null > "$tree_raw_file" || true
+  "$TREE_BIN" --tree-file "$tree_raw_file" --json-out "$tree_json_file" "$archives_dir" \
+    > "$tree_summary_file" 2>/dev/null || true
+  "$SEARCH" --limit "$sample_cap" "$archives_dir" '*' 2>/dev/null > "$sample_file" || true
   [[ -s "$sample_file" ]] || return 0
 
-  local sampled_records sample_record field dist distinct values
+  local sampled_records field dist distinct values
   sampled_records="$(wc -l < "$sample_file" | tr -d '[:space:]')"
-  sample_record="$(head -1 "$sample_file")"
 
-  # Candidate schema fields: top-level scalar keys of the sample record (cap 8).
-  mapfile -t dist_fields < <(printf '%s\n' "$sample_record" \
-    | jq -r 'to_entries[] | select(.value | type=="string" or type=="number" or type=="boolean") | .key' \
-    | head -8)
+  # Candidate schema fields: the scalar fields outside arrays that the most
+  # records carry (cap 8). Severity- and logger-like fields are among them.
+  mapfile -t dist_fields < <(jq -r '
+      [.[] | select((.type=="VarString" or .type=="Integer" or .type=="Boolean")
+                    and (.display | contains("[]") | not) and (has("collapsed_keys") | not))]
+      | sort_by(-.records) | .[:8][] | .path' "$tree_json_file" 2>/dev/null)
 
   for field in "${dist_fields[@]}"; do
-    dist="$(jq -r --arg f "$field" '.[$f] // empty | tostring' "$sample_file" \
+    dist="$(jq -r --arg f "$field" 'getpath($f | split(".")) // empty | tostring' "$sample_file" 2>/dev/null \
       | sort | uniq -c | sort -rn)"
     distinct="$(printf '%s\n' "$dist" | grep -c . || true)"
     # Top 8 values as "value"(count), values truncated to 60 chars. Herestring,
@@ -261,7 +274,7 @@ describe_sample() {
     echo "DIST field=$field distinct=$distinct sampled=$sampled_records values=$values"
   done > "$dist_file"
 }
-run_stage 1 "reading field names from a sample of up to ${sample_cap} records" describe_sample
+run_stage 1 "reading the schema tree and a sample of up to ${sample_cap} records" describe_sample
 sample_seconds="$stage_seconds"
 
 if [[ ! -s "$sample_file" ]]; then
@@ -276,9 +289,9 @@ cat "$dist_file"
 # --- 2. Log shape dictionary + per-template frequencies ------------------------
 # The counts come from the archive itself, so no record scan is needed. A dump
 # is rendered once, by ingest, which also stores the archive for next time.
-# grep exits 1 on an empty dump; ingest then fails and reports it below.
+# On an empty dump, ingest fails and reports it below.
 dump_log_shapes() {
-  "$SEARCH" "$archives_dir" 'stats.log_shapes' 2>"$err_file" | grep '^{' > "$shapes_file" || true
+  "$SEARCH" "$archives_dir" 'stats.log_shapes' 2>"$err_file" > "$shapes_file" || true
   "$CACHE_BIN" ingest ${cache_args[@]+"${cache_args[@]}"} --max-chars "$max_chars" \
     --shapes-file "$shapes_file" --log-shapes-out "$log_shapes_file" > "$ingest_file" 2>"$ingest_err_file" \
     || return 1
@@ -340,6 +353,15 @@ if [[ "$shapes_source" == "dump" ]]; then
   fi
   dump_seconds=$((dump_seconds + stage_seconds))
   [[ -e "$freqs_unavailable_file" ]] && freqs="UNAVAILABLE"
+  # Which fields each template's values came from (clp-s builds that count log
+  # shapes per schema-tree node), and the tree summary with per-field values
+  # and templates. Both read files already written; neither searches.
+  if [[ -s "$tree_raw_file" ]]; then
+    "$CACHE_BIN" fields --shapes-file "$shapes_file" --tree-file "$tree_raw_file" \
+      > "$template_fields_file" 2>/dev/null || rm -f "$template_fields_file"
+    "$TREE_BIN" --tree-file "$tree_raw_file" --log-shapes-file "$shapes_file" \
+      --json-out "$tree_json_file" "$archives_dir" > "$tree_summary_file" 2>/dev/null || true
+  fi
   log_shape_count="$(sed -n 's/^LOG_SHAPE_COUNT=//p' "$ingest_file")"
   run_stage 3 "checking the classification cache" probe_cache_file
   cache_seconds=$((cache_seconds + stage_seconds))
@@ -353,6 +375,19 @@ base_key=""
 grep '^{' "$diff_file" > "$to_classify_file" || true
 to_classify="$(grep -c '^{' "$to_classify_file" || true)"
 
+if [[ -s "$tree_summary_file" ]]; then
+  grep -E '^TREE_' "$tree_summary_file"
+  # The fields most records carry, then every text field (the templated ones).
+  grep '^FIELD ' "$tree_summary_file" | grep -v ' type=ClpString ' | head -25 || true
+  grep '^FIELD .* type=ClpString ' "$tree_summary_file" | head -40 || true
+  grep '^TEXT_FIELDS=' "$tree_summary_file"
+  echo "SCHEMA_TREE_FILE=$tree_json_file"
+fi
+if [[ -s "$template_fields_file" ]]; then
+  echo "TEMPLATE_FIELDS_FILE=$template_fields_file"
+else
+  echo "TEMPLATE_FIELDS=UNAVAILABLE"
+fi
 echo "LOG_SHAPE_COUNT=$log_shape_count"
 echo "SHAPES_SOURCE=$shapes_source"
 echo "FREQS=$freqs"
