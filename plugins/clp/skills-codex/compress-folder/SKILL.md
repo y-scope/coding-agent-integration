@@ -19,7 +19,7 @@ Compression is two steps with a decision between them: `clp-detect-logs` reads t
 
 - Do not use this skill for session JSONL files; use `compress` for sessions.
 - Do not pass `--single-file-archive`; search uses regular archive directories.
-- Take `--timestamp-key` from the detection report (or from the user). Without one, `clp-s` still compresses and searches, but time-range flags (`--tge`/`--tle`) will not work.
+- Take `--timestamp-key` from the detection report (or from the user). Without one, `clp-s` still compresses and searches, but time-range flags (`--tge`/`--tle`) will not work and the archive records no time range.
 - `clp-s` only ingests JSON. Text logs go in through `--structurize`, which converts them to JSONL. A file that is already JSON is never structurized.
 - Default file extensions: `log`, `jsonl`, `json`, `txt`, `ndjson`, `out`, `err`. Override with `--extensions`.
 - Default archive root: `${TMPDIR:-/tmp}/yscope-clp-archives`.
@@ -75,6 +75,7 @@ Compression is two steps with a decision between them: `clp-detect-logs` reads t
    - `Compression ratio`
    - `File size reduction`
    - `Input files`
+   - `Time range` (with a timestamp key: the earliest and latest timestamp across every record, also stored as `timeRange` in the metadata)
    - `Archives dir`
    - `Archive metadata`
 

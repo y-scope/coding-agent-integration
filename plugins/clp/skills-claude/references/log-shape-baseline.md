@@ -69,7 +69,7 @@ Rules of thumb: pick the rarest distinctive static text (never a variable or a s
   ```bash
   jq -s '[.[] | select(.log_shape | test("compact|flush|memtable|ingest";"i")) | .count] | add' /tmp/log-shape-freqs.ndjson
   ```
-- **Time span:** project the timestamp field, `head -n 1` / `tail -n 1` (records are chronological; do NOT sort); `--tge`/`--tle` only if the timestamp is a real epoch (native JSON).
+- **Time span:** `timeRange` in the archive's `.yscope-clp-archive.json` (`begin`/`end`, the earliest and latest timestamp across every record, recorded at compression). When it is absent or null, the span is unavailable; never estimate it from fetched records.
 - **Scoped semantic:** `clp-s-search-kql ARCHIVE 'semantic("...") AND <severity>:<value>'`
 - **Filter the baseline with jq:**
   ```bash
