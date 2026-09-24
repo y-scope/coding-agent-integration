@@ -8,19 +8,25 @@ source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  clp-s-compress-folder --folder PATH [options]
+  clp-s-compress-folder --path PATH [--path PATH ...] [options]
 
-Compress log files from an arbitrary folder into a searchable CLP archive
-directory:
+Compress log files into a searchable CLP archive directory. Each --path is a
+log file or a folder of log files; folders are searched for files with the
+--extensions below. The files found make up one list, which clp-s compresses:
 
-  clp-s c --remove-path-prefix FOLDER -f FILE_LIST OUTPUT_DIR
+  clp-s c --remove-path-prefix COMMON_DIR -f FILE_LIST OUTPUT_DIR
+
+Run clp-detect-logs on the same files first: it reads their first lines and
+reports the format, the timestamp field, and the flags to pass here.
 
 Options:
-  --folder PATH              Directory containing log files (required).
-  --extensions EXT,EXT,...   Comma-separated extension filter.
+  --path PATH                A log file, or a folder of log files. Repeat
+                             for more. A file is always included, whatever
+                             its extension.
+  --extensions EXT,EXT,...   Comma-separated extension filter for folders.
                              Default: log,jsonl,json,txt,ndjson,out,err
                              Use '*' to include every regular file.
-  --no-recursive             Search only the top level of --folder.
+  --no-recursive             Search only the top level of each folder.
   --timestamp-key KEY        Pass --timestamp-key KEY to clp-s.
                              No default; only set this if your logs have a
                              known timestamp field.
@@ -38,7 +44,11 @@ Options:
   --structurize              Pre-process files through structurize.py to
                              convert unstructured text logs into structured
                              JSONL before compression. Automatically sets
-                             --timestamp-key timestamp.
+                             --timestamp-key timestamp. Files that are already
+                             JSON are compressed as they are, never converted.
+  --parser FILE              With --structurize: convert text with the
+                             parse_line() function in FILE instead of the
+                             built-in vLLM formats (see structurize.py).
   --heartbeat SECONDS        While clp-s runs, print a progress line every
                              SECONDS (default: 30; 0 = none): elapsed time,
                              input read so far, archive size so far, and an
@@ -46,6 +56,8 @@ Options:
                              <archive dir>.compress-status.json, which
                              clp-compress-status reads.
   --dry-run                  Print the planned compression operation only.
+                             Read-only: nothing is structurized, staged, or
+                             compressed.
   -h, --help                 Show this help.
 
 Without --structurize, a file whose first lines are JSON objects but whose name
@@ -53,10 +65,11 @@ is not .json/.jsonl/.ndjson is handed to clp-s as a staged *.jsonl copy: clp-s
 picks its parser by file name and would otherwise compress it as text.
 
 Examples:
-  clp-s-compress-folder --folder /var/log/myapp
-  clp-s-compress-folder --folder ./logs --extensions log,txt
-  clp-s-compress-folder --folder ./logs --extensions '*' --dry-run
-  clp-s-compress-folder --folder /var/log/myapp --timestamp-key ts
+  clp-s-compress-folder --path /var/log/myapp
+  clp-s-compress-folder --path ./vllm_worker_3.log --structurize
+  clp-s-compress-folder --path ./a.log --path ./b.log --timestamp-key ts
+  clp-s-compress-folder --path ./logs --extensions log,txt
+  clp-s-compress-folder --path ./logs --extensions '*' --dry-run
   clp-s-compress-folder --show-archives-root
   clp-s-compress-folder --set-archives-root ~/clp-archives
 EOF
@@ -64,8 +77,9 @@ EOF
 
 DEFAULT_EXTENSIONS="log,jsonl,json,txt,ndjson,out,err"
 
-folder=""
+input_paths=()
 extensions="$DEFAULT_EXTENSIONS"
+extensions_set=0
 recursive=1
 timestamp_key=""
 compression_level=""
@@ -82,20 +96,23 @@ print_archive_stats=0
 dry_run=0
 heartbeat=30
 structurize=0
+structurize_passthrough=0
+parser_file=""
 structurize_tmpdir=""
 jsonl_stage_dir=""
 jsonl_staged=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --folder)
-      [[ $# -ge 2 ]] || { echo "error: --folder requires a value" >&2; exit 2; }
-      folder="$2"
+    --path)
+      [[ $# -ge 2 ]] || { echo "error: --path requires a value" >&2; exit 2; }
+      input_paths+=("$2")
       shift 2
       ;;
     --extensions)
       [[ $# -ge 2 ]] || { echo "error: --extensions requires a value" >&2; exit 2; }
       extensions="$2"
+      extensions_set=1
       shift 2
       ;;
     --no-recursive)
@@ -157,6 +174,11 @@ while [[ $# -gt 0 ]]; do
     --structurize)
       structurize=1
       shift
+      ;;
+    --parser)
+      [[ $# -ge 2 ]] || { echo "error: --parser requires a value" >&2; exit 2; }
+      parser_file="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -240,26 +262,77 @@ fi
 
 # --- Validate required arguments ---
 
-if [[ -z "$folder" ]]; then
-  echo "error: --folder PATH is required" >&2
+if [[ "${#input_paths[@]}" -eq 0 ]]; then
+  echo "error: --path PATH is required" >&2
   echo >&2
   usage >&2
   exit 2
 fi
 
-if [[ ! -d "$folder" ]]; then
-  echo "error: --folder is not a directory: $folder" >&2
-  exit 1
-fi
-if [[ ! -r "$folder" ]]; then
-  echo "error: --folder is not readable: $folder" >&2
-  exit 1
+if [[ -n "$parser_file" ]]; then
+  if [[ "$structurize" -eq 0 ]]; then
+    echo "error: --parser requires --structurize" >&2
+    exit 2
+  fi
+  if [[ ! -f "$parser_file" || ! -r "$parser_file" ]]; then
+    echo "error: --parser is not a readable file: $parser_file" >&2
+    exit 1
+  fi
+  parser_file="$(realpath "$parser_file")"
 fi
 
-folder_real="$(realpath "$folder")"
-folder_name="$(basename "$folder_real")"
+# Each --path is a file or a folder; work out which.
+real_paths=()
+path_kinds=()
+has_folder=0
+for p in "${input_paths[@]}"; do
+  if [[ -d "$p" ]]; then
+    kind="folder"
+    has_folder=1
+  elif [[ -f "$p" ]]; then
+    kind="file"
+  else
+    echo "error: --path is not a file or a folder: $p" >&2
+    exit 1
+  fi
+  if [[ ! -r "$p" ]]; then
+    echo "error: --path is not readable: $p" >&2
+    exit 1
+  fi
+  real_paths+=("$(realpath "$p")")
+  path_kinds+=("$kind")
+done
+if [[ "$has_folder" -eq 0 && ( "$extensions_set" -eq 1 || "$recursive" -eq 0 ) ]]; then
+  echo "error: --extensions and --no-recursive apply only to folders, and every --path is a file" >&2
+  exit 2
+fi
+
+# The deepest directory holding every path stands in for "the folder": archive
+# paths are relative to it, and structurize mirrors the tree below it.
+if [[ "${path_kinds[0]}" == "folder" ]]; then
+  folder_real="${real_paths[0]}"
+else
+  folder_real="$(dirname -- "${real_paths[0]}")"
+fi
+for p in "${real_paths[@]}"; do
+  while [[ "$folder_real" != "/" && "$p" != "$folder_real" && "$p" != "$folder_real"/* ]]; do
+    folder_real="$(dirname -- "$folder_real")"
+  done
+done
+if [[ "${#real_paths[@]}" -eq 1 ]]; then
+  folder_name="$(basename -- "${real_paths[0]}")"
+  archive_prefix="${path_kinds[0]}"
+else
+  # Paths with no common directory but / are named after the first one.
+  if [[ "$folder_real" == "/" ]]; then
+    folder_name="$(basename -- "${real_paths[0]}")"
+  else
+    folder_name="$(basename -- "$folder_real")"
+  fi
+  archive_prefix="paths"
+fi
 # folder_real is repointed at a staging directory by --structurize and by the
-# JSONL sniff below; keep the folder the user named for the report.
+# JSONL sniff below; keep the common directory for the archive metadata.
 input_folder="$folder_real"
 
 # --- Validate extensions ---
@@ -312,7 +385,7 @@ else
     mkdir -p "$resolved_archives_root"
     write_configured_archives_root "$resolved_archives_root"
   fi
-  output_dir="${resolved_archives_root}/folder-${folder_name}-${run_stamp}"
+  output_dir="${resolved_archives_root}/${archive_prefix}-${folder_name}-${run_stamp}"
 fi
 
 # --- Discover files ---
@@ -320,36 +393,41 @@ fi
 file_list="$(mktemp "${TMPDIR:-/tmp}/clp-s-files.XXXXXX")"
 trap 'rm -f "$file_list"; [[ -n "${structurize_tmpdir:-}" ]] && rm -rf "${structurize_tmpdir}"; [[ -n "${jsonl_stage_dir:-}" ]] && rm -rf "${jsonl_stage_dir}"' EXIT
 
-if [[ "$all_files" -eq 1 ]]; then
-  if [[ "$recursive" -eq 1 ]]; then
-    find "$folder_real" -type f -print0 > "$file_list"
-  else
-    find "$folder_real" -maxdepth 1 -type f -print0 > "$file_list"
-  fi
-else
-  # Build find extension predicates (case-insensitive)
-  find_args=("$folder_real")
+find_in_folder() {
+  local dir="$1" find_args first ext
+  find_args=("$dir")
   if [[ "$recursive" -eq 0 ]]; then
     find_args+=(-maxdepth 1)
   fi
-  find_args+=(-type f \()
-  first=1
-  for ext in "${ext_array[@]}"; do
-    if [[ "$first" -eq 1 ]]; then
-      find_args+=(-iname "*.${ext}")
-      first=0
-    else
-      find_args+=(-o -iname "*.${ext}")
-    fi
-  done
-  find_args+=(\))
-  # shellcheck disable=SC2086
-  find "${find_args[@]}" -print0 > "$file_list"
-fi
+  find_args+=(-type f)
+  if [[ "$all_files" -eq 0 ]]; then
+    # Extension predicates, case-insensitive
+    find_args+=(\()
+    first=1
+    for ext in "${ext_array[@]}"; do
+      if [[ "$first" -eq 1 ]]; then
+        find_args+=(-iname "*.${ext}")
+        first=0
+      else
+        find_args+=(-o -iname "*.${ext}")
+      fi
+    done
+    find_args+=(\))
+  fi
+  find "${find_args[@]}" -print0
+}
+
+for i in "${!real_paths[@]}"; do
+  if [[ "${path_kinds[$i]}" == "folder" ]]; then
+    find_in_folder "${real_paths[$i]}"
+  else
+    printf '%s\0' "${real_paths[$i]}"
+  fi
+done > "$file_list"
 
 file_count="$(tr '\0' '\n' < "$file_list" | grep -c . || true)"
 if [[ "$file_count" -eq 0 ]]; then
-  echo "error: no log files matched in $folder_real" >&2
+  echo "error: no log files matched in: ${real_paths[*]}" >&2
   if [[ "$all_files" -eq 1 ]]; then
     echo "  (searched all files, recursive=$recursive)" >&2
   else
@@ -392,7 +470,7 @@ stage_jsonl_inputs() {
   while IFS= read -r -d '' src; do
     # Mirror the source tree, as --structurize does, so same-named files in
     # different subdirectories stay distinct.
-    rel="${src#"${folder_real}"/}"
+    rel="${src#"${folder_real%/}"/}"
     dst="${jsonl_stage_dir}/${rel}"
     if needs_jsonl_name "$src"; then
       dst="${dst}.jsonl"
@@ -410,7 +488,21 @@ stage_jsonl_inputs() {
   folder_real="$jsonl_stage_dir"
 }
 
-if [[ "$structurize" -eq 0 ]]; then
+is_json_input() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    *.json|*.jsonl|*.ndjson) return 0 ;;
+    *) looks_like_jsonl "$1" ;;
+  esac
+}
+
+if [[ "$structurize" -eq 0 && "$dry_run" -eq 1 ]]; then
+  # Read-only: count what staging would rename, but stage nothing.
+  while IFS= read -r -d '' src_path; do
+    if needs_jsonl_name "$src_path"; then
+      jsonl_staged=$((jsonl_staged + 1))
+    fi
+  done < "$file_list"
+elif [[ "$structurize" -eq 0 ]]; then
   stage_needed=0
   while IFS= read -r -d '' src_path; do
     if needs_jsonl_name "$src_path"; then
@@ -424,8 +516,22 @@ if [[ "$structurize" -eq 0 ]]; then
 fi
 
 # --- Structurize unstructured logs ---
+#
+# Each text file is converted to JSONL by structurize.py: with its built-in vLLM
+# formats, or with the parser program named by --parser. A file that is already
+# JSON is never converted; it goes in as it is. A dry run converts nothing.
 
-if [[ "$structurize" -eq 1 ]]; then
+if [[ "$structurize" -eq 1 && "$dry_run" -eq 1 ]]; then
+  structurize_would=0
+  while IFS= read -r -d '' src_path; do
+    if is_json_input "$src_path"; then
+      structurize_passthrough=$((structurize_passthrough + 1))
+    else
+      structurize_would=$((structurize_would + 1))
+    fi
+  done < "$file_list"
+  [[ -n "$timestamp_key" ]] || timestamp_key="timestamp"
+elif [[ "$structurize" -eq 1 ]]; then
   structurize_script="${CLP_PLUGIN_BIN_DIR}/structurize.py"
   if [[ ! -f "$structurize_script" ]]; then
     echo "error: --structurize requires structurize.py but it was not found: $structurize_script" >&2
@@ -435,6 +541,8 @@ if [[ "$structurize" -eq 1 ]]; then
     echo "error: --structurize requires python3 but it is not installed" >&2
     exit 1
   fi
+  structurize_args=()
+  [[ -n "$parser_file" ]] && structurize_args=(--parser "$parser_file")
 
   structurize_tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/clp-s-structurize.XXXXXX")"
   structurize_ok=0
@@ -443,35 +551,51 @@ if [[ "$structurize" -eq 1 ]]; then
   original_folder_real="$folder_real"
 
   while IFS= read -r -d '' src_path; do
-    src_name="$(basename "$src_path")"
     # Mirror the source tree under the temp dir. Using only the basename would
     # collapse same-named files from different subdirectories (recursion is the
     # default), silently dropping all but one and duplicating it in the archive.
-    rel_path="${src_path#"${original_folder_real}"/}"
+    rel_path="${src_path#"${original_folder_real%/}"/}"
+    if is_json_input "$src_path"; then
+      dst_path="${structurize_tmpdir}/${rel_path}"
+      needs_jsonl_name "$src_path" && dst_path="${dst_path}.jsonl"
+      mkdir -p "$(dirname -- "$dst_path")"
+      ln -- "$src_path" "$dst_path" 2>/dev/null || cp -p -- "$src_path" "$dst_path"
+      printf '%s\0' "$dst_path" >> "$new_file_list"
+      structurize_passthrough=$((structurize_passthrough + 1))
+      echo "[structurize] $rel_path: already JSON, compressed as it is"
+      continue
+    fi
     dst_path="${structurize_tmpdir}/${rel_path}.json"
     mkdir -p "$(dirname -- "$dst_path")"
-    if python3 "$structurize_script" "$src_path" "$dst_path" >/dev/null 2>&1; then
+    err_file="${structurize_tmpdir}/.err"
+    started="$(date +%s)"
+    if out="$(python3 "$structurize_script" ${structurize_args[@]+"${structurize_args[@]}"} "$src_path" "$dst_path" 2>"$err_file")"; then
       if [[ -s "$dst_path" ]]; then
         printf '%s\0' "$dst_path" >> "$new_file_list"
         structurize_ok=$((structurize_ok + 1))
+        records="$(printf '%s\n' "$out" | grep -oE '[0-9]+ structured' | grep -oE '[0-9]+' | head -1 || true)"
+        echo "[structurize] $rel_path: ${records:-?} records in $(( $(date +%s) - started ))s"
       else
-        echo "warning: structurize produced empty output for $src_name, skipping" >&2
+        echo "warning: structurize produced empty output for $rel_path, skipping" >&2
         structurize_skip=$((structurize_skip + 1))
       fi
     else
-      echo "warning: structurize failed for $src_name, skipping" >&2
+      reason="$(head -1 "$err_file")"
+      [[ "$reason" == Traceback* ]] && reason="$(tail -1 "$err_file")"
+      echo "warning: structurize failed for $rel_path, skipping: $reason" >&2
       structurize_skip=$((structurize_skip + 1))
     fi
   done < "$file_list"
+  rm -f "${structurize_tmpdir}/.err"
 
-  if [[ "$structurize_ok" -eq 0 ]]; then
+  if [[ "$structurize_ok" -eq 0 && "$structurize_passthrough" -eq 0 ]]; then
     echo "error: structurize did not produce any output files" >&2
     rm -f "$new_file_list"
     exit 1
   fi
 
   if [[ "$structurize_skip" -gt 0 ]]; then
-    echo "warning: structurize skipped $structurize_skip file(s); proceeding with $structurize_ok structured file(s)" >&2
+    echo "warning: structurize skipped $structurize_skip file(s); proceeding with $((structurize_ok + structurize_passthrough)) file(s)" >&2
   fi
 
   # Replace file list with structurize output
@@ -483,7 +607,7 @@ if [[ "$structurize" -eq 1 ]]; then
   folder_real="$structurize_tmpdir"
 
   # Recompute file count from the structurized list
-  file_count="$structurize_ok"
+  file_count=$((structurize_ok + structurize_passthrough))
 
   # Auto-set timestamp key for structured JSONL output
   if [[ -z "$timestamp_key" ]]; then
@@ -491,6 +615,9 @@ if [[ "$structurize" -eq 1 ]]; then
   fi
 
   echo "Structurize: converted $structurize_ok file(s) to structured JSONL"
+  if [[ "$structurize_passthrough" -gt 0 ]]; then
+    echo "Structurize passed through: $structurize_passthrough JSON file(s)"
+  fi
   if [[ "$structurize_skip" -gt 0 ]]; then
     echo "Structurize skipped: $structurize_skip file(s)"
   fi
@@ -536,9 +663,13 @@ cmd+=(-f "$file_list" "$output_dir")
 
 # --- Plan / dry-run output ---
 
-echo "Folder: $input_folder"
-echo "Extensions: $extensions"
-echo "Recursive: $([ "$recursive" -eq 1 ] && echo 'yes' || echo 'no')"
+for i in "${!real_paths[@]}"; do
+  echo "Path: ${real_paths[$i]} (${path_kinds[$i]})"
+done
+if [[ "$has_folder" -eq 1 ]]; then
+  echo "Extensions: $extensions"
+  echo "Recursive: $([ "$recursive" -eq 1 ] && echo 'yes' || echo 'no')"
+fi
 echo "Input files: $file_count"
 echo "Input bytes: $total_bytes"
 if [[ -n "${resolved_archives_root:-}" ]]; then
@@ -547,8 +678,14 @@ if [[ -n "${resolved_archives_root:-}" ]]; then
 fi
 echo "Archives dir: $output_dir"
 echo "Timestamp key: ${timestamp_key:-none}"
-echo "Structurize: $([ "$structurize" -eq 1 ] && echo 'yes' || echo 'no')"
-if [[ "$jsonl_staged" -gt 0 ]]; then
+if [[ "$structurize" -eq 1 && "$dry_run" -eq 1 ]]; then
+  echo "Structurize: yes, $structurize_would file(s) to convert${parser_file:+ with $parser_file}, $structurize_passthrough JSON file(s) as they are (nothing converted in a dry run)"
+else
+  echo "Structurize: $([ "$structurize" -eq 1 ] && echo "yes${parser_file:+ (parser: $parser_file)}" || echo 'no')"
+fi
+if [[ "$jsonl_staged" -gt 0 && "$dry_run" -eq 1 ]]; then
+  echo "JSONL staged: $jsonl_staged file(s) would be renamed to .jsonl (content does not match the extension)"
+elif [[ "$jsonl_staged" -gt 0 ]]; then
   echo "JSONL staged: $jsonl_staged file(s) renamed to .jsonl (content did not match the extension)"
 fi
 echo "Archive mode: regular directory archive (--single-file-archive disabled)"
@@ -557,7 +694,7 @@ printf ' %q' "${cmd[@]}"
 echo
 
 if [[ "$dry_run" -eq 1 ]]; then
-  echo "Dry run only; no archive was created."
+  echo "Dry run only; nothing was converted, staged, or compressed."
   exit 0
 fi
 
@@ -644,18 +781,14 @@ reduction_percent="$(awk -v raw="$total_bytes" -v reduction="$reduction_bytes" '
 clp_archive_dir="$(resolve_clp_s_archive_dir "$output_dir" 2>/dev/null || true)"
 
 # Build extensions JSON array
-if [[ "$all_files" -eq 1 ]]; then
+paths_json="$(printf '%s\n' "${real_paths[@]}" | jq -R . | jq -s .)"
+source_type="$archive_prefix"
+if [[ "$has_folder" -eq 0 ]]; then
+  extensions_json='null'
+elif [[ "$all_files" -eq 1 ]]; then
   extensions_json='"*"'
 else
   extensions_json="$(printf '%s\n' "${ext_array[@]}" | jq -R . | jq -s .)"
-fi
-
-# Preserve the original source path for metadata when structurize is used,
-# since folder_real has been repointed at the structurize temp directory.
-if [[ "$structurize" -eq 1 ]]; then
-  metadata_source_path="$original_folder_real"
-else
-  metadata_source_path="$folder_real"
 fi
 
 metadata_file="$(clp_archive_metadata_file "$output_dir")"
@@ -664,10 +797,12 @@ jq -n \
   --arg schemaVersion "1" \
   --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg plugin "yscope-clp" \
-  --arg sourceType "folder" \
-  --arg sourcePath "$metadata_source_path" \
+  --arg sourceType "$source_type" \
+  --argjson sourcePaths "$paths_json" \
+  --arg parser "$parser_file" \
+  --arg sourcePath "$input_folder" \
   --arg sourceName "$folder_name" \
-  --argjson sourceRecursive "$recursive" \
+  --argjson sourceRecursive "$([[ "$has_folder" -eq 1 ]] && echo "$recursive" || echo null)" \
   --argjson sourceExtensions "$extensions_json" \
   --argjson sourceFileCount "$file_count" \
   --arg archiveRoot "${resolved_archives_root:-}" \
@@ -692,6 +827,7 @@ jq -n \
       name: $sourceName,
       recursive: $sourceRecursive,
       extensions: $sourceExtensions,
+      paths: $sourcePaths,
       fileCount: $sourceFileCount
     },
     archiveRoot: (if $archiveRoot == "" then null else $archiveRoot end),
@@ -700,6 +836,7 @@ jq -n \
     clpArchiveDir: (if $clpArchiveDir == "" then null else $clpArchiveDir end),
     timestampKey: (if $timestampKey == "" then null else $timestampKey end),
     structurize: ($structurizeFlag == 1),
+    parser: (if $parser == "" then null else $parser end),
     compression: {
       rawBytes: $inputBytes,
       archiveBytes: $archiveBytes,

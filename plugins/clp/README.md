@@ -73,7 +73,8 @@ The wrappers prefer `CLP_S_BIN`, then plugin-local `bin/clp-s`, then plugin-loca
 
 Local helpers (not `clp-s` passthroughs — they invoke `clp-s` only through the wrappers above, or not at all):
 
-- `bin/structurize.py` — converts unstructured text logs to structured JSONL. Used by `clp-s-compress-folder --structurize`; not called directly.
+- `bin/clp-detect-logs` — reads the first 128 KiB of each log file (read-only). JSON (two or more objects parsed) is reported with its structure, its timestamp field and its first records, every string cut to 128 characters; text is reported with its first lines, each cut to 256 characters, and whether they match a bundled `--structurize` format (vLLM). It suggests a `clp-s-compress-folder` command per group of files that need the same settings. `--parser FILE` dry-runs an agent-written parser on the lines read. See [Log Files](#log-files).
+- `bin/structurize.py` — converts text logs to structured JSONL: the built-in vLLM formats, or any format through `--parser FILE`, a Python file defining `parse_line(line)`. Used by `clp-s-compress-folder --structurize`; not called directly.
 - `bin/logtype-cache` — persistent cache of the `logtype-insights` classification, with incremental update when an archive grows. See [Logtype Cache](#logtype-cache).
 - `bin/logtype-insights-bootstrap` — one-command bootstrap for the `logtype-insights` skill: schema-discovery sample, per-field value distributions, logtype dictionary dump, per-template frequencies from the counts stored in the archive, and the classification-cache probe, summarized as grep-able `KEY=VALUE` lines.
 - `bin/logtype-cluster` (+ `logtype-cluster.py`) — groups semantically similar logtypes using embeddings from the semantic server so the LLM classifies one representative per cluster. See [Logtype Cluster](#logtype-cluster).
@@ -132,32 +133,49 @@ After compression, report these lines:
 
 Use the printed top-level `Archives dir` for search and decompression. The wrappers resolve the inner `clp-s` archive directory automatically. Metadata in `.yscope-clp-archive.json` maps archive to session file, agent, roots, timestamp key, SHA-256, compression stats, command, and resolved inner archive.
 
-## Folder Logs
+## Log Files
 
-Compress log files from an arbitrary folder:
+Compressing log files is two steps with a decision between them. First, see what each file holds (read-only; it reads the first 128 KiB of each file, so it is instant even on many-GB logs):
 
 ```bash
-./plugins/clp/bin/clp-s-compress-folder --folder /var/log/myapp
+./plugins/clp/bin/clp-detect-logs /var/log/myapp /data/vllm_worker_3.log
 ```
+
+It says whether each path is a file or a folder. Per file, if two or more JSON objects parse from the start, it is JSON: the report lists every field path with its type, the field holding a timestamp in every record and the kind of value, and the first records with every string cut to 128 characters (still valid JSON). Otherwise it is text: the report shows the first 20 lines, each cut to 256 characters, and says whether they match a bundled format that `--structurize` converts on its own (vLLM). For text without one, the agent works out the structure from those lines and writes a parser (below). The report ends with a `SUGGEST` command per group of files that need the same settings and `SKIP` lines for files that can't go in as they are. Then compress with the flags chosen from that report:
+
+```bash
+./plugins/clp/bin/clp-s-compress-folder --path /var/log/myapp --timestamp-key ts
+./plugins/clp/bin/clp-s-compress-folder --path /data/vllm_worker_3.log --structurize
+```
+
+`--path` takes a log file or a folder and can be repeated; the files found in all of them go into one list, which `clp-s c -f` compresses into one archive.
 
 Defaults:
 
-- extensions: `log,jsonl,json,txt,ndjson,out,err` (override with `--extensions`, or use `--extensions '*'` to include every regular file).
-- jsonl detection: on. A file whose first lines are JSON objects but whose name is not `.json`/`.jsonl`/`.ndjson` is handed to `clp-s` as a staged `*.jsonl` copy, because `clp-s` picks its parser by file name. Not applied with `--structurize`, which rewrites every file under a JSON name anyway.
-- recursive: yes (use `--no-recursive` for top-level only).
-- structurize: off (pass `--structurize` for unstructured text logs — see below).
-- timestamp key: none (pass `--timestamp-key KEY` if your logs have a known timestamp field; required for time-range search).
+- extensions (for folders): `log,jsonl,json,txt,ndjson,out,err` (override with `--extensions`, or use `--extensions '*'` to include every regular file). A file named with `--path` is always included.
+- jsonl detection: on. A file whose first lines are JSON objects but whose name is not `.json`/`.jsonl`/`.ndjson` is handed to `clp-s` as a staged `*.jsonl` copy, because `clp-s` picks its parser by file name.
+- recursive: yes (use `--no-recursive` for the top level of each folder only).
+- structurize: off (pass `--structurize` for text logs — see below).
+- timestamp key: none (pass the field `clp-detect-logs` reports as `--timestamp-key KEY`; required for time-range search).
 - archive root: `${TMPDIR:-/tmp}/yscope-clp-archives` (override per-run with `--archives-root DIR`). Ask only when the user wants persistent storage or a different root.
+- `--dry-run` is read-only: it prints the plan and converts, stages and compresses nothing.
 
-### Unstructured text logs
+### Text logs
 
-Plain-text logs (interleaved timestamp, logger, level, message) have no field structure for `clp-s` to index. `--structurize` runs each file through `bin/structurize.py` first, producing JSONL with `timestamp/logger/level/message` and setting `--timestamp-key timestamp` automatically:
+`clp-s` only ingests JSON, so text logs are converted first. `--structurize` runs each text file through `bin/structurize.py`, producing JSONL with `timestamp/logger/level/message` and setting `--timestamp-key timestamp` automatically. A file that is already JSON is compressed as it is, never converted:
 
 ```bash
-./plugins/clp/bin/clp-s-compress-folder --folder /var/log/vllm --structurize
+./plugins/clp/bin/clp-s-compress-folder --path /var/log/vllm --structurize
 ```
 
-Files that cannot be parsed are skipped with a warning. Do not use it on logs that are already JSON/JSONL/NDJSON.
+`structurize.py` knows the vLLM formats (sflow-wrapped `vllm_worker` lines and raw `vllm serve` output). For any other text format, write a Python file that defines `parse_line(line)`: it returns a dict with at least `timestamp` (ISO 8601 or epoch) and `message` for a line that starts a record, or `None` for a line that continues the previous one. Test it on the lines the detector reads, then compress with it:
+
+```bash
+./plugins/clp/bin/clp-detect-logs --parser /tmp/myapp_parser.py /var/log/myapp/app.log
+./plugins/clp/bin/clp-s-compress-folder --path /var/log/myapp/app.log --structurize --parser /tmp/myapp_parser.py
+```
+
+Each converted file prints `[structurize] <file>: N records`; a file that can't be converted is skipped with a warning that gives the reason.
 
 After compression, report:
 
@@ -169,15 +187,15 @@ After compression, report:
 - `Archives dir`
 - `Archive metadata`
 
-The resulting archive is compatible with `clp-s-search-kql` and `clp-s-decompress`. Use the printed top-level `Archives dir` for search and decompression. Metadata in `.yscope-clp-archive.json` records the source folder, extensions, file count, compression stats, command, and resolved inner archive.
+The resulting archive is compatible with `clp-s-search-kql` and `clp-s-decompress`. Use the printed top-level `Archives dir` for search and decompression. Metadata in `.yscope-clp-archive.json` records the input paths and their common directory, extensions, file count, parser, compression stats, command, and resolved inner archive.
 
 Useful commands:
 
 ```bash
 ./plugins/clp/bin/clp-s-compress-folder --show-archives-root
 ./plugins/clp/bin/clp-s-compress-folder --set-archives-root ~/clp-archives
-./plugins/clp/bin/clp-s-compress-folder --folder /var/log/myapp --dry-run
-./plugins/clp/bin/clp-s-compress-folder --folder ./logs --extensions log,txt
+./plugins/clp/bin/clp-s-compress-folder --path /var/log/myapp --dry-run
+./plugins/clp/bin/clp-s-compress-folder --path ./logs --extensions log,txt
 ```
 
 ## Search

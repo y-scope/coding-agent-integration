@@ -1,0 +1,517 @@
+#!/usr/bin/env python3
+"""
+clp-detect-logs - read the start of each log file and report what is there,
+so the agent can decide how to compress it (compress-folder skill, step 1).
+Read-only: it reads the first 128 KiB of each file and writes nothing.
+
+Compression used to start with a guess. The agent picked --structurize and
+--timestamp-key from a file's name or by reading the file itself, and a wrong
+guess only surfaced once clp-s-compress-folder had parsed every file: a 9.8 GiB
+CockroachDB log named .log was read end to end by structurize.py, which only
+knows vLLM formats, and skipped, although it was JSON with a usable timestamp
+field all along. This tool puts the evidence in front of the agent instead; the
+agent decides, then runs clp-s-compress-folder with the flags it chose.
+
+What it does with each file's first 128 KiB (--read-bytes):
+  JSON  It parses JSON objects one after another. Two or more (or one that
+        fills the whole file) make it JSON: one object per line, or objects
+        spanning lines. It reports the structure -- every field path with its
+        type and how many of the parsed records have it -- and the field that
+        holds a timestamp in every record, and prints the first records with
+        every string cut to 128 characters, so they are still valid JSON.
+  text  Otherwise it is text. The lines are checked against the bundled
+        formats structurize.py converts on its own (sflow-wrapped vLLM, raw
+        vllm serve output). Whatever matches or not, the first lines are
+        printed, each cut to 256 characters, for the agent: for a format with
+        no bundled converter, the agent works out the structure from them and
+        writes a parser (--parser), which is tested here on the lines read.
+  skip  Empty, binary (NUL bytes), and gzip/zstd/bzip2/xz/zip-compressed files
+        are reported and left out.
+It ends with a suggested clp-s-compress-folder command per group of files that
+need the same settings, and the files that can't be compressed as they are.
+
+Usage:
+  clp-detect-logs [options] PATH [PATH ...]
+
+  PATH                A log file or a folder; the report says which each one
+                      is. Folders are searched with the same rules as
+                      clp-s-compress-folder --path.
+  --extensions EXT,.. Extensions to match in folders (default:
+                      log,jsonl,json,txt,ndjson,out,err; '*' for every file).
+                      Files named directly are always included.
+  --no-recursive      Search only the top level of each folder.
+  --read-bytes N      Bytes read from the start of each file (default: 131072).
+  --show-lines N      Text lines printed per file (default: 20).
+  --show-records N    JSON records printed per file (default: 2).
+  --parser FILE       A Python file defining parse_line(line) -> dict | None,
+                      written for a text format with no bundled converter (see
+                      structurize.py). It is run on every whole line read from
+                      each text file, and the records it returns are shown, so
+                      it can be checked before a whole file is converted.
+
+Exit codes: 0 report printed, 1 no files found or a PATH does not exist,
+2 usage error.
+"""
+
+import argparse
+import json
+import os
+import re
+import shlex
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from structurize import RAW_VLLM_LINE, SFLOW_LINE, load_parser  # noqa: E402
+
+DEFAULT_EXTENSIONS = "log,jsonl,json,txt,ndjson,out,err"
+JSON_NAMES = (".json", ".jsonl", ".ndjson")
+TEXT_CHARS = 256          # a printed text line keeps this many characters
+JSON_STRING_CHARS = 128   # every string in a printed JSON record is cut to this
+MAX_FIELDS = 30           # field paths listed per JSON file
+
+COMPRESSED_MAGIC = [
+    (b"\x1f\x8b", "gzip"),
+    (b"\x28\xb5\x2f\xfd", "zstd"),
+    (b"BZh", "bzip2"),
+    (b"\xfd7zXZ\x00", "xz"),
+    (b"PK\x03\x04", "zip"),
+]
+
+# Text formats structurize.py converts without a parser: (name, line pattern,
+# the fields it produces).
+BUNDLED_FORMATS = [
+    ("vllm-sflow", SFLOW_LINE, "timestamp, logger, level, worker, message"),
+    ("vllm-raw", RAW_VLLM_LINE, "timestamp, logger, level, message"),
+]
+
+ISO_DATETIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?")
+TIMESTAMP_NAME = re.compile(
+    r"(^|[._])(@?timestamp|ts|time|t|date|datetime|time_local|eventtime|created_at|logged_at|\$date)$",
+    re.IGNORECASE)
+
+_DECODER = json.JSONDecoder()
+_SPACE = re.compile(r"\s*")
+CUT = "…(cut)"
+
+
+def human(n):
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return f"{n} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def shorten(text, limit=TEXT_CHARS):
+    text = text.replace("\t", " ")
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def discover(paths, extensions, recursive):
+    """Files to inspect, with the same matching rules as clp-s-compress-folder,
+    and what each given path is: [(path, "file" | "folder", files found)]."""
+    exts = None if extensions == "*" else [e.lower() for e in extensions.split(",")]
+    files, inputs = [], []
+    for path in paths:
+        if os.path.isfile(path):
+            files.append(os.path.realpath(path))
+            inputs.append((os.path.realpath(path), "file", 1))
+            continue
+        if not os.path.isdir(path):
+            raise FileNotFoundError(path)
+        root = os.path.realpath(path)
+        before = len(files)
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames.sort()
+            if not recursive:
+                dirnames[:] = []
+            for name in sorted(filenames):
+                full = os.path.join(dirpath, name)
+                # find -type f: regular files only, symlinks excluded.
+                if os.path.islink(full) or not os.path.isfile(full):
+                    continue
+                if exts is None or any(name.lower().endswith("." + e) for e in exts):
+                    files.append(full)
+        inputs.append((root, "folder", len(files) - before))
+    return files, inputs
+
+
+def compact_json(value, limit=JSON_STRING_CHARS):
+    """The value with every string cut to at most limit characters, ending in
+    "…" where it was cut. Only string values change, never the structure, so
+    the result is still valid JSON; long arrays keep their first 5 items."""
+    if isinstance(value, dict):
+        return {k: compact_json(v, limit) for k, v in value.items()}
+    if isinstance(value, list):
+        return [compact_json(v, limit) for v in value[:5]] + (["…"] if len(value) > 5 else [])
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit - 1] + "…"
+    return value
+
+
+def parse_objects(text):
+    """JSON objects parsed one after another from the start of text.
+
+    Returns (objects, spans_lines, stop): stop is None when the whole text was
+    consumed, else the offset where parsing stopped at something that is not a
+    whole JSON object -- often a record cut at the read limit.
+    """
+    objects, i, spans_lines = [], 0, False
+    while True:
+        i = _SPACE.match(text, i).end()
+        if i >= len(text):
+            return objects, spans_lines, None
+        try:
+            value, end = _DECODER.raw_decode(text, i)
+        except ValueError:
+            return objects, spans_lines, i
+        if not isinstance(value, dict):
+            return objects, spans_lines, i
+        spans_lines = spans_lines or "\n" in text[i:end]
+        objects.append(value)
+        i = end
+
+
+def parse_object_prefix(text):
+    """The leading fields of a JSON object cut short at the read limit.
+
+    json.loads rejects a record cut in the middle; this walks the object one
+    field at a time and stops where the text runs out, so the fields near its
+    start (where timestamps usually are) are still read. A value cut in the
+    middle is recorded as CUT. Returns the fields, or None.
+    """
+    text = text.lstrip()
+    if not text.startswith("{"):
+        return None
+    record, i = {}, 1
+    while True:
+        i = _SPACE.match(text, i).end()
+        if i >= len(text) or text[i] != '"':
+            break
+        try:
+            key, i = _DECODER.raw_decode(text, i)
+        except ValueError:
+            break
+        i = _SPACE.match(text, i).end()
+        if i >= len(text) or text[i] != ":":
+            break
+        i = _SPACE.match(text, i + 1).end()
+        try:
+            record[key], i = _DECODER.raw_decode(text, i)
+        except ValueError:
+            record[key] = CUT
+            break
+        i = _SPACE.match(text, i).end()
+        if i >= len(text) or text[i] != ",":
+            break
+        i += 1
+    return record or None
+
+
+def flatten(record, prefix="", depth=0):
+    for key, value in record.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict) and value and depth < 3:
+            yield from flatten(value, path + ".", depth + 1)
+        else:
+            yield path, value
+
+
+def type_name(value):
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    return "object"
+
+
+def timestamp_kind(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        for low, unit in ((1e18, "nanoseconds"), (1e15, "microseconds"), (1e12, "milliseconds"), (1e9, "seconds")):
+            if low <= value < low * 4.2:
+                return f"epoch {unit}"
+        return None
+    if isinstance(value, str):
+        if ISO_DATETIME.match(value):
+            return "ISO 8601 date-time string"
+        match = re.fullmatch(r"(\d{10}|\d{13}|\d{16}|\d{19})(\.\d{1,9})?", value)
+        if match:
+            unit = {10: "seconds", 13: "milliseconds", 16: "microseconds", 19: "nanoseconds"}[len(match.group(1))]
+            return f"epoch {unit} as a string"
+    return None
+
+
+def structure(records):
+    """Every field path with its types and how many records have it."""
+    fields = {}
+    for record in records:
+        for path, value in flatten(record):
+            entry = fields.setdefault(path, {"types": [], "seen": 0, "value": value})
+            entry["seen"] += 1
+            t = type_name(value)
+            if t not in entry["types"]:
+                entry["types"].append(t)
+    return fields
+
+
+def timestamp_fields(records, fields):
+    """Fields that hold a timestamp in every record, best first."""
+    usable = []
+    for path, entry in fields.items():
+        if entry["seen"] != len(records):
+            continue
+        kinds = {timestamp_kind(v) for r in records for p, v in flatten(r) if p == path}
+        if len(kinds) == 1 and None not in kinds:
+            usable.append((path, kinds.pop(), entry["value"]))
+    usable.sort(key=lambda u: (not TIMESTAMP_NAME.search(u[0]), u[0].count("."), u[0]))
+    return usable
+
+
+def inspect(path, read_bytes, show_lines, show_records, parse_line=None, parser_path=None):
+    name = os.path.basename(path)
+    size = os.path.getsize(path)
+    info = {"path": path, "name": name, "bytes": size}
+    with open(path, "rb") as f:
+        raw = f.read(read_bytes)
+    whole = len(raw) >= size
+    info["read"] = f"read {'all' if whole else human(len(raw))}"
+    if not raw.strip():
+        return {**info, "format": "empty", "skip": "empty file"}
+    for magic, kind in COMPRESSED_MAGIC:
+        if raw.startswith(magic):
+            return {**info, "format": "compressed", "evidence": f"{kind} data",
+                    "skip": f"{kind}-compressed; decompress it first"}
+    if b"\x00" in raw[:8192]:
+        return {**info, "format": "binary", "evidence": "NUL bytes in the first 8 KiB", "skip": "binary data"}
+    text = raw.decode("utf-8", "replace")
+
+    objects, spans_lines, stop = parse_objects(text)
+    # Parsing that stops at a "{" before the end of the file stopped at a record
+    # cut by the read limit, not at something that isn't JSON.
+    cut = stop is not None and not whole and parse_object_prefix(text[stop:]) is not None
+    if len(objects) >= 2 or (objects and (stop is None or cut)):
+        if cut:
+            info["read"] += "; the last record was cut there and is not counted"
+        return describe_json(info, objects, spans_lines, stop is not None and not cut, whole, show_records)
+    if not objects and cut:
+        # One record longer than everything read: JSON, known only in part.
+        info["read"] += "; the first record is longer than that, so only its leading fields were read"
+        return describe_json(info, [parse_object_prefix(text)], False, False, whole, show_records)
+
+    # Text. A last line cut at the read limit is not a whole line.
+    lines = text.split("\n")
+    if not whole and len(lines) > 1:
+        lines = lines[:-1]
+    elif not whole:
+        info["read"] += "; the first line is longer than that, so no other line was seen"
+    lines = [line.rstrip("\r") for line in lines if line.strip()]
+    if len(lines) > 1 or whole:
+        info["read"] += f", {len(lines)} line(s)"
+    info["format"] = "text"
+    info["lines"] = [shorten(line) for line in lines[:show_lines]]
+    for fmt, pattern, fields in BUNDLED_FORMATS:
+        hits = sum(1 for line in lines if pattern.match(line.strip()))
+        if hits:
+            info["bundled"] = fmt
+            info["evidence"] = (f"{hits} of {len(lines)} lines match the bundled {fmt} format; "
+                                f"--structurize converts it to {fields}")
+            info["timestamp_key"] = "timestamp"
+            return info
+    if parse_line:
+        return try_parser(info, lines, parse_line, parser_path, show_records)
+    info["evidence"] = "no bundled format matches"
+    # clp-s only ingests JSON ("Direct ingestion of unstructured log-text is not
+    # supported"), so text in a format with no bundled converter needs a parser.
+    info["skip"] = ("text with no bundled converter, and clp-s only ingests JSON: work out the structure "
+                    "from the lines, write parse_line(line) in a .py file, and test it with --parser FILE")
+    return info
+
+
+def describe_json(info, objects, spans_lines, stopped, whole, show_records):
+    records = [compact_json(o) for o in objects]
+    layout = "objects spanning lines" if spans_lines else "one object per line"
+    info["format"] = "json"
+    info["evidence"] = f"{len(objects)} object(s) parsed, {layout}"
+    if stopped:
+        info["evidence"] += "; after them the text is not a JSON object, so it is not all JSON"
+    if not info["name"].lower().endswith(JSON_NAMES):
+        info["evidence"] += "; the name is not .json/.jsonl/.ndjson, so compression stages it as .jsonl"
+    fields = structure(records)
+    listed = [f"{p}: {'|'.join(e['types'])}" + ("" if e["seen"] == len(records) else f" ({e['seen']} of {len(records)})")
+              for p, e in list(fields.items())[:MAX_FIELDS]]
+    info["fields"] = " · ".join(listed) + (f" · (+{len(fields) - MAX_FIELDS} more)" if len(fields) > MAX_FIELDS else "")
+    usable = timestamp_fields(records, fields)
+    if usable:
+        path, kind, value = usable[0]
+        info["timestamp_key"] = path
+        info["timestamp"] = f'"{path}": {kind}, e.g. {json.dumps(value, ensure_ascii=False)}'
+        if len(usable) > 1:
+            info["timestamp"] += "; also " + ", ".join(f'"{p}"' for p, _, _ in usable[1:4])
+    else:
+        info["timestamp"] = "no field holds a timestamp in every record; time-range search won't work"
+    info["records"] = [json.dumps(r, ensure_ascii=False) for r in records[:show_records]]
+    return info
+
+
+def try_parser(info, lines, parse_line, parser_path, show_records):
+    """Run an agent-written parse_line on the lines read, as structurize.py would."""
+    records, continued = [], 0
+    for number, line in enumerate(lines, 1):
+        try:
+            record = parse_line(line)
+        except Exception as e:  # agent-written code: report where it broke
+            info["parser"] = f"parse_line raised {type(e).__name__}: {e} on line {number}: {shorten(line, 120)}"
+            info["skip"] = "the parser failed on a line; fix it and run again"
+            return info
+        if record is None:
+            continued += 1
+        elif not isinstance(record, dict) or "timestamp" not in record or "message" not in record:
+            info["parser"] = (f'parse_line must return None or a dict with "timestamp" and "message"; '
+                              f"line {number} gave {shorten(repr(record), 120)}")
+            info["skip"] = "the parser returned a malformed record; fix it and run again"
+            return info
+        else:
+            records.append(compact_json(record))
+    if not records:
+        info["parser"] = f"parse_line returned None for all {len(lines)} lines"
+        info["skip"] = "the parser recognized no record start; fix it and run again"
+        return info
+    info["parser"] = (f"{parser_path}: {len(records)} of {len(lines)} lines start a record, "
+                      f"{continued} continue one")
+    fields = structure(records)
+    info["fields"] = " · ".join(f"{p}: {'|'.join(e['types'])}" for p, e in fields.items())
+    kind = timestamp_kind(records[0]["timestamp"])
+    value = json.dumps(records[0]["timestamp"], ensure_ascii=False)
+    info["timestamp"] = (f'"timestamp" from the parser: {kind}, e.g. {value}' if kind else
+                         f'"timestamp" from the parser is {value}, which is not ISO 8601 or epoch time; '
+                         "clp-s may not index it, so normalize it in parse_line")
+    info["records"] = [json.dumps(r, ensure_ascii=False) for r in records[:show_records]]
+    info["timestamp_key"] = "timestamp"
+    info["uses_parser"] = True
+    return info
+
+
+def suggest(results, inputs, args):
+    """One compress command per group of files that need the same settings.
+
+    A group that is every file found in a single folder is passed as that
+    folder; otherwise each file is passed as its own --path.
+    """
+    groups = {}
+    for r in results:
+        if r.get("skip"):
+            continue
+        if r.get("uses_parser"):
+            key = ("parser", None)
+        elif r.get("bundled"):
+            key = ("structurize", None)
+        else:
+            key = ("json", r.get("timestamp_key"))
+        groups.setdefault(key, []).append(r["path"])
+    compressible = [r["path"] for r in results if not r.get("skip")]
+    commands = []
+    for (mode, key), files in groups.items():
+        cmd = ["clp-s-compress-folder"]
+        if len(inputs) == 1 and inputs[0][1] == "folder" and files == compressible \
+                and len(files) == len(results):
+            cmd += ["--path", inputs[0][0]]
+            if args.extensions != DEFAULT_EXTENSIONS:
+                cmd += ["--extensions", args.extensions]
+            if args.no_recursive:
+                cmd += ["--no-recursive"]
+        else:
+            for f in files:
+                cmd += ["--path", f]
+        if mode == "structurize":
+            cmd += ["--structurize"]
+        elif mode == "parser":
+            cmd += ["--structurize", "--parser", args.parser]
+        elif key:
+            cmd += ["--timestamp-key", key]
+        commands.append(" ".join(shlex.quote(c) for c in cmd))
+    return commands
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Report what the start of each log file holds (read-only).")
+    parser.add_argument("paths", nargs="+", metavar="PATH")
+    parser.add_argument("--extensions", default=DEFAULT_EXTENSIONS)
+    parser.add_argument("--no-recursive", action="store_true")
+    parser.add_argument("--read-bytes", type=int, default=131072)
+    parser.add_argument("--show-lines", type=int, default=20)
+    parser.add_argument("--show-records", type=int, default=2)
+    parser.add_argument("--parser", metavar="FILE")
+    args = parser.parse_args(argv)
+    if min(args.read_bytes, args.show_lines, args.show_records) < 1:
+        parser.error("--read-bytes, --show-lines and --show-records must be positive")
+    if args.extensions != "*" and not all(re.fullmatch(r"[A-Za-z0-9_]+", e) for e in args.extensions.split(",")):
+        parser.error("--extensions takes alphanumeric extensions separated by commas, or '*'")
+    parse_line = None
+    if args.parser:
+        args.parser = os.path.realpath(args.parser)
+        parse_line = load_parser(args.parser)
+
+    try:
+        files, inputs = discover(args.paths, args.extensions, not args.no_recursive)
+    except FileNotFoundError as e:
+        print(f"error: no such file or folder: {e}", file=sys.stderr)
+        return 1
+    if not files:
+        print(f"error: no log files matched (extensions: {args.extensions})", file=sys.stderr)
+        return 1
+
+    for path, kind, count in inputs:
+        print(f"Input: {path} is a {kind}" + (f", {count} matching file(s)" if kind == "folder" else ""))
+    total = sum(os.path.getsize(f) for f in files)
+    print(f"Read the first {human(args.read_bytes)} of {len(files)} file(s), {human(total)} in all. "
+          "Nothing was written.")
+    folders = [path for path, kind, _ in inputs if kind == "folder"]
+    base = folders[0] if len(folders) == 1 else None
+    results = []
+    for path in files:
+        try:
+            r = inspect(path, args.read_bytes, args.show_lines, args.show_records, parse_line, args.parser)
+        except OSError as e:
+            r = {"path": path, "name": os.path.basename(path), "bytes": 0, "read": "could not be read",
+                 "format": "unreadable", "evidence": e.strerror or str(e), "skip": "cannot be read"}
+        results.append(r)
+        shown = os.path.relpath(path, base) if base and path.startswith(base + os.sep) else path
+        print(f"\n== {shown} ({human(r['bytes'])}; {r['read']})")
+        print(f"format:     {r['format']}" + (f": {r['evidence']}" if r.get("evidence") else ""))
+        for label in ("parser", "fields", "timestamp"):
+            if r.get(label):
+                print(f"{label + ':':<11} {r[label]}")
+        for label, items in (("records:", r.get("records", [])), ("lines:", r.get("lines", []))):
+            if label == "lines:" and r.get("records"):
+                continue  # a working parser's records say more than its raw lines
+            for i, item in enumerate(items):
+                print(f"{label if i == 0 else '':<11} {item}")
+        if r.get("skip"):
+            print(f"skip:       {r['skip']}")
+
+    counts = {}
+    for r in results:
+        counts[r["format"]] = counts.get(r["format"], 0) + 1
+    print("\nSUMMARY files=" + str(len(results)) + " " + " ".join(f"{k}={v}" for k, v in counts.items()))
+    commands = suggest(results, inputs, args)
+    for c in commands:
+        print(f"SUGGEST {c}")
+    for r in results:
+        if r.get("skip"):
+            print(f"SKIP    {r['path']}: {r['skip']}")
+    if len(commands) > 1:
+        print("NOTE    One archive takes one --timestamp-key, and --structurize converts every text file it is "
+              "given, so files that need different settings are compressed in separate runs. Leave out any "
+              "you don't need.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

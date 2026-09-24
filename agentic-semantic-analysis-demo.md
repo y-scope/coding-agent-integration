@@ -51,7 +51,7 @@ For prepared JSONL whose timestamp field is named `timestamp`:
 
 ```bash
 "$DEMO_BIN/clp-s-compress-folder" \
-  --folder "$DEMO_LOGS" \
+  --path "$DEMO_LOGS" \
   --extensions jsonl,ndjson \
   --timestamp-key timestamp \
   --output-dir "$DEMO_ARCHIVE"
@@ -64,7 +64,7 @@ For prepared JSONL whose timestamp field is named `timestamp`:
   "$DEMO_ARCHIVE"
 ```
 
-Use the actual timestamp field for your data. Supported plain-text logs can instead be ingested with `--structurize`; inspect parsing warnings and account for skipped files. Do not apply that preprocessing to already structured JSONL.
+Use the actual timestamp field for your data; `clp-detect-logs "$DEMO_LOGS"` reports it from the first 128 KiB of each file. Text logs can instead be ingested with `--structurize` (with `--parser FILE` for a format other than vLLM); inspect parsing warnings and account for skipped files. JSONL is never structurized.
 
 Save the compression summary and bootstrap output. Confirm that records were ingested, inspect the schema, and require `FREQS=OK` for the dictionary-based demo. If it reports `FREQS=UNAVAILABLE`, recompress the logs with the current binary. Bootstrap field distributions are sampled and must not be reported as complete frequencies.
 

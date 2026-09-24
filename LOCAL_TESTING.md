@@ -15,7 +15,7 @@ Install or have available:
 - `bash`
 - `jq`
 - `shellcheck`
-- `python3` — required by `clp-s-compress-folder --structurize`, which runs each input file through `bin/structurize.py`.
+- `python3` — required by `clp-detect-logs`, and by `clp-s-compress-folder --structurize`, which runs each text file through `bin/structurize.py`.
 - `clp-s` on `PATH` for wrapper compression/search. If `clp-s` is not on `PATH`, set `CLP_S_BIN=/path/to/clp-s` to point the wrappers at a specific binary. The Folder + Logtype smoke test needs **clp-core 0.13+** (shapes API) for `stats.log_shapes`; the session wrapper smoke tests work on older builds too.
 
 The plugin also reads marketplace manifests from this repository's `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`, both of which point to `./plugins/clp`.
@@ -39,7 +39,8 @@ for f in plugins/clp/bin/clp-s-* \
   bash -n "$f"
 done
 python3 -m py_compile plugins/clp/bin/logtype-cluster.py \
-  plugins/clp/bin/logtype-cache plugins/clp/bin/structurize.py
+  plugins/clp/bin/logtype-cache plugins/clp/bin/structurize.py \
+  plugins/clp/bin/clp-detect-logs
 
 shellcheck \
   plugins/clp/bin/clp-s-list-sessions \
@@ -120,19 +121,25 @@ Claude and Codex share this wrapper directory. Agent-specific tuning lives in `p
 
 ## Folder + Logtype Smoke Test
 
-Covers `clp-s-compress-folder --structurize` and the `logtype-insights` flow. Point `LOG_DIR` at any folder of plain-text logs.
+Covers `clp-detect-logs`, `clp-s-compress-folder --structurize` and the `logtype-insights` flow. Point `LOG_DIR` at a folder of vLLM text logs (`release-testing/sample-logs/vllm` works).
 
 ```bash
 LOG_DIR=/path/to/logs
 FOLDER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/yscope-clp-folder-smoke.XXXXXX")"
 
+./plugins/clp/bin/clp-detect-logs "$LOG_DIR"
+```
+
+Expected: `Input: ... is a folder, N matching file(s)`, a `format: text: ... match the bundled vllm-sflow format` (or `vllm-raw`) block per file, and `SUGGEST clp-s-compress-folder --path ... --structurize`. It writes nothing. Then compress:
+
+```bash
 ./plugins/clp/bin/clp-s-compress-folder \
-  --folder "$LOG_DIR" \
+  --path "$LOG_DIR" \
   --structurize \
   --archives-root "$FOLDER_DIR"
 ```
 
-Expected output includes `Structurize: converted N file(s)`, the compression stats, `Archives dir`, and `Archive metadata`.
+Expected output includes one `[structurize] <file>: N records` line per file, `Structurize: converted N file(s)`, the compression stats, `Archives dir`, and `Archive metadata`.
 
 Discover the schema and dump the logtype dictionary from the printed `Archives dir`:
 
