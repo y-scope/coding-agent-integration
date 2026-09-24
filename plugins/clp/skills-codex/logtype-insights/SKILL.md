@@ -29,7 +29,7 @@ Each shell invocation is independent — shell variables do not persist between 
 
 2. Report compression stats when you compressed the folder: `Raw input bytes`, `Archive bytes`, `Compression ratio`, `File size reduction`, `Input files`, `Archives dir`, `Archive metadata`.
 
-3. **Bootstrap.** Tell the user you are sampling the schema, dumping the logtype dictionary, and probing the classification cache — then run the one command that does all of it (it also reads the per-template frequencies that clp-s stored in the archive):
+3. **Bootstrap.** Tell the user you are analyzing and classifying the log shape — then run the one command that does all of it (it also reads the per-template frequencies that clp-s stored in the archive):
 
    ```bash
    ~/.codex/marketplaces/yscope/plugins/clp/bin/logtype-insights-bootstrap <archive-dir>
