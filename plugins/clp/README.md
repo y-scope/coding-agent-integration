@@ -77,8 +77,9 @@ Local helpers (not `clp-s` passthroughs — they invoke `clp-s` only through the
 
 - `bin/clp-detect-logs` — reads the first 128 KiB of each log file (read-only). JSON (two or more objects parsed) is reported with its structure, its timestamp field and its first records, every string cut to 128 characters; text is reported with its first lines, each cut to 256 characters, and whether they match a bundled `--structurize` format (vLLM). It suggests a `clp-s-compress-folder` command per group of files that need the same settings. `--parser FILE` dry-runs an agent-written parser on the lines read. See [Log Files](#log-files).
 - `bin/structurize.py` — converts text logs to structured JSONL: the built-in vLLM formats, or any format through `--parser FILE`, a Python file defining `parse_line(line)`. Used by `clp-s-compress-folder --structurize`; not called directly.
-- `bin/log-shape-cache` — persistent cache of the `log-insights` classification, with incremental update when an archive grows. See [Log Shape Cache](#log-shape-cache).
-- `bin/log-shape-insights-bootstrap` — one-command bootstrap for the `log-insights` skill: schema-discovery sample, per-field value distributions, log shape dictionary dump, per-template frequencies from the counts stored in the archive, and the classification-cache probe, summarized as grep-able `KEY=VALUE` lines.
+- `bin/clp-s-schema-tree` — lists every field of an archive from its merged schema tree (`stats.schema_tree`), with no sampling: `FIELD path=… type=… records=N` per field, the KQL path first (an array element's fields are queried through the array, so `message.content[].name` is `message.content.name`; `shown=` gives the `[]` form). An object with many children that all look alike, such as data used as keys, is collapsed into one `*` row. With `--log-shapes-file` (a `stats.log_shapes` dump carrying `node_counts`), each text field also gets `values=` and `templates=`, and `TEXT_FIELDS=` lists the text fields, most values first.
+- `bin/log-shape-cache` — persistent cache of the `log-insights` classification, with incremental update when an archive grows. See [Log Shape Cache](#log-shape-cache). Its `fields` subcommand writes, per template hash, the fields its values came from, from a dump with `node_counts` and the archive's schema tree.
+- `bin/log-shape-insights-bootstrap` — one-command bootstrap for the `log-insights` skill: the schema tree's fields (`FIELD`, `TEXT_FIELDS=`), value distributions for the most common scalar fields from a sample, the fields each template came from (`TEMPLATE_FIELDS_FILE=`), log shape dictionary dump, per-template frequencies from the counts stored in the archive, and the classification-cache probe, summarized as grep-able `KEY=VALUE` lines.
 - `bin/log-shape-cluster` (+ `log-shape-cluster.py`) — groups semantically similar log shapes using embeddings from the semantic server so the LLM classifies one representative per cluster. See [Log Shape Cluster](#log-shape-cluster).
 - `bin/log-shape-insight-extract` — builds the `log-insights` insight-pass inputs from a classification, joining its template hashes to the texts it streams from the archive's frequencies file: templates grouped by category (top N by frequency, truncated), the core plan (the `core` entries, one per line, high priority first, reporting entries without a valid `match` filter or ranking as `QUERY_PLAN_INVALID=`), the `drill` entries apart (`/tmp/log-shape-drill-plan.txt`), and, with frequencies, the exact records per category with the classifier's priority and why (`/tmp/log-shape-category-totals.json`) and the top templates overall and per category with their counts and categories (`/tmp/log-shape-top-templates.json`). Bounded, so classifications holding huge near-duplicate templates stay fast. It also empties the focus inbox, so a new analysis starts with no focus.
 - `bin/log-shape-baseline-plan` — writes the app-agnostic baseline as its own plan (`/tmp/log-shape-baseline-plan.txt`), run by its own pool while the templates are classified: it samples the schema's severity and logger values from the head of the archive, then adds a `count` per common value, a `count` for the residual (everything else), a `then` rule that fetches the records behind a small severity residual, and one scoped semantic entry. It never uses `--unique`, which scans every record.
@@ -134,6 +135,8 @@ After compression, report these lines:
 - `Archives dir`
 - `Selected session`
 - `Archive metadata`
+
+Sessions are always compressed with `--structurize-arrays`. A session record keeps its prompts, replies, tool calls and tool output in the `message.content` array; structured, each element's fields become schema-tree columns, so their text is templated into log shapes and each field can be queried and counted. Unstructured, the array is one opaque string. On one 97 MB session this also made the archive smaller (10.6× against 9.1×) and raised the log shape count from 5,292 to 25,524.
 
 Use the printed top-level `Archives dir` for search and decompression. The wrappers resolve the inner `clp-s` archive directory automatically. Metadata in `.yscope-clp-archive.json` maps archive to session file, agent, roots, timestamp key, time range (`timeRange`, from `clp-s --print-archive-stats`, the same as `clp-s-compress-folder` records), SHA-256, compression stats, command, and resolved inner archive.
 
@@ -269,7 +272,7 @@ jq -s 'length' /tmp/log-shapes.ndjson
 
 This reads the dictionary rather than every record, so it is cheap regardless of archive size: a run with millions of records typically has tens to a few hundred templates. Every subsequent query is derived from a template that is known to exist, instead of guessing keywords that may not appear at all.
 
-The skill is app-agnostic — it discovers the schema (timestamp/severity/logger/ message field names) from a sample record, so it works on structurized text archives and native-JSON archives alike.
+The skill is app-agnostic — it reads the fields (timestamp/severity/logger/message candidates and every text field) from the archive's merged schema tree, so it works on structurized text archives and native-JSON archives alike.
 
 The skill's mechanical preamble is packaged as one command:
 
@@ -343,6 +346,18 @@ LTC=./plugins/clp/bin/log-shape-cluster
 ```
 
 `cluster` prints `CLUSTERS=`, `TEMPLATES=` (full count), `EMBEDDED=` (distinct truncated texts actually sent), and `MAX_CHARS=`.
+
+Field rules cut the work further when the archive counts log shapes per field (a `node_counts` dump; see `log-shape-cache fields`). `fields` summarizes each text field, and a rules file gives whole fields one category, such as source code, diffs or agent reasoning:
+
+```bash
+"$LTC" fields --template-fields /tmp/log-shape-template-fields.ndjson \
+  --freqs-file /tmp/log-shape-freqs.ndjson        # one line per text field
+"$LTC" cluster --max-chars 500 --input /tmp/log-shapes-to-classify.ndjson \
+  --template-fields /tmp/log-shape-template-fields.ndjson \
+  --field-rules /tmp/log-shape-field-rules.json   # {"field_rules": [{"field", "category"}]}
+```
+
+A template whose values sit in ruled fields (at least 90% of them; `--rule-share`) takes the category of the ruled field holding most of them and is neither embedded nor clustered (`FIELD_RULED=`); `expand` adds it back by hash and refuses a rule whose category is missing from the classifier's taxonomy. On one 44,818-record Claude Code session, rules on 24 fields assigned 17,205 of 25,483 templates, and the remaining 8,278 formed 1,543 clusters instead of 4,182.
 
 - Endpoint: `--semantic-endpoint`, then `$CLP_SEMANTIC_ENDPOINT`, then the `semantic-endpoint` config file, then the built-in remote endpoint — the same chain as [Semantic search](#semantic-search). The launcher resolves and health-checks it, then passes it down.
 - Model contract: `BAAI/bge-base-en-v1.5`, int8[768] — matching what `clp-s` advertises, so both hit the same server-side cache. Threshold: cosine 0.80 (override with `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to 0.85–0.90 to split more, lower to merge more). `--batch-size` sets texts per request (default 256); `--max-request-bytes` (`$CLP_LOG_SHAPE_MAX_REQUEST_BYTES`, default 100 000 000) caps the encoded size of any single request body.

@@ -175,6 +175,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "li
 from classification import classification_errors, plan_errors, taxonomy_errors  # noqa: E402
 from log_shapes import (  # noqa: E402
     DEFAULT_MAX_CHARS, app_key, default_max_chars, prefix_hash, template_hash, truncate_chars)
+from schema_tree import load_trees, node_fields  # noqa: E402
 
 # Cache keys and template hashes are sha256 hex digests.
 _KEY_RE = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -507,6 +508,9 @@ def valid_count(obj):
     return count if isinstance(count, int) and not isinstance(count, bool) else None
 
 
+NO_FIELDS_HINT = ("the archive was compressed by a clp-s build that does not store "
+                  "per-field log shape counts.")
+
 NO_COUNTS_HINT = ("the archive was compressed by a clp-s build that does not store "
                   "per-log-shape counts. Recompress it with the current plugin.")
 
@@ -524,6 +528,42 @@ def cmd_normalize(args):
         return 1
     for lt in sorted(log_shapes):
         print(json.dumps({"log_shape": lt}, ensure_ascii=False))
+    return 0
+
+
+def cmd_fields(args):
+    """The fields each template's values came from, as {"hash":"...",
+    "fields":{"<kql path>":N,...}} NDJSON, from a stats.log_shapes dump whose
+    lines carry node_counts and the archive's stats.schema_tree output. Counts
+    are summed per template hash across archives, since archives number their
+    schema-tree nodes independently. Exit 1 when no line carries node_counts
+    (a clp-s build that does not store per-field counts)."""
+    with open(args.tree_file, "r", encoding="utf-8") as f:
+        trees = load_trees(f)
+    paths = {
+        t.get("archive_id"): {node_id: field[0] for node_id, field in node_fields(t).items()}
+        for t in trees
+    }
+    by_hash = {}
+    try:
+        for obj, lt in iter_rendered(args.shapes_file):
+            node_counts = obj.get("node_counts")
+            if not isinstance(node_counts, dict):
+                continue
+            fields = by_hash.setdefault(template_hash(lt), {})
+            archive_paths = paths.get(obj.get("archive_id"), {})
+            for node_id, n in node_counts.items():
+                path = archive_paths.get(int(node_id))
+                if path is not None:
+                    fields[path] = fields.get(path, 0) + n
+    except InputError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if not by_hash:
+        print("error: no log shape carries node_counts; " + NO_FIELDS_HINT, file=sys.stderr)
+        return 1
+    for h, fields in by_hash.items():
+        print(json.dumps({"hash": h, "fields": fields}, ensure_ascii=False))
     return 0
 
 
@@ -972,6 +1012,11 @@ def main(argv=None):
     pf.add_argument("--archive-ids", default=None,
                     help="Comma-separated archive ids to read from the store instead of a dump.")
     pf.set_defaults(func=cmd_freqs)
+
+    pfd = sub.add_parser("fields", help="The fields each template came from, from a dump with node_counts.")
+    pfd.add_argument("--shapes-file", default=None, help="Input file (default: stdin).")
+    pfd.add_argument("--tree-file", required=True, help="stats.schema_tree output of the same archives.")
+    pfd.set_defaults(func=cmd_fields)
 
     pi = sub.add_parser("ingest", help="Render a stats.log_shapes dump once; store its archives.")
     pi.add_argument("--shapes-file", default=None, help="Input file (default: stdin).")

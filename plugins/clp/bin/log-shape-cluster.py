@@ -407,6 +407,91 @@ def embed_texts(url, texts, batch_size, max_request_bytes):
     return [l2_normalize([float(x) for x in vector]) for vector in vectors]
 
 
+def load_template_fields(path):
+    """{template hash: {field path: values}} from `log-shape-cache fields`."""
+    fields = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.startswith("{"):
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj.get("hash"), str) and isinstance(obj.get("fields"), dict):
+                    fields[obj["hash"]] = obj["fields"]
+    except OSError as exc:
+        fail(1, f"cannot read --template-fields file: {exc}")
+    return fields
+
+
+def load_field_rules(path):
+    """[{"field", "category"}] from a {"field_rules": [...]} JSON file; exit 2
+    naming each malformed rule."""
+    doc = load_json_file(path, "--field-rules")
+    rules = doc.get("field_rules") if isinstance(doc, dict) else None
+    if not isinstance(rules, list):
+        fail(2, f"--field-rules file has no \"field_rules\" list: {path}")
+    problems = []
+    seen = set()
+    for n, rule in enumerate(rules, 1):
+        field = rule.get("field") if isinstance(rule, dict) else None
+        category = rule.get("category") if isinstance(rule, dict) else None
+        if not isinstance(field, str) or not field:
+            problems.append(f"field rule #{n} has no \"field\"")
+        elif field in seen:
+            problems.append(f"field {field!r} has more than one rule")
+        elif not isinstance(category, str) or not category.strip():
+            problems.append(f"field rule #{n} ({field}) has no \"category\"")
+        seen.add(field)
+    if problems:
+        fail(2, *problems)
+    return [{"field": r["field"], "category": r["category"].strip()} for r in rules]
+
+
+def ruled_category(fields, rule_of, share):
+    """The category a template gets from field rules: the rule of the ruled
+    field carrying most of its values, when ruled fields carry at least `share`
+    of them; else None, and the template is clustered. A template that also
+    appears, rarely, in an unruled field (a hook command echoed into a second
+    field) still follows its field."""
+    if not fields:
+        return None
+    ruled = {f: n for f, n in fields.items() if f in rule_of}
+    total = sum(fields.values())
+    if not ruled or sum(ruled.values()) < share * total:
+        return None
+    return rule_of[max(ruled, key=lambda f: (ruled[f], f))]
+
+
+def cmd_fields(args):
+    """One JSON line per text field, most templates first: its templates,
+    values, and the most frequent templates in it as examples. It is what the
+    agent reads to decide which fields get one category as a whole."""
+    fields_of = load_template_fields(args.template_fields)
+    stats = {}
+    try:
+        with open(args.freqs_file, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.startswith("{"):
+                    continue
+                obj = json.loads(line)
+                fields = fields_of.get(obj.get("hash"))
+                if not fields:
+                    continue
+                for field, values in fields.items():
+                    entry = stats.setdefault(field, {"templates": 0, "values": 0, "examples": []})
+                    entry["templates"] += 1
+                    entry["values"] += values
+                    if len(entry["examples"]) < args.examples:
+                        entry["examples"].append(truncate_chars(obj.get("log_shape", ""), args.example_chars))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(1, f"cannot read --freqs-file: {exc}")
+    for field, entry in sorted(stats.items(), key=lambda kv: (-kv[1]["templates"], kv[0])):
+        print(json.dumps({"field": field, **entry}, ensure_ascii=False))
+
+
 def cmd_cluster(args):
     try:
         threshold = float(args.threshold)
@@ -424,7 +509,27 @@ def cmd_cluster(args):
 
     templates = load_log_shapes(args.input)
 
-    url = embeddings_url(resolve_endpoint(args.semantic_endpoint))
+    # Templates that occur only in fields with a rule take the rule's category
+    # and are neither embedded nor shown to the classifier.
+    field_rules, field_ruled = [], []
+    if args.field_rules:
+        if not args.template_fields:
+            fail(3, "--field-rules requires --template-fields")
+        field_rules = load_field_rules(args.field_rules)
+        rule_of = {r["field"]: r["category"] for r in field_rules}
+        fields_of = load_template_fields(args.template_fields)
+        remaining = []
+        for template in templates:
+            h = template_hash(template)
+            category = ruled_category(fields_of.get(h), rule_of, args.rule_share)
+            if category is None:
+                remaining.append(template)
+            else:
+                field_ruled.append({"hash": h, "prefix_hash": prefix_hash(template, args.max_chars),
+                                    "category": category})
+        templates = remaining
+
+    url = embeddings_url(resolve_endpoint(args.semantic_endpoint)) if templates else None
     # Embed each distinct truncated text once, then realign onto the full
     # template list, so everything below stays full-template indexed.
     unique_texts, index_of = dedup_truncated(templates, args.max_chars)
@@ -479,6 +584,8 @@ def cmd_cluster(args):
         "template_count": len(templates),
         "embedded_count": len(unique_texts),
         "max_chars": args.max_chars,
+        "field_rules": field_rules,
+        "field_ruled": field_ruled,
         "clusters": [
             {"id": c["id"], "representative": c["representative"],
              "members": c["members"], "count": c["count"]}
@@ -491,6 +598,8 @@ def cmd_cluster(args):
 
     print(f"CLUSTERS={len(clusters)}")
     print(f"TEMPLATES={len(templates)}")
+    if args.field_rules:
+        print(f"FIELD_RULED={len(field_ruled)}")
     print(f"EMBEDDED={len(unique_texts)}")
     print(f"MAX_CHARS={args.max_chars}")
     print(f"MODEL={MODEL_NAME}")
@@ -520,7 +629,9 @@ def cmd_expand(args):
     classification = load_json_file(args.classification, "--classification")
 
     clusters = clusters_doc.get("clusters") if isinstance(clusters_doc, dict) else None
-    if not isinstance(clusters, list) or not clusters:
+    field_ruled = clusters_doc.get("field_ruled") or [] if isinstance(clusters_doc, dict) else []
+    field_rules = clusters_doc.get("field_rules") or [] if isinstance(clusters_doc, dict) else []
+    if not isinstance(clusters, list) or not (clusters or field_ruled):
         fail(2, f"--clusters file has no \"clusters\" list: {args.clusters}")
     if not isinstance(classification, dict):
         fail(2, "--classification file must be a JSON object")
@@ -574,7 +685,15 @@ def cmd_expand(args):
     max_chars = clusters_doc.get("max_chars")
     if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:
         max_chars = DEFAULT_MAX_CHARS
-    templates = []
+    # A field rule's category must be one the classifier ranked.
+    taxonomy_names = {c.get("category") for c in classification.get("taxonomy", [])
+                      if isinstance(c, dict)}
+    unknown = sorted({r["category"] for r in field_rules} - taxonomy_names)
+    if unknown:
+        fail(2, "field rule categories missing from the taxonomy: " + ", ".join(unknown),
+             "add them to the taxonomy with a priority and why, then re-run expand")
+
+    templates = list(field_ruled)
     for cluster in clusters:
         cat = categories[cluster["id"]]
         for member in cluster.get("members", []):
@@ -589,13 +708,17 @@ def cmd_expand(args):
     expanded["templates"] = templates
     expanded["query_plan"] = classification.get("query_plan", [])
     expanded["max_chars"] = max_chars
+    if field_rules:
+        expanded["field_rules"] = field_rules
 
     with open(args.output, "w", encoding="utf-8") as fh:
         json.dump(expanded, fh, ensure_ascii=False, indent=1)
         fh.write("\n")
 
     print(f"TEMPLATES={len(templates)}")
-    print(f"CATEGORIES={len(set(categories.values()))}")
+    if field_ruled:
+        print(f"FIELD_RULED={len(field_ruled)}")
+    print(f"CATEGORIES={len({t['category'] for t in templates})}")
     print(f"OUTPUT={args.output}")
 
 
@@ -625,9 +748,27 @@ def main():
                            help=f"ceiling on one embedding request body "
                                 f"(default: {DEFAULT_MAX_REQUEST_BYTES}, or "
                                 f"$CLP_LOG_SHAPE_MAX_REQUEST_BYTES)")
+    p_cluster.add_argument("--template-fields", default=None,
+                           help="`log-shape-cache fields` output: the fields each template came from")
+    p_cluster.add_argument("--field-rules", default=None,
+                           help='{"field_rules": [{"field", "category"}]} JSON: templates whose values sit '
+                                "in ruled fields take the rule's category and are not clustered")
+    p_cluster.add_argument("--rule-share", type=float, default=0.9,
+                           help="share of a template's values that ruled fields must carry for "
+                                "it to take a rule's category (default: 0.9)")
     p_cluster.add_argument("--output", default="/tmp/log-shape-clusters.json",
                            help="clusters JSON path (default: /tmp/log-shape-clusters.json)")
     p_cluster.set_defaults(func=cmd_cluster)
+
+    p_fields = sub.add_parser("fields",
+                              help="summarize each text field: templates, values, examples")
+    p_fields.add_argument("--template-fields", required=True,
+                          help="`log-shape-cache fields` output")
+    p_fields.add_argument("--freqs-file", required=True,
+                          help="the bootstrap's FREQS_FILE (most frequent first)")
+    p_fields.add_argument("--examples", type=int, default=3)
+    p_fields.add_argument("--example-chars", type=int, default=160)
+    p_fields.set_defaults(func=cmd_fields)
 
     p_expand = sub.add_parser("expand",
                               help="propagate per-cluster categories to all members")

@@ -63,13 +63,17 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
    KQL syntax rules (do not violate):
    - Time ranges: ONLY via --tge/--tle flags with epoch ms — NEVER as KQL predicates
    - Array fields: dot notation only — message.content.type:X NOT message.content[].type:X
+   - Avoid NOT on a field that some records lack: those records drop out entirely.
+     `type:user AND NOT message.content.type:tool_result` returns 5 records on a
+     session with 116 typed prompts. Filter positively instead.
    - Convert timestamps: python3 -c "from datetime import datetime,timezone; print(int(datetime(Y,M,D,h,m,s,tzinfo=timezone.utc).timestamp()*1000))"
 
    Semantic search: use semantic("query") — the wrapper auto-selects a working
    endpoint, so no endpoint flags are needed.
 
    Suggested starting queries:
-   - Tool call breakdown: list tool names with --unique message.content.name, then --count per name using message.content.name:TOOL
+   - Fields: PLUGIN_BIN/clp-s-schema-tree ARCHIVE lists every field with its type and record count
+   - Tool call breakdown: --count per tool with message.content.name:TOOL (Bash, Edit, Read, Write, Agent, ...); --unique returns nothing for a field inside an array
    - Failures: toolUseResult.success:false OR toolUseResult.stderr:* OR level:error
    - Long turns: subtype:turn_duration AND durationMs >= 30000
    - Compaction: subtype:compact_boundary

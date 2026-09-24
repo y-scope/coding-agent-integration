@@ -33,6 +33,7 @@ appears elsewhere in the facts, or a wrong claim in words, is not caught.
 """
 
 import argparse
+import json
 import re
 import sys
 from decimal import Decimal, InvalidOperation
@@ -86,6 +87,8 @@ def main(argv=None) -> int:
     ap.add_argument("report")
     ap.add_argument("--facts", default="/tmp/log-shape-insight-facts.md")
     ap.add_argument("--also", action="append", default=[])
+    ap.add_argument("--schema-tree-file", default=None,
+                    help="clp-s-schema-tree --json-out file; every path in it is a field")
     args = ap.parse_args(argv)
 
     try:
@@ -147,6 +150,12 @@ def main(argv=None) -> int:
 
     m = FIELDS_LINE.search(facts)
     fields = set(re.findall(r"`([^`]+)`", m.group(1))) if m else None
+    if fields is not None and args.schema_tree_file:
+        # Every path in the archive's schema tree is a field, not only the ones the
+        # facts name; the display form marks array elements with [].
+        with open(args.schema_tree_file, "r", encoding="utf-8") as f:
+            for row in json.load(f):
+                fields.update(p for p in (row.get("path"), row.get("display")) if p)
     if fields is not None:
         spans = [(s[3:-3], report[: report.find(s)].count("\n") + 1) for s in CODE_BLOCK.findall(report)]
         stripped = CODE_BLOCK.sub(lambda mm: "\n" * mm.group(0).count("\n"), report)
