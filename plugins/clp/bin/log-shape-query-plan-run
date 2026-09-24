@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-log-shape-query-plan-run - execute a log-shape-insights query plan and report each
-entry's result as it completes (log-shape-insights skill, step 7).
+log-shape-query-plan-run - execute a log-insights query plan and report each
+entry's result as it completes (log-insights skill, step 7).
 
 The insight pass used to execute the plan itself, out of sight: the user
 saw a spinner for minutes, and nobody could tell afterwards which KQL had run,
@@ -526,7 +526,7 @@ def print_table(results):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Execute a log-shape-insights query plan, printing and "
+        description="Execute a log-insights query plan, printing and "
         "recording each entry's result as it completes."
     )
     parser.add_argument("archive", nargs="?", help="archives directory")

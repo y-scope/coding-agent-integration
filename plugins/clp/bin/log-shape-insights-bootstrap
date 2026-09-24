@@ -10,7 +10,7 @@ usage() {
 Usage:
   log-shape-insights-bootstrap [options] ARCHIVES_DIR
 
-Mechanical bootstrap for the log-shape-insights skill. One call reads the field
+Mechanical bootstrap for the log-insights skill. One call reads the field
 names and per-field value distributions from a sample of records, gets the
 per-template frequencies (from the counts stored in the archive), and probes
 the classification cache — then prints a compact KEY=VALUE summary.

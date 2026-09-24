@@ -273,7 +273,7 @@ Expected: `4`
 
 This is the feature's core value: re-analyzing a growing log costs only the classification of what's new.
 
-By the way — Steps 2, 5, and the cache probe are what the `log-shape-insights` skill runs as its first command, via one helper:
+By the way — Steps 2, 5, and the cache probe are what the `log-insights` skill runs as its first command, via one helper:
 
 ```bash
 "$B/log-shape-insights-bootstrap" --cache-dir release-testing/workdir/lt-cache \
@@ -330,7 +330,7 @@ claude --plugin-dir ./plugins/clp
 
 then ask:
 
-> Compress the logs in release-testing/sample-logs/vllm and give me log shape insights.
+> Compress the logs in release-testing/sample-logs/vllm and give me log insights.
 
 The agent should: compress with `--structurize`, report the compression stats, run `log-shape-insights-bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above — which it announces with an expected duration and follows with its `[bootstrap]` progress lines), cluster the templates with `log-shape-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with an opus subagent (caching the expanded result) while it asks what you already know about these logs, summarize the ranked categories and ask what to focus on while the core queries run, queue the focus ahead of the rest, post the early numbers, and return a report that leads with the focus, with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives. Answer the first question with a problem (for example "requests seemed to fail") and check that the focus question recommends the categories it points at and that the report says whether the records support it.
 

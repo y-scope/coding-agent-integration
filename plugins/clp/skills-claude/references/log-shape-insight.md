@@ -1,4 +1,4 @@
-# Log shape insight reference (log-shape-insights steps 6–9)
+# Log shape insight reference (log-insights steps 6–9)
 
 Read this when a classification exists (`/tmp/log-shape-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE); the context question below is asked at step 6, before it does. It covers the two questions to the user, the summary, building the insight inputs, the core plan's pool and the focus queued into it, the facts, the report writer's prompt, and the report format.
 
@@ -153,7 +153,7 @@ Every query has run and every number is in the facts file, so the last step only
 Fill in `ARCHIVE`, `GOAL`, `FOCUS` (the chosen categories, the user's own question, or "everything"), `USER_CONTEXT` (the context answer verbatim, or "none"), `FACTS_FILE` (`/tmp/log-shape-insight-facts.md`), `TEMPLATES_FILE` (`/tmp/log-shape-templates-by-category.txt`), `RESULTS_TABLE` (the two saved tables, `/tmp/log-shape-baseline-table.md` and `/tmp/log-shape-plan-table.md`), the schema fields, and the taxonomy:
 
 ```
-Write the Log Shape Insights Report for this CLP archive: ARCHIVE
+Write the Log Insights Report for this CLP archive: ARCHIVE
 Goal: GOAL
 Focus the user chose: FOCUS
 What the user said they already know: USER_CONTEXT
@@ -216,7 +216,7 @@ Rules:
    say whether the files support it, contradict it, or say nothing about it,
    and quote the lines that decide it. Never restate it as a fact.
 
-Write ONLY the Markdown Log Shape Insights Report to
+Write ONLY the Markdown Log Insights Report to
 /tmp/log-shape-insight-report.md (Write tool), then reply DONE and nothing else.
 The report has these sections:
 1. Summary -- total records, severity counts, top logger/component, what the

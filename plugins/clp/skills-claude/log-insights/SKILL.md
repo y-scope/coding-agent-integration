@@ -1,5 +1,5 @@
 ---
-name: log-shape-insights
+name: log-insights
 description: App-agnostic log-shape-baseline log analysis with CLP. Dump the archive's log shape dictionary first, classify the real templates into (generic + app-discovered) categories, and drive targeted KQL from them — no blind queries. Caches the classification and updates it incrementally when the archive grows; reports the archive's log shape count. Works on any structurized or native-JSON CLP archive (vLLM, MongoDB, nginx, …).
 allowed-tools:
   - "Agent"
@@ -29,7 +29,7 @@ allowed-tools:
   - "Bash(echo:*)"
 ---
 
-# Log Shape Insights (App-Agnostic, Log-Shape Baseline)
+# Log Insights (App-Agnostic, Log-Shape Baseline)
 
 > **Never debug or verify the setup. Run the workflow as asked, directly.** Do not health-check endpoints, probe the environment, inspect installs, or try to repair anything. If a command fails, stop and report the failure to the user verbatim — the error text and exit code — then let them decide. Do not install, configure, or start anything, and do not re-run a failed command hoping for a different result. An error is an acceptable outcome; a silent workaround is not. (This governs environment/setup problems only. The one retry the workflow itself specifies — re-running a subagent once when it returns unusable output at steps 6 and 9 — is part of the task and still applies.)
 

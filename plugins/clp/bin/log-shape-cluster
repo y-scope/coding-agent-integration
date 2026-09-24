@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# log-shape-cluster — launcher for the log-shape-insights pre-clustering tool.
+# log-shape-cluster — launcher for the log-insights pre-clustering tool.
 #
 # Resolves the semantic (embedding) server URL with the same precedence, scheme
 # check, and health check as the search wrapper — inline flag,

@@ -1,9 +1,9 @@
 ---
-name: log-shape-insights
+name: log-insights
 description: App-agnostic log-shape-baseline log analysis with CLP. Dump the archive's log shape dictionary first, classify the real templates into (generic + app-discovered) categories, and drive targeted KQL from them — no blind queries. Caches the classification and updates it incrementally when the archive grows. Works on any structurized or native-JSON CLP archive (vLLM, MongoDB, nginx, …).
 ---
 
-# Log Shape Insights (App-Agnostic, Log-Shape Baseline)
+# Log Insights (App-Agnostic, Log-Shape Baseline)
 
 > **Never debug or verify the setup. Run the workflow as asked, directly.** Do not health-check endpoints, probe the environment, inspect installs, or try to repair anything. If a command fails, stop and report the failure to the user verbatim — the error text and exit code — then let them decide. Do not install, configure, or start anything, and do not re-run a failed command hoping for a different result. An error is an acceptable outcome; a silent workaround is not. (This governs environment/setup problems only. The one retry the workflow itself specifies — the stronger-model fallback when a subagent returns unusable output at steps 6–7 — is part of the task and still applies.)
 
@@ -170,7 +170,7 @@ Then:
    - **Total records**: `total_records` in `/tmp/log-shape-query-results.ndjson` (already counted; do not recount). **Severity/logger breakdowns**: the bootstrap DIST lines cover only the sampled records; for exact totals run `--count` per value, including the dominant one (it costs the same as a rare one). List unknown values first with `--unique <field>` (it still scans the matching records). **Group totals**: sum `count` over the matching templates in `/tmp/log-shape-freqs.ndjson` instead of scanning records. **Time span**: project the timestamp field and use `head`/`tail` (chronological; do NOT sort), or `--tge`/`--tle` if the timestamp is a real epoch.
    - `<message>:term` is an exact match, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so use it when you know a field's full value; message content is free text and almost always needs a substring wildcard — `<message>:"*term*"`. Combine with a scalar filter in one compound query when you can (`<severity>:<value> AND <message>:"*term*"`, `<logger>:"*<substr>*" AND <message>:"*term*"`). Fall back to projecting message + grep only when the match needs real regex features, never for a plain keyword alternation.
 
-9. Present a Markdown Log Shape Insights Report, leading with the focus. The user's context is their account, not a finding: say whether the records support it, contradict it, or say nothing about it, quoting the lines that decide it.
+9. Present a Markdown Log Insights Report, leading with the focus. The user's context is their account, not a finding: say whether the records support it, contradict it, or say nothing about it, quoting the lines that decide it.
    1. **Summary** — total records, severity counts, time span, top logger/component.
    2. **Focus** — what the user asked for, answered first: the focus categories' records and templates, the focus queries' results, and whether the records bear out the user's context.
    3. **Log Shape Baseline** — distinct template count, top N templates by frequency, the discovered category breakdown. The spine of the report.

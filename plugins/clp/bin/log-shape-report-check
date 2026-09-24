@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-log-shape-report-check - flag figures and KQL fields in a log-shape-insights report
-that its own inputs do not support (log-shape-insights skill, step 7).
+log-shape-report-check - flag figures and KQL fields in a log-insights report
+that its own inputs do not support (log-insights skill, step 7).
 
 The report writer is told to quote figures from the facts file and to derive
 none. It mostly obeys, but a small model still sometimes adds two counts

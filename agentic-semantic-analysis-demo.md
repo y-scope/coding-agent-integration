@@ -129,7 +129,7 @@ Optional clustering of the capture inventory makes representatives available for
   --output "$DEMO_RUN/clusters.json"
 ```
 
-Use the installed `log-shape-insights` skill in an agent session with the actual archive path, run directory, endpoint, and windows substituted into this prompt:
+Use the installed `log-insights` skill in an agent session with the actual archive path, run directory, endpoint, and windows substituted into this prompt:
 
 > Analyze ARCHIVE_PATH for QUESTION under INCIDENT_FILTERS, compared with REFERENCE_FILTERS. Use the existing bootstrap artifacts in RUN_DIRECTORY and the classification cache in RUN_DIRECTORY/classification-cache. Use EMBEDDING_ENDPOINT for semantic queries. Treat capture-wide metadata as candidates: establish the fields and patterns present under each selection's filters. Reuse applicable template labels and adapt the categories and query plan to the selected data and question. Cross-check semantic results against the scoped inventory. Execute queries for counts and localization. Keep bulk results in local files. Return the filters, exact queries, selected records supporting each finding, uncategorized templates, and uncertainty. Record any changes of scope. Distinguish observed changes from possible causes. Do not treat sampled field distributions or null dictionary counts as measured frequencies, and label any sampled discovery as incomplete.
 

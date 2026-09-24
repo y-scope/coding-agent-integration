@@ -1,4 +1,4 @@
-# Log shape classification reference (log-shape-insights step 6)
+# Log shape classification reference (log-insights step 6)
 
 Read this when the bootstrap reported `CACHE_MODE=GROWTH` or `NEW` (or an UPTODATE schema mismatch downgraded to NEW). It covers the cluster → classify → expand → merge → store pipeline and the full classification subagent prompt.
 
