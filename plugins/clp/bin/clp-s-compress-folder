@@ -27,7 +27,9 @@ Options:
                              Default: log,jsonl,json,txt,ndjson,out,err
                              Use '*' to include every regular file.
   --no-recursive             Search only the top level of each folder.
-  --timestamp-key KEY        Pass --timestamp-key KEY to clp-s.
+  --timestamp-key KEY        Pass --timestamp-key KEY to clp-s, and record the
+                             earliest and latest KEY across every record as
+                             the archive's timeRange in its metadata.
                              No default; only set this if your logs have a
                              known timestamp field.
   --compression-level LEVEL  Pass --compression-level LEVEL to clp-s.
@@ -391,7 +393,7 @@ fi
 # --- Discover files ---
 
 file_list="$(mktemp "${TMPDIR:-/tmp}/clp-s-files.XXXXXX")"
-trap 'rm -f "$file_list"; [[ -n "${structurize_tmpdir:-}" ]] && rm -rf "${structurize_tmpdir}"; [[ -n "${jsonl_stage_dir:-}" ]] && rm -rf "${jsonl_stage_dir}"' EXIT
+trap 'rm -f "$file_list" "${stats_out:-}"; [[ -n "${structurize_tmpdir:-}" ]] && rm -rf "${structurize_tmpdir}"; [[ -n "${jsonl_stage_dir:-}" ]] && rm -rf "${jsonl_stage_dir}"' EXIT
 
 find_in_folder() {
   local dir="$1" find_args first ext
@@ -655,7 +657,9 @@ fi
 if [[ -n "$target_encoded_size" ]]; then
   cmd+=(--target-encoded-size "$target_encoded_size")
 fi
-if [[ "$print_archive_stats" -eq 1 ]]; then
+# With a timestamp key, clp-s's stats carry each archive's earliest and latest
+# timestamp, which the metadata records as the archive's time range.
+if [[ "$print_archive_stats" -eq 1 || -n "$timestamp_key" ]]; then
   cmd+=(--print-archive-stats)
 fi
 cmd+=(--remove-path-prefix "$folder_real")
@@ -701,6 +705,7 @@ fi
 # --- Run compression ---
 
 mkdir -p "$output_dir"
+stats_out="$(mktemp "${TMPDIR:-/tmp}/clp-s-stats.XXXXXX")"
 
 # clp-s runs in the background so this script can report progress: a compression
 # of a multi-GB log takes minutes and prints nothing itself. Progress is the
@@ -728,7 +733,7 @@ write_compress_status() {
       exitCode: $exitCode}' > "$status_file.tmp" && mv "$status_file.tmp" "$status_file"
 }
 
-"${cmd[@]}" &
+"${cmd[@]}" > "$stats_out" &
 comp_pid=$!
 trap 'kill "$comp_pid" 2>/dev/null || true' INT TERM
 write_compress_status running
@@ -767,6 +772,26 @@ if [[ "$compress_rc" -ne 0 ]]; then
 fi
 read_bytes="$total_bytes"
 write_compress_status done 0
+if [[ "$print_archive_stats" -eq 1 ]]; then
+  cat "$stats_out"
+fi
+
+# clp-s prints one stats line per archive (several when --target-encoded-size
+# splits it), not in time order. An archive where no record has the timestamp
+# key reports 0 for both ends, so it is left out.
+time_range_json=null
+if [[ -n "$timestamp_key" ]]; then
+  if ! time_range_json="$(jq -s -c '
+      [.[] | select(.begin_timestamp != 0 or .end_timestamp != 0)]
+      | if length == 0 then null else
+          {beginMs: (map(.begin_timestamp) | min), endMs: (map(.end_timestamp) | max)}
+          | .begin = (.beginMs / 1000 | floor | todate)
+          | .end = (.endMs / 1000 | floor | todate)
+        end' "$stats_out")"; then
+    echo "warning: could not read the clp-s archive stats; the time range is not recorded" >&2
+    time_range_json=null
+  fi
+fi
 
 # --- Compute stats and write metadata ---
 
@@ -806,6 +831,7 @@ jq -n \
   --arg archiveDir "$output_dir" \
   --arg clpArchiveDir "$clp_archive_dir" \
   --arg timestampKey "${timestamp_key:-}" \
+  --argjson timeRange "$time_range_json" \
   --argjson inputBytes "$total_bytes" \
   --argjson archiveBytes "$archive_bytes" \
   --argjson reductionBytes "$reduction_bytes" \
@@ -831,6 +857,7 @@ jq -n \
     archiveDir: $archiveDir,
     clpArchiveDir: (if $clpArchiveDir == "" then null else $clpArchiveDir end),
     timestampKey: (if $timestampKey == "" then null else $timestampKey end),
+    timeRange: $timeRange,
     structurize: ($structurizeFlag == 1),
     parser: (if $parser == "" then null else $parser end),
     compression: {
@@ -848,6 +875,9 @@ echo "Archive bytes: $archive_bytes"
 echo "Compression ratio: $compression_ratio"
 echo "File size reduction: $reduction_bytes bytes ($reduction_percent)"
 echo "Input files: $file_count"
+if [[ -n "$timestamp_key" ]]; then
+  echo "Time range: $(jq -r --arg key "$timestamp_key" 'if . == null then "none (no record has the timestamp key \($key))" else "\(.begin) to \(.end)" end' <<<"$time_range_json")"
+fi
 if [[ "$structurize" -eq 1 ]]; then
   echo "Structurize: yes (converted to structured JSONL)"
 fi

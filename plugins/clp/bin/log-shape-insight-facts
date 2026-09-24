@@ -10,6 +10,10 @@ reported 49 warnings for 92, 5,370 templates for 11,558, and a 9.5-minute span
 for a 74-hour log. Nothing here needs judgement, so nothing here is left to it.
 
 Inputs (all produced earlier in the run):
+  --archive-dir DIR      The top-level archive directory. Its
+                         .yscope-clp-archive.json gives the time span: the
+                         timeRange clp-s-compress-folder records from clp-s
+                         when it compresses with --timestamp-key.
   --baseline-results-file F
                          The baseline pool's results (default:
                          /tmp/log-shape-baseline-results.ndjson). Its entries
@@ -40,9 +44,9 @@ Inputs (all produced earlier in the run):
                          /tmp/log-shape-insight-facts.md)
 
 Every section says where its numbers come from. What cannot be known is said
-to be unavailable rather than estimated: notably the archive's time span, which
-needs a timestamp index (compress with --timestamp-key). The fetched records'
-own first and last timestamp are given, labelled as covering only those records.
+to be unavailable rather than estimated, with the reason: notably the archive's
+time span when the metadata has no timeRange. The fetched records' own first
+and last timestamp are given, labelled as covering only those records.
 
 Prints the output path. Exit codes: 0 ok, 1 input problem.
 """
@@ -50,6 +54,7 @@ Prints the output path. Exit codes: 0 ok, 1 input problem.
 import argparse
 import datetime
 import json
+import os
 import re
 import sys
 from collections import defaultdict
@@ -104,6 +109,43 @@ def fmt_ts(value):
         return str(value)
 
 
+def fmt_duration(seconds):
+    if seconds < 120:
+        return f"{seconds:.0f} seconds"
+    if seconds < 2 * 3600:
+        return f"{seconds / 60:.1f} minutes"
+    if seconds < 72 * 3600:
+        return f"{seconds / 3600:.1f} hours"
+    return f"{seconds / 86400:.1f} days"
+
+
+def time_span(archive_dir):
+    """The archive's time span, from the timeRange clp-s-compress-folder records."""
+    meta = None
+    # The metadata sits in the top-level archive directory; accept the inner clp-s one too.
+    for d in (archive_dir, os.path.dirname(os.path.normpath(archive_dir))):
+        try:
+            with open(os.path.join(d, ".yscope-clp-archive.json"), "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            break
+        except (OSError, json.JSONDecodeError):
+            continue
+    if meta is None:
+        return ("unavailable. The archive has no .yscope-clp-archive.json, so clp-s-compress-folder did not "
+                "compress it; recompress it with that and --timestamp-key to record the span.")
+    key = meta.get("timestampKey")
+    if not key:
+        return "unavailable. The archive was compressed without --timestamp-key; recompress it with one to record the span."
+    if "timeRange" not in meta:
+        return ("unavailable. The archive was compressed before clp-s-compress-folder recorded time ranges; "
+                "recompress it to record the span.")
+    if meta["timeRange"] is None:
+        return f"unavailable. No record has the timestamp key `{key}`."
+    begin, end = meta["timeRange"]["beginMs"] / 1000, meta["timeRange"]["endMs"] / 1000
+    return (f"{fmt_ts(begin)} to {fmt_ts(end)} ({fmt_duration(end - begin)}), the earliest and latest "
+            f"`{key}` across every record, recorded by clp-s at compression.")
+
+
 MASK = re.compile(r"\d+(?:\.\d+)?")
 QUOTED = re.compile(r'"[^"\s]{1,40}"')
 
@@ -149,6 +191,8 @@ def main(argv=None) -> int:
     ap.add_argument("--freqs-file", default="/tmp/log-shape-freqs.ndjson")
     ap.add_argument("--top-templates-file", default="/tmp/log-shape-top-templates.json")
     ap.add_argument("--schema-json", required=True)
+    ap.add_argument("--archive-dir", required=True,
+                    help="the top-level archive directory; its metadata gives the time span")
     ap.add_argument("--top", type=int, default=20)
     ap.add_argument("--out", default="/tmp/log-shape-insight-facts.md")
     args = ap.parse_args(argv)
@@ -193,8 +237,7 @@ def main(argv=None) -> int:
     if totals:
         w(f"- Distinct templates: {sum(c['templates'] for c in totals.values()):,} "
           "(sum of the category table below)")
-    w("- Time span: unavailable. The archive has no timestamp index, so it cannot be computed "
-      "from it; compress with --timestamp-key to get one.")
+    w(f"- Time span: {time_span(args.archive_dir)}")
     names = ", ".join(f"{role} = `{schema[role]}`" for role in ("timestamp", "severity", "logger", "message") if schema.get(role))
     payload = ", ".join(f"`{p}`" for p in schema.get("payload", []) or [])
     w(f"- Fields a KQL query may filter on: {names}" + (f"; payload: {payload}" if payload else "")

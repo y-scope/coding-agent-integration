@@ -120,10 +120,11 @@ Every number of the report is computed in code, because a small model asked to a
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-insight-facts" --schema-json '<the SCHEMA= line from the extract>' \
+  --archive-dir <archive-dir> \
   --freqs-file <FREQS_FILE>   # --freqs-file none and --category-totals none when frequencies were unavailable
 ```
 
-It reads both results files (`--baseline-results-file`, `--results-file`; the defaults are the paths above) and `log-shape-focus`'s `/tmp/log-shape-focus.json`, and writes `/tmp/log-shape-insight-facts.md` in well under a second: first the user's focus — its categories with their records and the classifier's `why`, the user's question and context verbatim, and the focus queries' results with samples — then total records and templates; the severity and logger breakdowns, each with a check line showing whether it sums to the total; the category table with its sum and the records no template accounts for; the top templates overall (each with its category) and within each category, from `/tmp/log-shape-top-templates.json`, which the extract writes; the fetched records grouped by message shape with counts and first/last timestamps; the semantic entries; and the flagged queries. The archive's time span is reported as unavailable unless the archive has a timestamp index. The report writer may quote these figures and no others.
+It reads both results files (`--baseline-results-file`, `--results-file`; the defaults are the paths above) and `log-shape-focus`'s `/tmp/log-shape-focus.json`, and writes `/tmp/log-shape-insight-facts.md` in well under a second: first the user's focus — its categories with their records and the classifier's `why`, the user's question and context verbatim, and the focus queries' results with samples — then total records and templates; the severity and logger breakdowns, each with a check line showing whether it sums to the total; the category table with its sum and the records no template accounts for; the top templates overall (each with its category) and within each category, from `/tmp/log-shape-top-templates.json`, which the extract writes; the fetched records grouped by message shape with counts and first/last timestamps; the semantic entries; and the flagged queries. The archive's time span comes from `timeRange` in its `.yscope-clp-archive.json`: the earliest and latest timestamp across every record, which `clp-s-compress-folder` records when it compresses with `--timestamp-key`. Without one the span is given as unavailable, with the reason. The report writer may quote these figures and no others.
 
 Then post the **early numbers**: 3 to 5 lines quoted from the facts file, the focus first — the focus queries' counts, what their samples show, then the one or two figures that matter most elsewhere. The writer takes about two minutes; this way the user has the headline while it works. Quote figures as the facts file gives them, and draw no conclusions the writer has not been asked to check.
 
@@ -192,9 +193,10 @@ Rules:
 1. Every number, percentage, count and timestamp in the report must appear
    verbatim in FACTS_FILE (or in RESULTS_TABLE for a query's own count). If a
    figure you want is not there, leave it out; never derive one.
-2. Where the facts say the time span is unavailable, say it is unavailable.
-   The timestamps in the grouped records cover those records only; say
-   "first/last seen among the fetched records", never "the archive spans".
+2. The archive's time span is the facts' "Time span" line: quote it as it
+   is, and where it says unavailable, say it is unavailable. The timestamps
+   in the grouped records cover those records only; say "first/last seen
+   among the fetched records", never present them as the archive's span.
 3. Do not state a rate, a duration, or a cause as fact. A cause or a
    recommendation is inference: label it "inference".
 4. Name the top warning and error templates from the grouped records, with
