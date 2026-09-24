@@ -9,7 +9,7 @@ description: App-agnostic logtype-baseline log analysis with CLP. Dump the archi
 
 End-to-end analysis of **any** CLP archive using the **logtype baseline** method: dump the archive's logtype dictionary (the complete vocabulary of distinct message templates, `<*>` marking variables — tens to a few hundred templates no matter how many millions of records), classify those *real* templates into categories, and derive every later query from a template that is guaranteed to exist. No blind keyword batteries.
 
-The classification is a property of the **application**, not the capture, so it is cached (keyed by `sha256` of the sorted template set, each template capped at a character limit — 512 by default — and de-duplicated, matching what is embedded) and updated incrementally when the archive grows — re-analyzing the same app skips classification entirely. The skill reports the archive's logtype count.
+The classification is a property of the **application**, not the capture, so it is cached (keyed by `sha256` of the sorted template set, each template capped at a character limit — 500 by default — and de-duplicated, matching what is embedded) and updated incrementally when the archive grows — re-analyzing the same app skips classification entirely. The skill reports the archive's logtype count.
 
 For a single ad-hoc KQL query, use the `search` skill. To compress raw logs first, use `compress-folder`.
 
@@ -49,7 +49,7 @@ Then tell the user what the bootstrap found, in 2–3 lines: the logtype count, 
    - **GROWTH** — only the new templates in `/tmp/logtypes-to-classify.ndjson` need classifying; the base plan was fetched to `/tmp/logtype-base-classification.json`. Continue to step 5.
    - **NEW** — classify all of `/tmp/logtypes-to-classify.ndjson`. Continue.
 
-5. **Cluster the templates to classify** — truncates each template to a character limit (`MAX_CHARS` from the bootstrap, 512 by default), de-duplicates the results, and merges semantically similar templates so you classify one representative per cluster, not every template (in step 4's schema-mismatch case, pass `--input /tmp/logtypes.ndjson` instead):
+5. **Cluster the templates to classify** — truncates each template to a character limit (`MAX_CHARS` from the bootstrap, 500 by default), de-duplicates the results, and merges semantically similar templates so you classify one representative per cluster, not every template (in step 4's schema-mismatch case, pass `--input /tmp/logtypes.ndjson` instead):
 
    ```bash
    ~/.codex/marketplaces/yscope/plugins/clp/bin/logtype-cluster cluster \

@@ -263,7 +263,7 @@ Note that `message:term` is an exact match against the whole field value, same a
 
 ### Logtype Cache
 
-Classifying templates into categories and deriving a query plan is the expensive step, and it is a property of the *application*, not the individual capture — the same build emits the same templates every run. `bin/logtype-cache` persists that classification, keyed by `sha256` of the sorted distinct logtype strings **capped at a character limit** (default 512, `--max-chars` / `$CLP_LOGTYPE_MAX_CHARS`) and de-duplicated — the same treatment the templates get before they are embedded, so the key fingerprints the *embedded* vocabulary. The placeholder-rendered form is hashed, so fingerprints are stable across binary generations. Stored `templates[].logtype` are always the full, byte-exact strings; the character limit affects only the fingerprint and the embedding request. (Consequence: a template whose tail changes beyond the limit does not change the fingerprint, so it does not register as growth.)
+Classifying templates into categories and deriving a query plan is the expensive step, and it is a property of the *application*, not the individual capture — the same build emits the same templates every run. `bin/logtype-cache` persists that classification, keyed by `sha256` of the sorted distinct logtype strings **capped at a character limit** (default 500, `--max-chars` / `$CLP_LOGTYPE_MAX_CHARS`) and de-duplicated — the same treatment the templates get before they are embedded, so the key fingerprints the *embedded* vocabulary. The placeholder-rendered form is hashed, so fingerprints are stable across binary generations. Stored `templates[].logtype` are always the full, byte-exact strings; the character limit affects only the fingerprint and the embedding request. (Consequence: a template whose tail changes beyond the limit does not change the fingerprint, so it does not register as growth.)
 
 ```bash
 LC=./plugins/clp/bin/logtype-cache
@@ -294,7 +294,7 @@ On GROWTH the new classification is merged into the base entry with `put-merged 
 
 Every stored query plan entry carries a structured `match` filter rather than a KQL string (see `bin/kql-build`). `put`, `put-merged`, and `set-plan` refuse an entry without a valid `match` and store nothing. `set-plan --key K` replaces only entry K's query plan, leaving its templates and taxonomy untouched; the `logtype-insights` skill uses it once to repair a plan cached before plans used `match`.
 
-Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with `$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`diff`, `get`, `put`, `put-merged`, `set-plan`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 512, or `$CLP_LOGTYPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint (`key`, `diff`, `put`, `put-merged`); it must match the limit given to `logtype-cluster`, or embedding and cache fingerprints diverge.
+Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with `$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`diff`, `get`, `put`, `put-merged`, `set-plan`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 500, or `$CLP_LOGTYPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint (`key`, `diff`, `put`, `put-merged`); it must match the limit given to `logtype-cluster`, or embedding and cache fingerprints diverge.
 
 ### Logtype Cluster
 
@@ -304,7 +304,7 @@ Embeddings come from the same already-running server that powers semantic search
 
 ```bash
 LTC=./plugins/clp/bin/logtype-cluster
-"$LTC" cluster --max-chars 512 --input /tmp/logtypes-to-classify.ndjson
+"$LTC" cluster --max-chars 500 --input /tmp/logtypes-to-classify.ndjson
 "$LTC" expand --clusters /tmp/logtype-clusters.json \
   --classification /tmp/logtype-class.json     # id-based assignments from the LLM
 ```
@@ -313,7 +313,7 @@ LTC=./plugins/clp/bin/logtype-cluster
 
 - Endpoint: `--semantic-endpoint`, then `$CLP_SEMANTIC_ENDPOINT`, then the `semantic-endpoint` config file, then the built-in remote endpoint — the same chain as [Semantic search](#semantic-search). The launcher resolves and health-checks it, then passes it down.
 - Model contract: `BAAI/bge-base-en-v1.5`, int8[768] — matching what `clp-s` advertises, so both hit the same server-side cache. Threshold: cosine 0.80 (override with `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to 0.85–0.90 to split more, lower to merge more). `--batch-size` sets texts per request (default 256); `--max-request-bytes` (`$CLP_LOGTYPE_MAX_REQUEST_BYTES`, default 100 000 000) caps the encoded size of any single request body.
-- Truncation: `--max-chars` (`$CLP_LOGTYPE_MAX_CHARS`, default 512) caps each template at that many UTF-8 characters before embedding; it must match the value used by `logtype-cache`, which fingerprints the same truncated set.
+- Truncation: `--max-chars` (`$CLP_LOGTYPE_MAX_CHARS`, default 500) caps each template at that many UTF-8 characters before embedding; it must match the value used by `logtype-cache`, which fingerprints the same truncated set.
 - `expand` is stdlib-only and fully offline — it needs no endpoint — and validates that every cluster id is assigned exactly once before writing anything (exit 2 otherwise), which protects the logtype cache from partial classifications.
 - Exit codes for `cluster`: 0 ok, 1 input problem, 2 the embedding server is unreachable/rejected, 3 usage error. `--help` and `expand` never touch the network.
 - `setup` has been removed; it now exits 2 with a pointer to the endpoint settings. Existing venvs under `~/.config/yscope-clp-plugin/venvs/logtype-cluster` are no longer used and can be deleted.

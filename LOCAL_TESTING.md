@@ -185,7 +185,7 @@ Exercise the `logtype-insights` helper scripts. The bootstrap wraps the schema s
 # Needs a reachable endpoint — the built-in remote default is used unless
 # CLP_SEMANTIC_ENDPOINT or the semantic-endpoint config file says otherwise:
 ./plugins/clp/bin/logtype-cluster cluster \
-  --max-chars 512 --input /tmp/smoke-bootstrap/logtypes.ndjson
+  --max-chars 500 --input /tmp/smoke-bootstrap/logtypes.ndjson
 # Expect CLUSTERS<=EMBEDDED<=TEMPLATES and one {"id","count","representative"}
 # line per cluster; /tmp/logtype-clusters.json holds the memberships for
 # `expand`. Representatives/members are FULL templates.
@@ -196,9 +196,9 @@ Truncation and fingerprinting (no embedding server needed). The cache key is com
 ```bash
 LC=./plugins/clp/bin/logtype-cache
 D=/tmp/smoke-trunc; mkdir -p "$D"; export CLP_LOGTYPE_CACHE_DIR="$D/cache"
-P="$(python3 -c 'print("P"*512)')"
+P="$(python3 -c 'print("P"*500)')"
 printf '{"logtype":"%sAAA"}\n' "$P" > "$D/base.ndjson"
-printf '{"logtype":"%sBBB"}\n' "$P" > "$D/other.ndjson"   # differs only past 512
+printf '{"logtype":"%sBBB"}\n' "$P" > "$D/other.ndjson"   # differs only past 500
 printf '{"logtype":"%sAAA"}\n{"logtype":"new within limit"}\n' "$P" > "$D/grown.ndjson"
 
 # Same key despite the post-limit tail change; count stays the FULL count:
@@ -208,7 +208,7 @@ printf '{"logtype":"%sAAA"}\n{"logtype":"new within limit"}\n' "$P" > "$D/grown.
 
 jq -s '{schema:{message:"message"},taxonomy:[{category:"other",description:"x"}],
         templates:[.[]|{logtype:.logtype,category:"other"}],query_plan:[]}' \
-  "$D/base.ndjson" | "$LC" put-merged --max-chars 512 --key "$("$LC" key --logtypes-file "$D/base.ndjson")"
+  "$D/base.ndjson" | "$LC" put-merged --max-chars 500 --key "$("$LC" key --logtypes-file "$D/base.ndjson")"
 
 "$LC" diff --logtypes-file "$D/other.ndjson" | head -1   # -> UPTODATE
 # The post-limit variant is now present in the stored entry (inherited category):

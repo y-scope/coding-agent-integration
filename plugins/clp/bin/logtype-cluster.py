@@ -4,7 +4,7 @@
 Invoked via the `logtype-cluster` bash launcher, which resolves the embedding
 server URL and exports it as CLP_SEMANTIC_ENDPOINT. Two subcommands:
 
-  cluster  Truncate each logtype to a character limit (default 512, UTF-8
+  cluster  Truncate each logtype to a character limit (default 500, UTF-8
            characters), de-duplicate the results, embed the distinct texts
            via the semantic server's /v1/embeddings endpoint, and group them by
            greedy leader clustering at a cosine threshold. The LLM then
@@ -72,8 +72,11 @@ REQUEST_TIMEOUT_S = _positive_env_int("CLP_SEMANTIC_TIMEOUT_S", 120)
 # a prefix are only ever embedded once. Configurable per session. The SAME limit
 # is the classification-cache fingerprint (logtype-cache duplicates
 # truncate_chars and reads the same env var), so changing it deliberately
-# re-keys the cache.
-DEFAULT_MAX_CHARS = _positive_env_int("CLP_LOGTYPE_MAX_CHARS", 512)
+# re-keys the cache. 500, not 512: the embedding model's context is 512 TOKENS
+# including its special tokens, and punctuation-heavy templates (`,<*>,<*>,...`)
+# tokenize to about one token per character, so a 512-character cap can overflow
+# it and the server rejects the whole batch. 500 leaves headroom.
+DEFAULT_MAX_CHARS = _positive_env_int("CLP_LOGTYPE_MAX_CHARS", 500)
 # Hard ceiling on the encoded size of one /v1/embeddings request body, applied
 # independently of the batch count. Decimal MB so it is under 100 MB however the
 # limit is read.
