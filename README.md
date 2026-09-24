@@ -32,6 +32,7 @@ plugins/clp/bin/
     (clp-detect-logs, structurize.py, log-shape-cache, log-shape-insights-bootstrap,
     log-shape-cluster, log-shape-insight-extract, log-shape-baseline-plan,
     log-shape-query-plan-run, log-shape-insight-facts, log-shape-report-check,
+    log-shape-report-save,
     clp-compress-status,
     kql-build, kql-validate-wildcards) that are not clp-s passthroughs.
 plugins/clp/skills-claude/

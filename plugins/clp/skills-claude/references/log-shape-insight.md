@@ -1,6 +1,6 @@
 # Log shape insight reference (log-insights steps 6–9)
 
-Read this when a classification exists (`/tmp/log-shape-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE); the context question below is asked at step 6, before it does. It covers the two questions to the user, the summary, building the insight inputs, the core plan's pool and the focus queued into it, the facts, the report writer's prompt, and the report format.
+Read this when a classification exists (`/tmp/log-shape-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE); the context question below is asked at step 6, before it does. It covers the three questions to the user, the summary, building the insight inputs, the core plan's pool and the focus queued into it, the facts, the report writer's prompt, saving the report, and the report format.
 
 ## Ask what the user already knows (step 6)
 
@@ -131,7 +131,31 @@ Then post the **early numbers**: 3 to 5 lines quoted from the facts file, the fo
 
 ## Spawn the report writer
 
-Every query has run and every number is in the facts file, so the last step only puts them into words. The writing is where a stronger model pays off: a small writer drifts into derived figures (sums, rounded shares) and unsupported causes, and each one costs a correction round later (in a trial with haiku: 18 flagged lines and 15 edits, over three minutes). Spawn ONE subagent (Agent tool), model **opus**; if the Agent tool rejects `opus` as unavailable, use `sonnet`, and tell the user which model is writing. It runs no searches and does no arithmetic. Hand it absolute file paths (it does not inherit `${CLAUDE_PLUGIN_ROOT}`), the schema, the taxonomy, the focus and the user's context (both also in the facts file's first section), and the results table (or its path). It writes the report itself to `/tmp/log-shape-insight-report.md` and replies only `DONE`, so the report is never regenerated just to be saved. If the file is missing or unusable, tell the user and re-spawn the writer once. Before spawning, open phase 5 with one line naming the model and the time (`[5/5] Writing the report with opus (~2 min)`); the estimate tells the user the wait is expected.
+Every query has run and every number is in the facts file, so the last step only puts them into words. The writing is where a stronger model pays off: a small writer drifts into derived figures (sums, rounded shares) and unsupported causes, and each one costs a correction round later (in a trial with haiku: 18 flagged lines and 15 edits, over three minutes). Spawn ONE subagent (Agent tool), model **opus**; if the Agent tool rejects `opus` as unavailable, use `sonnet`, and tell the user which model is writing. It runs no searches and does no arithmetic. Hand it absolute file paths (it does not inherit `${CLAUDE_PLUGIN_ROOT}`), the schema, the taxonomy, the focus and the user's context (both also in the facts file's first section), and the results table (or its path). It writes the report itself to `/tmp/log-shape-insight-report.md` and replies only `DONE`, so the report is never regenerated just to be saved. If the file is missing or unusable, tell the user and re-spawn the writer once. Before spawning, open phase 5 with one line naming the model and the time (`[5/5] Writing the report with opus (~2 min)`); the estimate tells the user the wait is expected. Right after spawning it, ask where to save the report (next section).
+
+## Ask where to save the report (step 9)
+
+Ask right after spawning the writer, so the user answers while it works. First list what this machine can produce (instant; it only looks for a browser to print PDF with):
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/log-shape-report-save" --list-formats
+```
+
+It prints `FORMATS=` and `PDF_ENGINE=` (a browser's path, or `none`). Then one AskUserQuestion with two questions. Fill in the real paths: `<name>` is the source log file or folder's name when this run compressed it, else the archive directory's name, and `<stamp>` is `YYYYmmdd-HHMM`.
+
+1. header "Format", **multi-select**: "Which formats should I save the report in?" Offer only what can be produced:
+   - "HTML (Recommended)": "A styled page for any browser, light or dark, with readable tables."
+   - "Markdown": "The report as written: plain text that renders on GitHub and in editors."
+   - "PDF", only when `PDF_ENGINE` is not `none`: "Printed from the HTML page, for attaching or printing."
+   - "claude.ai page", only when the Artifact tool is in this session's tool list: "Published to claude.ai as a private page you can share by link. It quotes lines from these logs (hosts, paths)."
+2. header "Location", single-select: "Where should I save the report file?"
+   - "This directory (Recommended)": "`<cwd>/log-insights-<name>-<stamp>.<ext>`"
+   - "Next to the logs": "`<the source logs' directory>/log-insights-<name>-<stamp>.<ext>`". When the input was an archive, use the archive directory's parent and label it "Next to the archive".
+   - "Temporary folder": "`/tmp/log-insights-<name>-<stamp>.<ext>`, for a quick look; /tmp may be cleared on reboot."
+
+   The automatic "Other" takes a folder or a file name. A file name's `.md`, `.html` or `.pdf` extension is replaced by each chosen format's own; when it names a format the user did not tick, add that format.
+
+When the user picks only "claude.ai page", the location answer is not used. When no one can answer, skip the question: the report stays at `/tmp/log-shape-insight-report.md` and nothing is saved or published.
 
 ## Check the report
 
@@ -150,6 +174,18 @@ Every query has run and every number is in the facts file, so the last step only
 2. If it exits 1, send the writer (SendMessage, same agent) the path `/tmp/log-shape-report-flags.txt` once, with this instruction: "Rule on each FLAG line in `/tmp/log-shape-insight-report.md`. Leave the figure only when it is not a statistic (part of a path, an ID, or text quoted from a template) or the facts show it attached to the same thing the report says. Otherwise fix it in place with Edit: use the figure exactly as the facts give it, reword the claim to what the files show, label it "inference", or remove it. Derive nothing. Reply with one line per flag you left, giving the line number and why, then DONE."
 
 3. Re-run the script once on the corrected report. Do not run a second fix round. Any flag still listed that the writer did not justify goes to the user in a short "unverified" note beside the report, one line each, rather than being hidden.
+
+## Save the report (step 10)
+
+After the check, save every chosen file format in one run. `--dest` is the chosen folder or file name (a folder gets the default name inside it), and `--name` is the `<name>` from the question:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/log-shape-report-save" --format html,pdf --dest <folder-or-file> --name <name>
+```
+
+It prints `SAVED_<FORMAT>=<path>` per file. It never overwrites a file (it adds `-2`, `-3`, ... instead) and creates missing folders. PDF is printed by a headless Chrome, Chromium or Edge without web fonts, so it needs no network. `PDF_ERROR=` means that one format failed (exit 1): tell the user the reason in one line and keep the other files. Never install a browser to get PDF.
+
+For a claude.ai page, add `artifact` to `--format` (or run it alone with `--format artifact`). It writes `/tmp/log-shape-insight-report.artifact.html`, a finished page that already follows the Artifact page contract (both themes, phone width, tables that scroll on their own). Publish it as-is with the Artifact tool: `file_path` that file, `icon` `"report"`, and a one-sentence `description` naming the logs and the headline figure ("Log insights for cockroach.node1.log: 16.5M records, 11,558 templates"). Do not rewrite or restyle the page, and declare no capabilities. Give the user the link the publish returns; the page is private until they share it.
 
 ## Report writer prompt template
 
