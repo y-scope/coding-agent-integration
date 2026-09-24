@@ -685,9 +685,15 @@ def cmd_expand(args):
     max_chars = clusters_doc.get("max_chars")
     if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:
         max_chars = DEFAULT_MAX_CHARS
-    # A field rule's category must be one the classifier ranked.
+    # A field rule's category must be one that is ranked: in this classification's
+    # taxonomy, or, on GROWTH, in the base's (the classifier lists only the
+    # categories it adds).
     taxonomy_names = {c.get("category") for c in classification.get("taxonomy", [])
                       if isinstance(c, dict)}
+    if args.categories_from:
+        base = load_json_file(args.categories_from, "--categories-from")
+        taxonomy_names |= {c.get("category") for c in base.get("taxonomy", [])
+                           if isinstance(c, dict)} if isinstance(base, dict) else set()
     unknown = sorted({r["category"] for r in field_rules} - taxonomy_names)
     if unknown:
         fail(2, "field rule categories missing from the taxonomy: " + ", ".join(unknown),
@@ -776,6 +782,9 @@ def main():
                           help="clusters JSON produced by `cluster`")
     p_expand.add_argument("--classification", required=True,
                           help='LLM output JSON with "assignments" (per cluster id)')
+    p_expand.add_argument("--categories-from", default=None,
+                          help="the base classification JSON, on GROWTH: its taxonomy categories "
+                               "count as ranked for the field rules")
     p_expand.add_argument("--output", default="/tmp/log-shape-expanded.json",
                           help="expanded classification path (default: /tmp/log-shape-expanded.json)")
     p_expand.set_defaults(func=cmd_expand)

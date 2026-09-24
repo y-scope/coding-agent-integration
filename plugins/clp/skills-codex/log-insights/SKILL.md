@@ -130,9 +130,12 @@ Then validate, expand ids to every member template (by hash, exact by constructi
    # entries may use the base's categories:
    "$BIN"/kql-build check-plan /tmp/log-shape-class.json || exit 1
    # Exits 2 and writes NOTHING on missing/unknown/duplicate ids — fix the
-   # assignments and re-run; do NOT store in that case:
+   # assignments and re-run; do NOT store in that case. On GROWTH add
+   # --categories-from /tmp/log-shape-base-classification.json, since the
+   # classifier lists only the categories it adds:
    "$BIN"/log-shape-cluster expand --clusters /tmp/log-shape-clusters.json \
-     --classification /tmp/log-shape-class.json --output /tmp/log-shape-expanded.json
+     --classification /tmp/log-shape-class.json --output /tmp/log-shape-expanded.json \
+     ${BASE_KEY:+--categories-from /tmp/log-shape-base-classification.json}
    if [[ "$MODE" == "GROWTH" ]]; then
      # Guard: an empty BASE_KEY would silently keep ONLY the new templates.
      [[ -n "$BASE_KEY" ]] || { echo "error: GROWTH with empty BASE_KEY" >&2; exit 1; }
