@@ -65,6 +65,8 @@ Below the table, call out each `error`, `timeout`, `zero`, or `non_selective` en
 
 Spawn ONE insight subagent (Agent tool), model **haiku**; if the report comes back unusable, tell the user before re-spawning with `sonnet`. Replace `SEARCH_WRAPPER` with the **resolved absolute path** of `${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql` — the subagent does not inherit `${CLAUDE_PLUGIN_ROOT}`, so the literal variable will not work there. Likewise pass `FREQS_FILE` as the absolute path the bootstrap printed, and `RESULTS_FILE` as the absolute path the plan runner printed.
 
+Before spawning, `: > /tmp/logtype-insight-progress.log`. While the subagent runs, `tail -n 3` that file about once a minute and tell the user what it is on and how many queries it has logged; do not read its transcript.
+
 ## Insight subagent prompt template
 
 Fill in `ARCHIVE`, `GOAL`, `FREQS_FILE` (the bootstrap's `FREQS_FILE=` path, or `unavailable` when it reported `FREQS=UNAVAILABLE`), `RESULTS_FILE` (the plan runner's `RESULTS_FILE=` path), the schema fields, the extracted taxonomy / templates-by-category, and the `--print-table` output:
@@ -72,6 +74,7 @@ Fill in `ARCHIVE`, `GOAL`, `FREQS_FILE` (the bootstrap's `FREQS_FILE=` path, or 
 ```
 Analyze this CLP archive: ARCHIVE
 Search wrapper: SEARCH_WRAPPER
+Progress log: before each query you run, append one line with the time and what you are about to look up, e.g. `echo "$(date +%T) counting WARNING records" >> /tmp/logtype-insight-progress.log`. The main agent relays these lines to the user.
 Template frequencies: FREQS_FILE
 Query plan results: RESULTS_FILE
 Goal: GOAL

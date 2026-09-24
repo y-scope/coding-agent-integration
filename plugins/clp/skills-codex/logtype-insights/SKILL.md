@@ -23,7 +23,7 @@ For a single ad-hoc KQL query, use the `search` skill. To compress raw logs firs
 
 Each shell invocation is independent — shell variables do not persist between steps. Re-declare them or run dependent commands together in one call.
 
-**Keep the user posted at every step.** Before each command, say in one short line what you are about to do; after it, report the key numbers it produced. Never chain steps silently — steps 5–7 run long, and without your narration the user sees no progress at all.
+**Keep the user posted at every step.** Before each command, say in one short line what you are about to do; after it, report the key numbers it produced. Never chain steps silently — steps 5–7 run long, and without your narration the user sees no progress at all. Say the expected duration when you announce a command that can run over a minute (the bootstrap on a multi-GB archive, plan batches, a subagent); run such commands in the background and post a one-line status at least once a minute until they finish, so a slow step is never indistinguishable from a stuck one. When a cache hit or recorded results let you skip steps or plan entries, say which ones and why before skipping them, not afterward.
 
 1. Determine the input: archive path → use it; folder → compress with the app-appropriate settings above (ask if the app is unknown); nothing → ask.
 
