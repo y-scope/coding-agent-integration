@@ -642,8 +642,12 @@ def cmd_ingest(args):
     db = connect(args.cache_dir)
     with db:
         db.execute("DELETE FROM archives WHERE used_at < ?", (cutoff,))
+        # The cascade only runs on connections with foreign keys on, so rows
+        # another client left behind are removed by hand.
+        db.execute("DELETE FROM archive_shapes WHERE archive_id NOT IN (SELECT archive_id FROM archives)")
         for aid, shapes in per_archive.items():
             db.execute("DELETE FROM archives WHERE archive_id = ?", (aid,))
+            db.execute("DELETE FROM archive_shapes WHERE archive_id = ?", (aid,))
             db.execute("INSERT INTO archives (archive_id, max_chars, has_counts, ingested_at, used_at) "
                        "VALUES (?, ?, ?, ?, ?)", (aid, max_chars, int(aid not in no_counts), stamp, stamp))
             db.executemany(

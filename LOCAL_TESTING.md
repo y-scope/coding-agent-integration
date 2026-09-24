@@ -191,12 +191,21 @@ stand_in /tmp/smoke-log-shapes.ndjson | "$LC" put --key "$KEY"
 "$LC" list
 ```
 
-Exercise the `log-shape-insights` helper scripts. The bootstrap wraps the schema sample, the dictionary dump with per-template frequencies, and the cache probe in one command. It needs clp-core 0.13+; older builds make it exit 1 with `error: stats.log_shapes emitted no log shapes`:
+Exercise the `log-shape-insights` helper scripts. The bootstrap wraps the schema sample, the dictionary dump with per-template frequencies, and the cache probe in one command, and stores the archive's counts in the cache database so a later run on the same archive skips the dump. It needs clp-core 0.13+; older builds make it exit 1 with `error: stats.log_shapes emitted no log shapes`. `--dump` makes this first run dump the dictionary even when you repeat the block, so the clusterer below always has the full template text:
 
 ```bash
-./plugins/clp/bin/log-shape-insights-bootstrap \
+./plugins/clp/bin/log-shape-insights-bootstrap --dump \
   --cache-dir /tmp/smoke-lt-cache --out-dir /tmp/smoke-bootstrap "$ARCHIVE"
-# Expect DIST lines, LOG_SHAPE_COUNT>0, FREQS=OK, CACHE_MODE=UPTODATE (cache primed above).
+# Expect an estimate line, [bootstrap] start/end lines for stages 1/3-3/3, DIST
+# lines, LOG_SHAPE_COUNT>0, SHAPES_SOURCE=dump, FREQS=OK, a LOG_SHAPES_FILE= line,
+# CACHE_MODE=UPTODATE (cache primed above), and BOOTSTRAP_TIMINGS.
+
+# Again without --dump: the archive is now stored, so nothing is dumped.
+./plugins/clp/bin/log-shape-insights-bootstrap \
+  --cache-dir /tmp/smoke-lt-cache --out-dir /tmp/smoke-bootstrap-stored "$ARCHIVE" \
+  | grep 'analyzed before\|SHAPES_SOURCE\|CACHE_MODE\|LOG_SHAPES_FILE'
+# Expect "analyzed before" in the estimate line, SHAPES_SOURCE=stored,
+# CACHE_MODE=UPTODATE, and no LOG_SHAPES_FILE line.
 
 # Clusterer: embeds via the semantic server (no setup, no local model).
 # Needs a reachable endpoint — the built-in remote default is used unless

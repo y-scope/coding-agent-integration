@@ -280,7 +280,17 @@ By the way — Steps 2, 5, and the cache probe are what the `log-shape-insights`
   --out-dir release-testing/workdir/bootstrap "$ARCHIVE"
 ```
 
-Expected: a `SAMPLE=` record, `DIST field=...` value distributions for the four fields, `LOG_SHAPE_COUNT=100`, `FREQS=OK` with a `FREQS_FILE=` path, and `CACHE_MODE=UPTODATE` (the classification you stored above is fetched to `release-testing/workdir/bootstrap/log-shape-classification.json`).
+Expected: an estimate line first (`[bootstrap] archive <size>; expect under a minute`), a `[bootstrap]` line as each of the three stages starts and ends, a `SAMPLE=` record, `DIST field=...` value distributions for the four fields, `LOG_SHAPE_COUNT=100`, `SHAPES_SOURCE=dump`, `FREQS=OK` with a `FREQS_FILE=` path, a `LOG_SHAPES_FILE=` path, `CACHE_MODE=UPTODATE` (the classification you stored above is fetched to `release-testing/workdir/bootstrap/log-shape-classification.json`), and `BOOTSTRAP_TIMINGS` last.
+
+That first run also stored the archive's per-template counts in the cache database. Run it again:
+
+```bash
+"$B/log-shape-insights-bootstrap" --cache-dir release-testing/workdir/lt-cache \
+  --out-dir release-testing/workdir/bootstrap-2 "$ARCHIVE" \
+  | grep 'analyzed before\|SHAPES_SOURCE\|CACHE_MODE\|LOG_SHAPES_FILE'
+```
+
+Expected: the estimate line says `analyzed before`, `SHAPES_SOURCE=stored`, `CACHE_MODE=UPTODATE`, and no `LOG_SHAPES_FILE=` line: the counts came from the database and the dictionary was not dumped. `--dump` forces the dump when you need the full template text.
 
 ## Step 7 — Semantic search (natural language)
 
@@ -322,7 +332,7 @@ then ask:
 
 > Compress the logs in release-testing/sample-logs/vllm and give me log shape insights.
 
-The agent should: compress with `--structurize`, report the compression stats, run `log-shape-insights-bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above), cluster the templates with `log-shape-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with an opus subagent (caching the expanded result) while it asks what you already know about these logs, summarize the ranked categories and ask what to focus on while the core queries run, queue the focus ahead of the rest, post the early numbers, and return a report that leads with the focus, with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives. Answer the first question with a problem (for example "requests seemed to fail") and check that the focus question recommends the categories it points at and that the report says whether the records support it.
+The agent should: compress with `--structurize`, report the compression stats, run `log-shape-insights-bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above — which it announces with an expected duration and follows with its `[bootstrap]` progress lines), cluster the templates with `log-shape-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with an opus subagent (caching the expanded result) while it asks what you already know about these logs, summarize the ranked categories and ask what to focus on while the core queries run, queue the focus ahead of the rest, post the early numbers, and return a report that leads with the focus, with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives. Answer the first question with a problem (for example "requests seemed to fail") and check that the focus question recommends the categories it points at and that the report says whether the records support it.
 
 ## Cleanup
 
@@ -339,6 +349,7 @@ rm -rf release-testing/workdir
 | `message:<word>` returns 0 | Expected (Step 4). Message content is not KQL-searchable; project + grep instead. |
 | Step 5 prints `error: no log shape entries found in input` and the count is 0 | Your `clp-s` predates the shapes API (e.g. clp-core 0.12.x) — the underlying error (`--experimental flag set but archive was not created with --experimental`) is hidden by the `2>/dev/null` in the pipeline. Your archive is fine and Steps 1–4/7–8 remain valid; only the binary is too old. Point `CLP_S_BIN` at a 0.13+ build and re-run Step 5 — no recompression needed. |
 | `log-shape-insights-bootstrap` exits 1 with `error: stats.log_shapes emitted no log shapes` | Same 0.12.x cause as above. Point `CLP_S_BIN` at a 0.13+ build and re-run. |
+| The bootstrap prints no `LOG_SHAPES_FILE=` line, and `log-shapes.ndjson` is missing from its `--out-dir` | Expected when it printed `SHAPES_SOURCE=stored`: the archive was analyzed before with the same cache, so its counts came from the database and the dictionary was not dumped. Add `--dump` for the full template text. |
 | `log-shape-cache freqs` fails, or the bootstrap prints `FREQS=UNAVAILABLE` | The archive was compressed by a `clp-s` build that did not store per-template counts (`count` is `null` in `stats.log_shapes`). Recompress with the current build. |
 | `error: stats.logtypes was renamed to stats.log_shapes` | You ran the legacy query spelling; use `stats.log_shapes` as shown in Step 5. |
 | Semantic search: endpoint error | The embedding server is unreachable. Check the endpoint (`--semantic-endpoint`, `CLP_SEMANTIC_ENDPOINT`, or `~/.config/yscope-clp-plugin/semantic-endpoint`); the plugin never starts a server itself. Keyword/log shape steps are unaffected. |
