@@ -31,7 +31,7 @@ Two gotchas:
 
 ## Semantic search
 
-Use `semantic("natural language query")` in KQL to find log events whose logtype is semantically similar to the query, even when exact keywords differ. No flags needed — the wrapper auto-selects a working endpoint. Combine with regular KQL using `AND`.
+Use `semantic("natural language query")` in KQL to find log events whose log shape is semantically similar to the query, even when exact keywords differ. No flags needed — the wrapper auto-selects a working endpoint. Combine with regular KQL using `AND`.
 
 ```bash
 ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'semantic("slow database queries")'

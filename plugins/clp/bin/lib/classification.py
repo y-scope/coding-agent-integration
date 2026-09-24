@@ -1,5 +1,5 @@
 """
-classification - validate the ranking a logtype-insights classification
+classification - validate the ranking a log-shape-insights classification
 carries on top of its query filters.
 
 The classifier ranks what it found, so the insight pass can run the most

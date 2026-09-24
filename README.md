@@ -29,16 +29,16 @@ plugins/clp/.codex-plugin/plugin.json
     Codex plugin manifest.
 plugins/clp/bin/
     Restricted-passthrough bash wrappers for clp-s, plus local helpers
-    (clp-detect-logs, structurize.py, logtype-cache, logtype-insights-bootstrap,
-    logtype-cluster, logtype-insight-extract, logtype-baseline-plan,
-    logtype-query-plan-run, logtype-insight-facts, logtype-report-check,
+    (clp-detect-logs, structurize.py, log-shape-cache, log-shape-insights-bootstrap,
+    log-shape-cluster, log-shape-insight-extract, log-shape-baseline-plan,
+    log-shape-query-plan-run, log-shape-insight-facts, log-shape-report-check,
     clp-compress-status,
     kql-build, kql-validate-wildcards) that are not clp-s passthroughs.
 plugins/clp/skills-claude/
-    Claude Code skills: compress, compress-folder, search, logtype-insights,
+    Claude Code skills: compress, compress-folder, search, log-shape-insights,
     decompress, claude-code-trajectory.
 plugins/clp/skills-codex/
-    Codex skills: compress, compress-folder, search, logtype-insights,
+    Codex skills: compress, compress-folder, search, log-shape-insights,
     decompress, codex-trajectory.
 
 scripts/validate-codex-plugin.sh
@@ -109,7 +109,7 @@ echo 'https://embeddings.internal.example.com' \
   > ~/.config/yscope-clp-plugin/semantic-endpoint
 ```
 
-The same endpoint drives `logtype-cluster`, which embeds logtype templates through the server's `/v1/embeddings` endpoint.
+The same endpoint drives `log-shape-cluster`, which embeds log shapes through the server's `/v1/embeddings` endpoint.
 
 Other semantic flags: `--semantic-top-k K`, `--semantic-threshold T`, `--embedding-batch-size N`.
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-logtype-cache - persistent cache for the logtype-insights skill's template
+log-shape-cache - persistent cache for the log-shape-insights skill's template
 classification.
 
-The classification step (grouping the archive's logtype templates into
+The classification step (grouping the archive's log shapes into
 categories and deriving a targeted query plan) is reusable across runs of the
 same application: the same app build emits the same message templates, so the
 classification is paid once and amortized over every future analysis of that
@@ -13,11 +13,11 @@ classifies only the new templates and merges them into the existing entry,
 instead of reclassifying the whole archive.
 
 Cache key (the "app fingerprint") is sha256 of the sorted set of distinct
-logtype strings from the archive's dictionary dump
+log shape strings from the archive's dictionary dump
 (`clp-s-search-kql ARCHIVE 'stats.log_shapes'`, rendered by `normalize`), each
 TRUNCATED to a character limit first (default 500, `--max-chars` /
-`$CLP_LOGTYPE_MAX_CHARS`) and de-duplicated. Truncation mirrors what
-logtype-cluster sends to the embedding server, so the key identifies the
+`$CLP_LOG_SHAPE_MAX_CHARS`) and de-duplicated. Truncation mirrors what
+log-shape-cluster sends to the embedding server, so the key identifies the
 *embedded* vocabulary. Same embedded vocabulary -> same key -> cache hit ->
 classification reused. When it grows, the key changes; `diff` finds the
 previous entry whose truncated template set is a subset of the new one (the
@@ -26,7 +26,7 @@ archive grew from it) so only the new templates need classifying.
 Storage: one SQLite database, <cache-dir>/cache.sqlite. An entry is one row of
 `entries` (schema, taxonomy, query_plan, max_chars, classified_at, grown_from)
 and one row of `templates` per template. A template is stored by hash, never by
-text (see lib/logtypes.py): `hash` of the full template, `prefix_hash` of its
+text (see lib/log_shapes.py): `hash` of the full template, `prefix_hash` of its
 first max_chars characters, and its `category`. Templates can be hundreds of KB
 each -- CockroachDB logs multi-line Pebble stats tables as single messages --
 and an entry that held their text grew past 2 GB, which every lookup parsed in
@@ -50,35 +50,35 @@ A classification, as read from stdin and printed by `get`, is:
       "classified_at": "2026-08-07T...",   # printed by get
       "grown_from": "<previous app_key>"   # present only when incrementally grown
     }
-`logtype-cluster expand` writes this shape. The ranking (taxonomy `priority`
+`log-shape-cluster expand` writes this shape. The ranking (taxonomy `priority`
 and `why`; each plan entry's `category`, `priority` and `stage`) is described
 in lib/classification.py.
 
 Subcommands:
     normalize [--shapes-file F]    Render a `stats.log_shapes` NDJSON dump
-                                  (stdin, or F) into canonical logtype NDJSON:
-                                  one {"logtype":"..."} per line, deduplicated.
+                                  (stdin, or F) into canonical log shape NDJSON:
+                                  one {"log_shape":"..."} per line, deduplicated.
                                   Detects the shape encoding per line — raw
                                   placeholder bytes (0x11 int / 0x12 str /
                                   0x13 float) from older clp-s builds, or
                                   %placeholder% text (%int%, %rule.name%, ...)
                                   — and renders both as `<*>`. Lines that
-                                  already carry a "logtype" field pass
+                                  already carry a "log_shape" field pass
                                   through unchanged.
     freqs [--shapes-file F]        Sum the per-shape `count`s of a
                                   `stats.log_shapes` dump (stdin, or F) per
-                                  canonical logtype, across archives. Prints
-                                  {"count":N,"logtype":"..."} NDJSON, most
+                                  canonical log shape, across archives. Prints
+                                  {"count":N,"log_shape":"..."} NDJSON, most
                                   frequent first. Exits 1 when any line has a
                                   null count (an archive compressed before
-                                  clp-s stored per-logtype counts).
-    key   --logtypes-file F        Print the app_key for the given logtypes
+                                  clp-s stored per-log-shape counts).
+    key   --log-shapes-file F        Print the app_key for the given log shapes
                                   NDJSON file (accepts raw shape lines too).
-    count --logtypes-file F        Print the number of distinct logtypes in the
-                                  logtypes file (the archive's logtype
+    count --log-shapes-file F        Print the number of distinct log shapes in the
+                                  log shapes file (the archive's log shape
                                   count).
-    diff  --logtypes-file F        Dynamic-update probe. Prints ONE header line
-                                  then NDJSON template lines ({"logtype":"..."}):
+    diff  --log-shapes-file F        Dynamic-update probe. Prints ONE header line
+                                  then NDJSON template lines ({"log_shape":"..."}):
                                     UPTODATE\\t<app_key>\\t<count>
                                         cache is current; no templates to classify.
                                         A template that differs from a cached one
@@ -126,7 +126,7 @@ Files of the old one-JSON-file-per-entry cache (<cache-dir>/<KEY>.json) are
 ignored, and diff and list say so; they hold no ranking, so delete them.
 
 --cache-dir overrides the default
-~/.config/yscope-clp-plugin/logtype-cache (or $CLP_LOGTYPE_CACHE_DIR).
+~/.config/yscope-clp-plugin/log-shape-cache (or $CLP_LOG_SHAPE_CACHE_DIR).
 """
 import argparse
 import json
@@ -140,7 +140,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from classification import classification_errors, plan_errors, taxonomy_errors  # noqa: E402
-from logtypes import (  # noqa: E402
+from log_shapes import (  # noqa: E402
     DEFAULT_MAX_CHARS, app_key, default_max_chars, prefix_hash, template_hash)
 
 # Cache keys and template hashes are sha256 hex digests.
@@ -156,8 +156,8 @@ def resolve_max_chars(value):
     return value if value > 0 else 0
 
 
-def app_key_for_logtypes(logtypes, max_chars):
-    return app_key(logtypes, max_chars)
+def app_key_for_log_shapes(log_shapes, max_chars):
+    return app_key(log_shapes, max_chars)
 
 
 def now():
@@ -165,8 +165,8 @@ def now():
 
 # `stats.log_shapes` shape strings come in TWO encodings:
 #
-# 1. Raw regular-archive logtypes, emitted by clp-s builds that predate
-#    per-logtype counts: variables are placeholder bytes (see
+# 1. Raw regular-archive log shapes, emitted by clp-s builds that predate
+#    per-log-shape counts: variables are placeholder bytes (see
 #    clp::ir::VariablePlaceholder) 0x11 integer, 0x12 dictionary/string, 0x13
 #    float. A backslash is the escape byte: it is consumed and the byte after
 #    it emitted literally (mirroring LogTypeDictionaryEntry::decode_log_type).
@@ -186,9 +186,9 @@ _ESCAPE = "\\"
 
 def render_shape(shape):
     """Render a REGULAR-archive shape string (placeholder bytes + backslash
-    escapes) into the canonical logtype form used for fingerprinting:
+    escapes) into the canonical log shape form used for fingerprinting:
     placeholder bytes become `<*>` and escape bytes are consumed (the escaped
-    byte is emitted literally). Applying this to an already-rendered logtype
+    byte is emitted literally). Applying this to an already-rendered log shape
     string is NOT a no-op (it would eat backslashes), so callers must render
     raw shapes exactly once — and must NOT apply it to clpp TextShape strings
     (use render_text_shape for those)."""
@@ -215,7 +215,7 @@ def render_shape(shape):
 
 
 def render_text_shape(shape):
-    """Render a clpp TextShape string into the canonical logtype form:
+    """Render a clpp TextShape string into the canonical log shape form:
     '%%' becomes a literal '%', and every '%rule.name%' placeholder becomes
     `<*>`. Backslashes are ordinary characters here (TextShape does not
     escape them). An unpaired trailing '%' is emitted literally."""
@@ -244,16 +244,16 @@ def render_text_shape(shape):
     return "".join(out)
 
 
-def shape_line_to_logtype(obj):
-    """Return the canonical logtype string for one parsed NDJSON line, or None.
+def shape_line_to_log_shape(obj):
+    """Return the canonical log shape string for one parsed NDJSON line, or None.
 
-    Lines carrying a "logtype" field are already canonical and pass through
+    Lines carrying a "log_shape" field are already canonical and pass through
     unchanged. Lines carrying a "shape" field are rendered according to its
     encoding: raw placeholder bytes when any are present, placeholder text
     otherwise (see the encoding notes above)."""
     if not isinstance(obj, dict):
         return None
-    lt = obj.get("logtype")
+    lt = obj.get("log_shape")
     if isinstance(lt, str):
         return lt
     shape = obj.get("shape")
@@ -272,10 +272,10 @@ if hasattr(signal, "SIGPIPE"):
 
 
 def default_cache_dir():
-    env = os.environ.get("CLP_LOGTYPE_CACHE_DIR")
+    env = os.environ.get("CLP_LOG_SHAPE_CACHE_DIR")
     if env:
         return os.path.expanduser(env)
-    return os.path.expanduser("~/.config/yscope-clp-plugin/logtype-cache")
+    return os.path.expanduser("~/.config/yscope-clp-plugin/log-shape-cache")
 
 
 # --- Storage -----------------------------------------------------------------
@@ -395,9 +395,9 @@ def read_classification(stream):
         if not isinstance(t, dict):
             print(f"error: templates[{i}] is not an object", file=sys.stderr)
             return None, 2
-        if "logtype" in t:
-            print(f"error: templates[{i}] carries template text ('logtype'); the cache stores "
-                  f"templates by hash -- produce the classification with `logtype-cluster expand`",
+        if "log_shape" in t:
+            print(f"error: templates[{i}] carries template text ('log_shape'); the cache stores "
+                  f"templates by hash -- produce the classification with `log-shape-cluster expand`",
                   file=sys.stderr)
             return None, 2
         if not (isinstance(t.get("hash"), str) and _KEY_RE.match(t["hash"])
@@ -412,16 +412,16 @@ def read_classification(stream):
         return None, 2
     return obj, 0
 
-def load_logtypes(path):
-    """Return the set of distinct canonical logtype strings from a dictionary
+def load_log_shapes(path):
+    """Return the set of distinct canonical log shape strings from a dictionary
     NDJSON file. Accepts both line shapes:
-      {"logtype": "..."}                      already canonical (`<*>` markers)
+      {"log_shape": "..."}                      already canonical (`<*>` markers)
       {...,"count":...,"shape": "..."}        raw stats.log_shapes line; the
                                               shape is rendered per its
-                                              encoding (see shape_line_to_logtype)
-    A line carrying both fields uses "logtype" (assumed already rendered).
+                                              encoding (see shape_line_to_log_shape)
+    A line carrying both fields uses "log_shape" (assumed already rendered).
     Returns an empty set if the file has no parseable lines."""
-    logtypes = set()
+    log_shapes = set()
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -431,10 +431,10 @@ def load_logtypes(path):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            lt = shape_line_to_logtype(obj)
+            lt = shape_line_to_log_shape(obj)
             if isinstance(lt, str) and lt.strip():
-                logtypes.add(lt)
-    return logtypes
+                log_shapes.add(lt)
+    return log_shapes
 
 def read_shape_objects(shapes_file):
     """Return (objects, rc): the JSON objects parsed from a stats.log_shapes
@@ -472,35 +472,35 @@ def read_shape_objects(shapes_file):
 
 def cmd_normalize(args):
     """Render stats.log_shapes NDJSON (stdin or --shapes-file) to canonical
-    {"logtype": "..."} NDJSON, deduplicated and sorted."""
+    {"log_shape": "..."} NDJSON, deduplicated and sorted."""
     objects, rc = read_shape_objects(args.shapes_file)
     if rc:
         return rc
-    logtypes = set()
+    log_shapes = set()
     for obj in objects:
-        lt = shape_line_to_logtype(obj)
+        lt = shape_line_to_log_shape(obj)
         if isinstance(lt, str) and lt.strip():
-            logtypes.add(lt)
-    if not logtypes:
-        print("error: no shape/logtype entries found in input", file=sys.stderr)
+            log_shapes.add(lt)
+    if not log_shapes:
+        print("error: no log shape entries found in input", file=sys.stderr)
         return 1
-    for lt in sorted(logtypes):
-        print(json.dumps({"logtype": lt}, ensure_ascii=False))
+    for lt in sorted(log_shapes):
+        print(json.dumps({"log_shape": lt}, ensure_ascii=False))
     return 0
 
 
 def cmd_freqs(args):
-    """Sum stats.log_shapes counts per canonical logtype (stdin or
-    --shapes-file) and print {"count":N,"logtype":"..."} NDJSON, most frequent
+    """Sum stats.log_shapes counts per canonical log shape (stdin or
+    --shapes-file) and print {"count":N,"log_shape":"..."} NDJSON, most frequent
     first. Different archives number their shapes independently, so the sum is
-    keyed by the rendered logtype, never by `id`."""
+    keyed by the rendered log shape, never by `id`."""
     objects, rc = read_shape_objects(args.shapes_file)
     if rc:
         return rc
     counts = {}
     missing = 0
     for obj in objects:
-        lt = shape_line_to_logtype(obj)
+        lt = shape_line_to_log_shape(obj)
         if not isinstance(lt, str) or not lt.strip():
             continue
         count = obj.get("count")
@@ -510,39 +510,39 @@ def cmd_freqs(args):
         counts[lt] = counts.get(lt, 0) + count
     if missing:
         print(f"error: {missing} stats.log_shapes line(s) have no count; the archive "
-              f"was compressed by a clp-s build that does not store per-logtype "
+              f"was compressed by a clp-s build that does not store per-log-shape "
               f"counts. Recompress it with the current plugin.", file=sys.stderr)
         return 1
     if not counts:
-        print("error: no shape/logtype entries found in input", file=sys.stderr)
+        print("error: no log shape entries found in input", file=sys.stderr)
         return 1
     for lt, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-        print(json.dumps({"count": count, "logtype": lt}, ensure_ascii=False))
+        print(json.dumps({"count": count, "log_shape": lt}, ensure_ascii=False))
     return 0
 
 
 def cmd_key(args):
-    if not os.path.exists(args.logtypes_file):
-        print(f"error: logtypes file not found: {args.logtypes_file}", file=sys.stderr)
+    if not os.path.exists(args.log_shapes_file):
+        print(f"error: log shapes file not found: {args.log_shapes_file}", file=sys.stderr)
         return 2
-    logtypes = load_logtypes(args.logtypes_file)
-    if not logtypes:
-        print("error: no logtype entries found in file", file=sys.stderr)
+    log_shapes = load_log_shapes(args.log_shapes_file)
+    if not log_shapes:
+        print("error: no log shape entries found in file", file=sys.stderr)
         return 1
     max_chars = resolve_max_chars(args.max_chars)
     if max_chars == 0:
         print("error: --max-chars must be a positive integer", file=sys.stderr)
         return 2
-    print(app_key_for_logtypes(logtypes, max_chars))
+    print(app_key_for_log_shapes(log_shapes, max_chars))
     return 0
 
 
 def cmd_count(args):
-    if not os.path.exists(args.logtypes_file):
-        print(f"error: logtypes file not found: {args.logtypes_file}", file=sys.stderr)
+    if not os.path.exists(args.log_shapes_file):
+        print(f"error: log shapes file not found: {args.log_shapes_file}", file=sys.stderr)
         return 2
-    logtypes = load_logtypes(args.logtypes_file)
-    print(len(logtypes))
+    log_shapes = load_log_shapes(args.log_shapes_file)
+    print(len(log_shapes))
     return 0
 
 def refuse(errors):
@@ -569,7 +569,7 @@ def unranked_keys(db):
     return stale
 
 
-def find_base(db, logtypes, skip=frozenset()):
+def find_base(db, log_shapes, skip=frozenset()):
     """(exact_key, best_key): an entry whose prefix-hash set equals the
     archive's, and the entry whose set is the largest PROPER subset of it (the
     archive grew from it), each or None, never one in `skip`. Each entry is
@@ -578,7 +578,7 @@ def find_base(db, logtypes, skip=frozenset()):
     exact, best, best_n = None, None, -1
     db.execute("CREATE TEMP TABLE IF NOT EXISTS probe (h TEXT PRIMARY KEY)")
     for (limit,) in db.execute("SELECT DISTINCT max_chars FROM entries").fetchall():
-        probe = {prefix_hash(lt, limit) for lt in logtypes}
+        probe = {prefix_hash(lt, limit) for lt in log_shapes}
         db.execute("DELETE FROM probe")
         db.executemany("INSERT INTO probe (h) VALUES (?)", ((h,) for h in probe))
         rows = db.execute(
@@ -596,18 +596,18 @@ def find_base(db, logtypes, skip=frozenset()):
 
 
 def cmd_diff(args):
-    if not os.path.exists(args.logtypes_file):
-        print(f"error: logtypes file not found: {args.logtypes_file}", file=sys.stderr)
+    if not os.path.exists(args.log_shapes_file):
+        print(f"error: log shapes file not found: {args.log_shapes_file}", file=sys.stderr)
         return 2
-    logtypes = load_logtypes(args.logtypes_file)
-    if not logtypes:
-        print("error: no logtype entries found in file", file=sys.stderr)
+    log_shapes = load_log_shapes(args.log_shapes_file)
+    if not log_shapes:
+        print("error: no log shape entries found in file", file=sys.stderr)
         return 1
     max_chars = resolve_max_chars(args.max_chars)
     if max_chars == 0:
         print("error: --max-chars must be a positive integer", file=sys.stderr)
         return 2
-    key = app_key_for_logtypes(logtypes, max_chars)
+    key = app_key_for_log_shapes(log_shapes, max_chars)
     warn_legacy(args.cache_dir)
     db = connect(args.cache_dir)
     stale = unranked_keys(db)
@@ -617,30 +617,30 @@ def cmd_diff(args):
               f"classified again and the entry replaced", file=sys.stderr)
 
     if key not in stale and db.execute("SELECT 1 FROM entries WHERE app_key = ?", (key,)).fetchone():
-        print(f"UPTODATE\t{key}\t{len(logtypes)}")
+        print(f"UPTODATE\t{key}\t{len(log_shapes)}")
         return 0
-    exact, best = find_base(db, logtypes, stale)
+    exact, best = find_base(db, log_shapes, stale)
     if exact:
         # Same vocabulary stored under another key (another character limit).
-        print(f"UPTODATE\t{exact}\t{len(logtypes)}")
+        print(f"UPTODATE\t{exact}\t{len(log_shapes)}")
         return 0
     if best:
         base = {h for (h,) in db.execute("SELECT hash FROM templates WHERE app_key = ?", (best,))}
-        new = sorted(lt for lt in logtypes if template_hash(lt) not in base)
+        new = sorted(lt for lt in log_shapes if template_hash(lt) not in base)
         if new:
-            print(f"GROWTH\t{key}\t{best}\t{len(logtypes)}\t{len(new)}")
+            print(f"GROWTH\t{key}\t{best}\t{len(log_shapes)}\t{len(new)}")
             for lt in new:
-                print(json.dumps({"logtype": lt}, ensure_ascii=False))
+                print(json.dumps({"log_shape": lt}, ensure_ascii=False))
             return 0
         # find_base only returns proper subsets, so this is unreachable; never
         # emit a GROWTH that has nothing to classify.
-        print(f"UPTODATE\t{best}\t{len(logtypes)}")
+        print(f"UPTODATE\t{best}\t{len(log_shapes)}")
         return 0
 
     # No base: first classification of this application.
-    print(f"NEW\t{key}\t{len(logtypes)}")
-    for lt in sorted(logtypes):
-        print(json.dumps({"logtype": lt}, ensure_ascii=False))
+    print(f"NEW\t{key}\t{len(log_shapes)}")
+    for lt in sorted(log_shapes):
+        print(json.dumps({"log_shape": lt}, ensure_ascii=False))
     return 0
 
 
@@ -731,30 +731,30 @@ def cmd_show(args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(
-        prog="logtype-cache",
-        description="Persistent classification cache for the logtype-insights skill, "
+        prog="log-shape-cache",
+        description="Persistent classification cache for the log-shape-insights skill, "
                     "with incremental update on archive growth.",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
-    pn = sub.add_parser("normalize", help="Render stats.log_shapes NDJSON to canonical logtype NDJSON.")
+    pn = sub.add_parser("normalize", help="Render stats.log_shapes NDJSON to canonical log shape NDJSON.")
     pn.add_argument("--shapes-file", default=None, help="Input file (default: stdin).")
     pn.set_defaults(func=cmd_normalize)
 
-    pf = sub.add_parser("freqs", help="Sum stats.log_shapes counts per canonical logtype.")
+    pf = sub.add_parser("freqs", help="Sum stats.log_shapes counts per canonical log shape.")
     pf.add_argument("--shapes-file", default=None, help="Input file (default: stdin).")
     pf.set_defaults(func=cmd_freqs)
 
-    pk = sub.add_parser("key", help="Compute the app_key for a logtypes NDJSON file.")
-    pk.add_argument("--logtypes-file", required=True)
+    pk = sub.add_parser("key", help="Compute the app_key for a log shapes NDJSON file.")
+    pk.add_argument("--log-shapes-file", required=True)
     pk.set_defaults(func=cmd_key)
 
-    pc = sub.add_parser("count", help="Print the number of distinct logtypes in the logtypes file.")
-    pc.add_argument("--logtypes-file", required=True)
+    pc = sub.add_parser("count", help="Print the number of distinct log shapes in the log shapes file.")
+    pc.add_argument("--log-shapes-file", required=True)
     pc.set_defaults(func=cmd_count)
 
     pd = sub.add_parser("diff", help="Probe for cache hit/growth/new; emit templates to classify.")
-    pd.add_argument("--logtypes-file", required=True)
+    pd.add_argument("--log-shapes-file", required=True)
     pd.set_defaults(func=cmd_diff)
 
     pg = sub.add_parser("get", help="Print a cached classification (exit 1 on miss).")
@@ -780,7 +780,7 @@ def main(argv=None):
         subp.add_argument(
             "--cache-dir",
             default=default_cache_dir(),
-            help="Cache directory (default: %(default)s, or $CLP_LOGTYPE_CACHE_DIR).",
+            help="Cache directory (default: %(default)s, or $CLP_LOG_SHAPE_CACHE_DIR).",
         )
 
     # --max-chars for the subcommands that compute or stamp the fingerprint.
@@ -790,7 +790,7 @@ def main(argv=None):
             type=int,
             default=None,
             help=f"cap each template at this many characters before fingerprinting "
-                 f"(default: {DEFAULT_MAX_CHARS}, or $CLP_LOGTYPE_MAX_CHARS)",
+                 f"(default: {DEFAULT_MAX_CHARS}, or $CLP_LOG_SHAPE_MAX_CHARS)",
         )
 
     args = p.parse_args(argv)

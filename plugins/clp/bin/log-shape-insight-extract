@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-logtype-insight-extract - build the report writer's prompt pieces from a
-classification (logtype-insights skill, step 7).
+log-shape-insight-extract - build the report writer's prompt pieces from a
+classification (log-shape-insights skill, step 7).
 
-The classification (`logtype-cache get`, `logtype-cache merge`, or
-`logtype-cluster expand` output, e.g. /tmp/logtype-classification.json) names
-each template by hash, not by text (see lib/logtypes.py): `hash` of the full
+The classification (`log-shape-cache get`, `log-shape-cache merge`, or
+`log-shape-cluster expand` output, e.g. /tmp/log-shape-classification.json) names
+each template by hash, not by text (see lib/log_shapes.py): `hash` of the full
 template and `prefix_hash` of its first max_chars characters, with its
 category. The text comes from the archive's own dictionary dump, which this
 tool streams one line at a time -- the bootstrap's frequencies file, or its
-logtypes file when the archive has no stored counts -- hashing each template
+log shapes file when the archive has no stored counts -- hashing each template
 and joining it to its category. A template whose full hash is not in the
 classification takes the category of one that shares its prefix hash (it
 differs only past the limit); one with neither is "unclassified".
@@ -17,7 +17,7 @@ differs only past the limit); one with neither is "unclassified".
 Templates are unbounded in both count and length. Observed in practice:
 CockroachDB serializes a multi-line Pebble storage-engine stats table as a
 single log message, with column widths shifting the exact bytes between dumps
-so clp-s never collapses them into one logtype -- 11558 templates, one category
+so clp-s never collapses them into one log shape -- 11558 templates, one category
 holding 9810 of them, mean length ~184KB (max ~1.6MB). So nothing here holds
 every template at once: per category it keeps only the top
 `--max-per-category` templates by frequency (ranked using the frequencies file
@@ -26,50 +26,50 @@ the bootstrap already produced, never recomputed), each truncated to
 result stays one line per template.
 
 Usage:
-  logtype-insight-extract [options]
+  log-shape-insight-extract [options]
 
 Options:
   --classification-file F   Classification JSON
-                             (default: /tmp/logtype-classification.json)
-  --freqs-file F            Per-logtype frequency NDJSON from the bootstrap
-                             (default: /tmp/logtype-freqs.ndjson; pass
+                             (default: /tmp/log-shape-classification.json)
+  --freqs-file F            Per-log-shape frequency NDJSON from the bootstrap
+                             (default: /tmp/log-shape-freqs.ndjson; pass
                              --no-freqs when the bootstrap reported
                              FREQS=UNAVAILABLE)
   --no-freqs                Skip frequency ranking; read the templates from
-                             --logtypes-file instead and keep the first
+                             --log-shapes-file instead and keep the first
                              `--max-per-category` per category.
-  --logtypes-file F         The bootstrap's logtypes NDJSON, used with
-                             --no-freqs (default: /tmp/logtypes.ndjson)
+  --log-shapes-file F         The bootstrap's log shapes NDJSON, used with
+                             --no-freqs (default: /tmp/log-shapes.ndjson)
   --max-per-category N      Cap templates shown per category (default: 25)
   --trunc-chars N           Truncate each template to N characters for the
                              OUTPUT only (default: 180)
   --out-templates F         Where to write the templates-by-category text
-                             (default: /tmp/logtype-templates-by-category.txt)
+                             (default: /tmp/log-shape-templates-by-category.txt)
   --out-query-plan F        Where to write the core plan: the "core" entries,
                              one per line as compact JSON, high priority first
-                             (default: /tmp/logtype-query-plan.txt)
+                             (default: /tmp/log-shape-query-plan.txt)
   --out-drill-plan F        Where to write the "drill" entries the same way,
                              grouped by category; they run only when the user
-                             focuses on their category (logtype-focus)
-                             (default: /tmp/logtype-drill-plan.txt)
+                             focuses on their category (log-shape-focus)
+                             (default: /tmp/log-shape-drill-plan.txt)
   --focus-inbox F           The inbox the plan runner reads focus entries from
-                             (logtype-query-plan-run --inbox); emptied here,
+                             (log-shape-query-plan-run --inbox); emptied here,
                              with the previous run's focus file
                              (--focus-file), so a new analysis starts with no
-                             focus (defaults: /tmp/logtype-focus-inbox.ndjson,
-                             /tmp/logtype-focus.json)
+                             focus (defaults: /tmp/log-shape-focus-inbox.ndjson,
+                             /tmp/log-shape-focus.json)
   --out-top-templates F     With frequencies: the most frequent templates
                              overall (--top-templates, default 30) and per
                              category (--top-per-category, default 5), each
                              with its category and exact count (default:
-                             /tmp/logtype-top-templates.json)
+                             /tmp/log-shape-top-templates.json)
   --out-category-totals F   With frequencies: where to write {category:
                              {templates, records, priority, why}} JSON,
                              records being the stored per-template counts
                              summed -- an exact record count per category
                              with no search -- and priority and why the
                              classifier's ranking of the category
-                             (default: /tmp/logtype-category-totals.json)
+                             (default: /tmp/log-shape-category-totals.json)
 
 Prints a KEY=VALUE summary to stdout: SCHEMA=, TEMPLATES=, CATEGORIES=,
 QUERY_PLAN= (core entries), DRILL_PLAN= (drill entries), QUERY_PLAN_INVALID=,
@@ -81,7 +81,7 @@ summary and use the file paths for the report writer's prompt.
 
 QUERY_PLAN_INVALID counts the plan entries without a valid `match` filter or
 ranking (lib/kql_build.py, lib/classification.py); the numbers follow as
-QUERY_PLAN_INVALID_ENTRIES=. `logtype-cache` stores no such entry, so it is 0
+QUERY_PLAN_INVALID_ENTRIES=. `log-shape-cache` stores no such entry, so it is 0
 unless the classification file was edited by hand.
 
 Exit codes: 0 ok, 1 input problem.
@@ -95,18 +95,18 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from classification import category_names, plan_errors, priority_rank  # noqa: E402
-from logtypes import default_max_chars, prefix_hash, template_hash  # noqa: E402
+from log_shapes import default_max_chars, prefix_hash, template_hash  # noqa: E402
 
-DEFAULT_CLASSIFICATION_FILE = "/tmp/logtype-classification.json"
-DEFAULT_FREQS_FILE = "/tmp/logtype-freqs.ndjson"
-DEFAULT_LOGTYPES_FILE = "/tmp/logtypes.ndjson"
-DEFAULT_OUT_TEMPLATES = "/tmp/logtype-templates-by-category.txt"
-DEFAULT_OUT_QUERY_PLAN = "/tmp/logtype-query-plan.txt"
-DEFAULT_OUT_CATEGORY_TOTALS = "/tmp/logtype-category-totals.json"
-DEFAULT_OUT_TOP_TEMPLATES = "/tmp/logtype-top-templates.json"
-DEFAULT_OUT_DRILL_PLAN = "/tmp/logtype-drill-plan.txt"
-DEFAULT_FOCUS_INBOX = "/tmp/logtype-focus-inbox.ndjson"
-DEFAULT_FOCUS_FILE = "/tmp/logtype-focus.json"
+DEFAULT_CLASSIFICATION_FILE = "/tmp/log-shape-classification.json"
+DEFAULT_FREQS_FILE = "/tmp/log-shape-freqs.ndjson"
+DEFAULT_LOG_SHAPES_FILE = "/tmp/log-shapes.ndjson"
+DEFAULT_OUT_TEMPLATES = "/tmp/log-shape-templates-by-category.txt"
+DEFAULT_OUT_QUERY_PLAN = "/tmp/log-shape-query-plan.txt"
+DEFAULT_OUT_CATEGORY_TOTALS = "/tmp/log-shape-category-totals.json"
+DEFAULT_OUT_TOP_TEMPLATES = "/tmp/log-shape-top-templates.json"
+DEFAULT_OUT_DRILL_PLAN = "/tmp/log-shape-drill-plan.txt"
+DEFAULT_FOCUS_INBOX = "/tmp/log-shape-focus-inbox.ndjson"
+DEFAULT_FOCUS_FILE = "/tmp/log-shape-focus.json"
 UNCLASSIFIED = "unclassified"
 
 
@@ -118,7 +118,7 @@ def truncate(text: str, limit: int) -> str:
 
 
 def read_templates(path: str):
-    """(count, text) per template, one NDJSON line at a time. A logtypes file
+    """(count, text) per template, one NDJSON line at a time. A log shapes file
     has no counts; they read as 0."""
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -129,9 +129,9 @@ def read_templates(path: str):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(rec, dict) and isinstance(rec.get("logtype"), str):
+            if isinstance(rec, dict) and isinstance(rec.get("log_shape"), str):
                 count = rec.get("count", 0)
-                yield (count if isinstance(count, int) else 0), rec["logtype"]
+                yield (count if isinstance(count, int) else 0), rec["log_shape"]
 
 
 class Top:
@@ -161,13 +161,13 @@ class Top:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Extract taxonomy/templates-by-category/query_plan from a "
-        "logtype classification, ranked and truncated so the output "
+        "log shape classification, ranked and truncated so the output "
         "stays bounded regardless of how large individual templates are."
     )
     parser.add_argument("--classification-file", default=DEFAULT_CLASSIFICATION_FILE)
     parser.add_argument("--freqs-file", default=DEFAULT_FREQS_FILE)
     parser.add_argument("--no-freqs", action="store_true")
-    parser.add_argument("--logtypes-file", default=DEFAULT_LOGTYPES_FILE)
+    parser.add_argument("--log-shapes-file", default=DEFAULT_LOG_SHAPES_FILE)
     parser.add_argument("--max-per-category", type=int, default=25)
     parser.add_argument("--trunc-chars", type=int, default=180)
     parser.add_argument("--out-templates", default=DEFAULT_OUT_TEMPLATES)
@@ -188,10 +188,10 @@ def main(argv=None) -> int:
         print(f"error: failed to read {args.classification_file}: {exc}", file=sys.stderr)
         return 1
     templates = classification.get("templates", []) if isinstance(classification, dict) else []
-    if any(isinstance(t, dict) and "logtype" in t for t in templates[:1]):
-        print(f"error: {args.classification_file} names templates by text ('logtype'); "
-              "classifications name them by hash -- produce it with `logtype-cluster expand` "
-              "or `logtype-cache get`", file=sys.stderr)
+    if any(isinstance(t, dict) and "log_shape" in t for t in templates[:1]):
+        print(f"error: {args.classification_file} names templates by text ('log_shape'); "
+              "classifications name them by hash -- produce it with `log-shape-cluster expand` "
+              "or `log-shape-cache get`", file=sys.stderr)
         return 1
     max_chars = classification.get("max_chars")
     if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:
@@ -203,7 +203,7 @@ def main(argv=None) -> int:
             by_prefix.setdefault(t.get("prefix_hash"), t["category"])
 
     ranked = not args.no_freqs
-    source = args.freqs_file if ranked else args.logtypes_file
+    source = args.freqs_file if ranked else args.log_shapes_file
     per_cat = {}  # category -> [templates, records, Top]
     overall = Top(args.top_templates, args.trunc_chars, ranked)
     seen = 0
@@ -246,9 +246,9 @@ def main(argv=None) -> int:
         # category and its exact archive-wide count, so a report can name a
         # template's count and category without anyone re-deriving them.
         top = {
-            "overall": [{"count": c, "category": cat, "logtype": text} for c, text, cat in overall.sorted()],
+            "overall": [{"count": c, "category": cat, "log_shape": text} for c, text, cat in overall.sorted()],
             "by_category": {
-                cat: [{"count": c, "category": cat, "logtype": text}
+                cat: [{"count": c, "category": cat, "log_shape": text}
                       for c, text, _ in t.sorted()[: args.top_per_category]]
                 for cat, (_, _, t) in per_cat.items()
             },

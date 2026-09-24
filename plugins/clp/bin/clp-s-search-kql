@@ -46,7 +46,7 @@ Allowed search controls:
   --semantic-endpoint URL  Embedding server URL for semantic search. Defaults
                            to $CLP_SEMANTIC_ENDPOINT, then the semantic-endpoint
                            config file, then the built-in remote endpoints.
-  --semantic-top-k K       Return up to K nearest logtypes (default 5).
+  --semantic-top-k K       Return up to K nearest log shapes (default 5).
   --semantic-threshold T   Minimum similarity floor 0.0-1.0 (default 0.3).
   --embedding-batch-size N  Batch size for vector processing (default auto).
   --experimental          Enable clp-s experimental (clpp) features. Required
@@ -66,15 +66,15 @@ Examples:
   clp-s-search-kql --experimental --projection 'decompose(message)' /tmp/archive '*'
 
 Stats queries (dictionary dumps, not KQL): 'stats.log_shapes' emits the
-archive's logtype dictionary as NDJSON ({"archive_id","count","id","shape"});
+archive's log shape dictionary as NDJSON ({"archive_id","count","id","shape"});
 'stats.schema_tree' and 'stats.archives' emit schema and archive metadata.
 These require the shapes API (clp-core >= 0.13); the wrapper adds
 --experimental so clpp archives open too. `count` is how many values carried
 the shape, stored at compression time (null for archives compressed before
 clp-s stored it). Shapes mark variables as %int%/%str%/%float% on regular
 archives and %rule.name% on clpp archives (older builds emit raw placeholder
-bytes); `logtype-cache normalize` renders all of them to '<*>', and
-`logtype-cache freqs` sums the counts per template. The legacy
+bytes); `log-shape-cache normalize` renders all of them to '<*>', and
+`log-shape-cache freqs` sums the counts per template. The legacy
 'stats.logtypes' query is rejected — shapes-API binaries silently return
 nothing for it.
 
@@ -275,7 +275,7 @@ case "$trimmed_query" in
   stats.logtypes)
     echo "error: stats.logtypes was renamed to stats.log_shapes (clp-core >= 0.13 shapes API)." >&2
     echo "  Dump the dictionary with:  clp-s-search-kql ARCHIVE 'stats.log_shapes'" >&2
-    echo "  then render placeholders:  ... | grep '^{' | logtype-cache normalize" >&2
+    echo "  then render placeholders:  ... | grep '^{' | log-shape-cache normalize" >&2
     exit 2
     ;;
 esac

@@ -30,7 +30,7 @@ A semantic node must be scoped: some enclosing "all" must also hold a child
 without any semantic node, so the semantic match is always ANDed with a
 concrete filter. It may not appear under "not".
 
-Stdlib only, like the other logtype-* helpers.
+Stdlib only, like the other log-shape-* helpers.
 """
 
 import re

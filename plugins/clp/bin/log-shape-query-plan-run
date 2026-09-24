@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-logtype-query-plan-run - execute a logtype-insights query plan and report each
-entry's result as it completes (logtype-insights skill, step 7).
+log-shape-query-plan-run - execute a log-shape-insights query plan and report each
+entry's result as it completes (log-shape-insights skill, step 7).
 
 The insight pass used to execute the plan itself, out of sight: the user
 saw a spinner for minutes, and nobody could tell afterwards which KQL had run,
@@ -16,15 +16,15 @@ construction. An entry without a valid `match` (a malformed filter, or a
 hand-written `kql` string) is recorded as an error without running.
 
 Usage:
-  logtype-query-plan-run [options] ARCHIVES_DIR
-  logtype-query-plan-run --print-table [--results-file F]
+  log-shape-query-plan-run [options] ARCHIVES_DIR
+  log-shape-query-plan-run --print-table [--results-file F]
 
 Options:
   --query-plan-file F   One query_plan entry per line as compact JSON
-                        (default: /tmp/logtype-query-plan.txt, written by
-                        logtype-insight-extract)
+                        (default: /tmp/log-shape-query-plan.txt, written by
+                        log-shape-insight-extract)
   --results-file F      Where results accumulate as NDJSON, one line per plan
-                        entry (default: /tmp/logtype-query-results.ndjson)
+                        entry (default: /tmp/log-shape-query-results.ndjson)
   --entries RANGES      1-based plan entries to run, e.g. 1-5, 7, or 1-3,9
                         (default: all). Results already recorded for other
                         entries of the same archive and plan are kept, so the
@@ -46,7 +46,7 @@ Options:
                         pool open until F says {"close": true}: each complete
                         line is a plan entry, queued AHEAD of every plan entry
                         not yet started, with origin "focus" unless it has its
-                        own. logtype-focus writes it once the user picks a
+                        own. log-shape-focus writes it once the user picks a
                         focus, so one pool runs the core plan and the focus
                         without a second pool counting the same free memory.
                         Its entries get indexes after the plan's last entry.
@@ -124,8 +124,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from kql_build import METHODS, FilterError, entry_kql  # noqa: E402
 
-DEFAULT_QUERY_PLAN_FILE = "/tmp/logtype-query-plan.txt"
-DEFAULT_RESULTS_FILE = "/tmp/logtype-query-results.ndjson"
+DEFAULT_QUERY_PLAN_FILE = "/tmp/log-shape-query-plan.txt"
+DEFAULT_RESULTS_FILE = "/tmp/log-shape-query-results.ndjson"
 NON_SELECTIVE_PCT = 90.0
 
 
@@ -526,7 +526,7 @@ def print_table(results):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Execute a logtype-insights query plan, printing and "
+        description="Execute a log-shape-insights query plan, printing and "
         "recording each entry's result as it completes."
     )
     parser.add_argument("archive", nargs="?", help="archives directory")

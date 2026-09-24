@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-logtype-report-check - flag figures and KQL fields in a logtype-insights report
-that its own inputs do not support (logtype-insights skill, step 7).
+log-shape-report-check - flag figures and KQL fields in a log-shape-insights report
+that its own inputs do not support (log-shape-insights skill, step 7).
 
 The report writer is told to quote figures from the facts file and to derive
 none. It mostly obeys, but a small model still sometimes adds two counts
@@ -21,9 +21,9 @@ Two checks:
     facts list under "Fields a KQL query may filter on".
 
 Usage:
-  logtype-report-check REPORT [--facts F] [--also F ...]
+  log-shape-report-check REPORT [--facts F] [--also F ...]
 
-  --facts F   The facts file (default: /tmp/logtype-insight-facts.md)
+  --facts F   The facts file (default: /tmp/log-shape-insight-facts.md)
   --also F    Another file whose figures the report may use, e.g. the results
               table; repeatable.
 
@@ -84,7 +84,7 @@ def looks_like_kql(text):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Flag unsupported figures and KQL fields in a report.")
     ap.add_argument("report")
-    ap.add_argument("--facts", default="/tmp/logtype-insight-facts.md")
+    ap.add_argument("--facts", default="/tmp/log-shape-insight-facts.md")
     ap.add_argument("--also", action="append", default=[])
     args = ap.parse_args(argv)
 

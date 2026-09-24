@@ -71,7 +71,7 @@ Count matches without fetching full records — `--count` works with `shape()` f
 
 ### Output keys
 
-Projected `shape()` and `decompose()` results nest under the column name: `{"message":{"shape":"…","<leaf>":[…]}}` (rendered as the dotted keys `message.shape` / `message.decompose` in flat views). The shape string is the logtype template (static text + `%var%` placeholders); the leaf arrays are the variable values bound to each placeholder for that row.
+Projected `shape()` and `decompose()` results nest under the column name: `{"message":{"shape":"…","<leaf>":[…]}}` (rendered as the dotted keys `message.shape` / `message.decompose` in flat views). The shape string is the log shape (static text + `%var%` placeholders); the leaf arrays are the variable values bound to each placeholder for that row.
 
 ## Decompress (clpp)
 

@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-logtype-focus - turn the user's answer to "what should this analysis focus
-on?" into queries for the running plan pool (logtype-insights skill).
+log-shape-focus - turn the user's answer to "what should this analysis focus
+on?" into queries for the running plan pool (log-shape-insights skill).
 
 The classifier ranks its categories and writes, besides the core plan that
 runs on every analysis, "drill" entries per category that run only when the
-user focuses on that category (logtype-insight-extract writes them to
-/tmp/logtype-drill-plan.txt). This tool queues the chosen categories' drill
+user focuses on that category (log-shape-insight-extract writes them to
+/tmp/log-shape-drill-plan.txt). This tool queues the chosen categories' drill
 entries, plus any entries the agent wrote from the user's own words, into the
-plan runner's inbox (logtype-query-plan-run --inbox), then closes the inbox so
+plan runner's inbox (log-shape-query-plan-run --inbox), then closes the inbox so
 the pool finishes. It also records the focus and the user's context in
-/tmp/logtype-focus.json, which logtype-insight-facts puts at the top of the
+/tmp/log-shape-focus.json, which log-shape-insight-facts puts at the top of the
 facts file for the report writer.
 
 Call it ONCE per analysis: the runner stops reading the inbox at the close
 line, so entries queued by a second call are not run.
 
 Usage:
-  logtype-focus [--category C]... [--entries-file F] [--everything]
+  log-shape-focus [--category C]... [--entries-file F] [--everything]
                 [--question TEXT] [--context TEXT]
 
 Options:
@@ -33,10 +33,10 @@ Options:
   --question TEXT    The user's own focus question, verbatim.
   --context TEXT     What the user said they already know about these logs,
                      verbatim (empty when they skipped it).
-  --classification-file F   (default: /tmp/logtype-classification.json)
-  --drill-plan-file F       (default: /tmp/logtype-drill-plan.txt)
-  --inbox F                 (default: /tmp/logtype-focus-inbox.ndjson)
-  --focus-file F            (default: /tmp/logtype-focus.json)
+  --classification-file F   (default: /tmp/log-shape-classification.json)
+  --drill-plan-file F       (default: /tmp/log-shape-drill-plan.txt)
+  --inbox F                 (default: /tmp/log-shape-focus-inbox.ndjson)
+  --focus-file F            (default: /tmp/log-shape-focus.json)
 
 Prints one line per queued entry, "[k] <label> (<category>) <kql>", then
 FOCUS=<everything|categories|question> FOCUS_ENTRIES=<n>, a NO_DRILL=<C> line
@@ -78,10 +78,10 @@ def main(argv=None):
     ap.add_argument("--everything", action="store_true")
     ap.add_argument("--question", default="")
     ap.add_argument("--context", default="")
-    ap.add_argument("--classification-file", default="/tmp/logtype-classification.json")
-    ap.add_argument("--drill-plan-file", default="/tmp/logtype-drill-plan.txt")
-    ap.add_argument("--inbox", default="/tmp/logtype-focus-inbox.ndjson")
-    ap.add_argument("--focus-file", default="/tmp/logtype-focus.json")
+    ap.add_argument("--classification-file", default="/tmp/log-shape-classification.json")
+    ap.add_argument("--drill-plan-file", default="/tmp/log-shape-drill-plan.txt")
+    ap.add_argument("--inbox", default="/tmp/log-shape-focus-inbox.ndjson")
+    ap.add_argument("--focus-file", default="/tmp/log-shape-focus.json")
     args = ap.parse_args(argv)
     if not (args.category or args.entries_file or args.everything or args.question):
         ap.error("give --everything, --category, --question, or --entries-file")
