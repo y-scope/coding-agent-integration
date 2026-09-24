@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-logtype-insight-facts - compute every number of a logtype-insights report in
+log-shape-insight-facts - compute every number of a log-shape-insights report in
 code, so the report writer only has to put them into words
-(logtype-insights skill, step 7).
+(log-shape-insights skill, step 7).
 
 A small model asked to add up a category table, pick the right severity count,
 or work out a time span from example records gets them wrong: in a trial it
@@ -12,32 +12,32 @@ for a 74-hour log. Nothing here needs judgement, so nothing here is left to it.
 Inputs (all produced earlier in the run):
   --baseline-results-file F
                          The baseline pool's results (default:
-                         /tmp/logtype-baseline-results.ndjson). Its entries
+                         /tmp/log-shape-baseline-results.ndjson). Its entries
                          (origin "baseline") carry the severity and logger
                          breakdown; "follow-up of N" entries carry the fetched
                          records behind a small count.
   --results-file F       The classified plan's results (default:
-                         /tmp/logtype-query-results.ndjson). The two are
+                         /tmp/log-shape-query-results.ndjson). The two are
                          numbered separately, so a query is cited as
                          [baseline #N] or [plan #N].
-  --category-totals F    logtype-insight-extract's {category: {templates,
+  --category-totals F    log-shape-insight-extract's {category: {templates,
                          records, priority, why}} (default:
-                         /tmp/logtype-category-totals.json, or "none" when
+                         /tmp/log-shape-category-totals.json, or "none" when
                          frequencies were unavailable)
-  --focus-file F         logtype-focus's record of the user's focus and
-                         context (default: /tmp/logtype-focus.json; absent
+  --focus-file F         log-shape-focus's record of the user's focus and
+                         context (default: /tmp/log-shape-focus.json; absent
                          when no one was asked). Its section comes first, with
                          the results of the focus entries (origin "focus").
   --top-templates-file F The extract's top templates, overall and per category,
                          each with its category and exact count (default:
-                         /tmp/logtype-top-templates.json). Without it the top
+                         /tmp/log-shape-top-templates.json). Without it the top
                          templates come from --freqs-file, without categories.
   --freqs-file F         Per-template counts, most frequent first (default:
-                         /tmp/logtype-freqs.ndjson, or "none")
+                         /tmp/log-shape-freqs.ndjson, or "none")
   --schema-json JSON     The classification schema (the extract's SCHEMA= line)
   --top N                Templates and message groups to list (default: 20)
   --out F                Where to write the facts (default:
-                         /tmp/logtype-insight-facts.md)
+                         /tmp/log-shape-insight-facts.md)
 
 Every section says where its numbers come from. What cannot be known is said
 to be unavailable rather than estimated: notably the archive's time span, which
@@ -130,24 +130,24 @@ def read_top_templates(path, n, chars=220):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            text = rec.get("logtype", "").replace("\n", " <NL> ")
+            text = rec.get("log_shape", "").replace("\n", " <NL> ")
             out.append((rec.get("count", 0), text[:chars] + ("…" if len(text) > chars else "")))
     return out
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Compute a logtype-insights report's numbers in code.")
-    ap.add_argument("--results-file", default="/tmp/logtype-query-results.ndjson",
+    ap = argparse.ArgumentParser(description="Compute a log-shape-insights report's numbers in code.")
+    ap.add_argument("--results-file", default="/tmp/log-shape-query-results.ndjson",
                     help="the classified plan's results")
-    ap.add_argument("--baseline-results-file", default="/tmp/logtype-baseline-results.ndjson",
+    ap.add_argument("--baseline-results-file", default="/tmp/log-shape-baseline-results.ndjson",
                     help="the baseline queries' results, run in their own pool")
-    ap.add_argument("--category-totals", default="/tmp/logtype-category-totals.json")
-    ap.add_argument("--focus-file", default="/tmp/logtype-focus.json")
-    ap.add_argument("--freqs-file", default="/tmp/logtype-freqs.ndjson")
-    ap.add_argument("--top-templates-file", default="/tmp/logtype-top-templates.json")
+    ap.add_argument("--category-totals", default="/tmp/log-shape-category-totals.json")
+    ap.add_argument("--focus-file", default="/tmp/log-shape-focus.json")
+    ap.add_argument("--freqs-file", default="/tmp/log-shape-freqs.ndjson")
+    ap.add_argument("--top-templates-file", default="/tmp/log-shape-top-templates.json")
     ap.add_argument("--schema-json", required=True)
     ap.add_argument("--top", type=int, default=20)
-    ap.add_argument("--out", default="/tmp/logtype-insight-facts.md")
+    ap.add_argument("--out", default="/tmp/log-shape-insight-facts.md")
     args = ap.parse_args(argv)
 
     try:
@@ -338,7 +338,7 @@ def main(argv=None) -> int:
     if top_json:
         w(f"## Top {min(args.top, len(top_json['overall']))} templates by records, with their category (stored per-template counts)")
         for t in top_json["overall"][: args.top]:
-            w(f"- {t['count']:,} ({pct(t['count'], total)}) [{t['category']}]: `{t['logtype']}`")
+            w(f"- {t['count']:,} ({pct(t['count'], total)}) [{t['category']}]: `{t['log_shape']}`")
         w("")
         w("## Top templates within each category (exact counts; use these for any per-template figure)")
         cats = sorted(top_json["by_category"].items(),
@@ -346,7 +346,7 @@ def main(argv=None) -> int:
         for cat, items in cats:
             w(f"### {cat}")
             for t in items:
-                w(f"- {t['count']:,}: `{t['logtype']}`")
+                w(f"- {t['count']:,}: `{t['log_shape']}`")
         w("")
     elif args.freqs_file != "none":
         try:

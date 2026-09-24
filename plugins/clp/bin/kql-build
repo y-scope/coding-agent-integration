@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 kql-build - render structured JSON filters into clp-s KQL, and validate
-logtype-insights query plans before they are stored or run.
+log-shape-insights query plans before they are stored or run.
 
 A filter written as JSON cannot produce an unquoted wildcard value or an
 ungrouped AND/OR: every string value is quoted and escaped, and every nested

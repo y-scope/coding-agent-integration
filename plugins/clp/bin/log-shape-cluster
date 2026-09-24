@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# logtype-cluster — launcher for the logtype-insights pre-clustering tool.
+# log-shape-cluster — launcher for the log-shape-insights pre-clustering tool.
 #
 # Resolves the semantic (embedding) server URL with the same precedence, scheme
 # check, and health check as the search wrapper — inline flag,
 # CLP_SEMANTIC_ENDPOINT, the semantic-endpoint config file, then the built-in
-# remote endpoints — and exports it for logtype-cluster.py, which embeds the
-# logtype templates via the server's /v1/embeddings endpoint.
+# remote endpoints — and exports it for log-shape-cluster.py, which embeds the
+# log shapes via the server's /v1/embeddings endpoint.
 #
 # No venv, no model download, no server of our own, and no third-party
 # dependency: embeddings always come from an already-running server, and the
@@ -19,12 +19,12 @@ source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
 
 if [[ "${1:-}" == "setup" ]]; then
   cat >&2 <<EOF
-error: 'logtype-cluster setup' has been removed.
+error: 'log-shape-cluster setup' has been removed.
 
 Clustering no longer installs a venv or downloads an embedding model — it
 embeds templates through a semantic server that is already running. Point it
 at one (highest precedence first):
-  logtype-cluster cluster --semantic-endpoint URL ...
+  log-shape-cluster cluster --semantic-endpoint URL ...
   CLP_SEMANTIC_ENDPOINT=URL
   echo URL > $(semantic_endpoint_config_file)
 Otherwise the built-in remote endpoints are used automatically.
@@ -71,9 +71,9 @@ if [[ "$needs_endpoint" -eq 1 ]]; then
   # Always route through resolve_semantic_endpoint — including the inline
   # value — so the HTTPS/loopback scheme check and the health check apply
   # uniformly to every source. Map any resolution failure to exit 2, the
-  # clusterer's documented "cannot embed" code (see logtype-cluster.py).
+  # clusterer's documented "cannot embed" code (see log-shape-cluster.py).
   CLP_SEMANTIC_ENDPOINT="$(resolve_semantic_endpoint "$inline_endpoint")" || exit 2
   export CLP_SEMANTIC_ENDPOINT
 fi
 
-exec python3 "${CLP_PLUGIN_BIN_DIR}/logtype-cluster.py" "$@"
+exec python3 "${CLP_PLUGIN_BIN_DIR}/log-shape-cluster.py" "$@"

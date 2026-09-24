@@ -12,7 +12,7 @@ The plugin exposes only:
 - compress one selected session with `clp-s c --timestamp-key timestamp`.
 - compress log files from an arbitrary folder with `clp-s c --remove-path-prefix FOLDER -f FILE_LIST OUTPUT_DIR`.
 - search local CLP archives with KQL (including `semantic("query")`) and stdout results.
-- dump an archive's logtype dictionary with the `stats.log_shapes` query.
+- dump an archive's log shape dictionary with the `stats.log_shapes` query.
 - decompress a local CLP archive directory.
 
 It does not expose full-project compression, reducers, network/file output handlers, results-cache writes, indexing, conversion, remote decompression, metadata sinks, or arbitrary `clp-s` option passthrough.
@@ -24,7 +24,7 @@ It does not expose full-project compression, reducers, network/file output handl
 | `compress` | Compress a session JSONL file into a CLP archive directory. |
 | `compress-folder` | Compress log files from an arbitrary folder into a CLP archive directory. |
 | `search` | Search CLP archives with KQL, including `semantic("query")`. |
-| `logtype-insights` | App-agnostic log analysis driven by the archive's logtype dictionary: dump the templates, classify them (cached), then run targeted queries derived from templates that are known to exist. |
+| `log-shape-insights` | App-agnostic log analysis driven by the archive's log shape dictionary: dump the templates, classify them (cached), then run targeted queries derived from templates that are known to exist. |
 | `decompress` | Decompress a CLP archive directory for raw inspection. |
 | `claude-code-trajectory` | End-to-end Claude Code session analysis: list → compress → search → decompress, plus Claude-specific query starters. |
 | `codex-trajectory` | Same workflow for Codex session logs, plus Codex-specific query starters. |
@@ -75,17 +75,17 @@ Local helpers (not `clp-s` passthroughs — they invoke `clp-s` only through the
 
 - `bin/clp-detect-logs` — reads the first 128 KiB of each log file (read-only). JSON (two or more objects parsed) is reported with its structure, its timestamp field and its first records, every string cut to 128 characters; text is reported with its first lines, each cut to 256 characters, and whether they match a bundled `--structurize` format (vLLM). It suggests a `clp-s-compress-folder` command per group of files that need the same settings. `--parser FILE` dry-runs an agent-written parser on the lines read. See [Log Files](#log-files).
 - `bin/structurize.py` — converts text logs to structured JSONL: the built-in vLLM formats, or any format through `--parser FILE`, a Python file defining `parse_line(line)`. Used by `clp-s-compress-folder --structurize`; not called directly.
-- `bin/logtype-cache` — persistent cache of the `logtype-insights` classification, with incremental update when an archive grows. See [Logtype Cache](#logtype-cache).
-- `bin/logtype-insights-bootstrap` — one-command bootstrap for the `logtype-insights` skill: schema-discovery sample, per-field value distributions, logtype dictionary dump, per-template frequencies from the counts stored in the archive, and the classification-cache probe, summarized as grep-able `KEY=VALUE` lines.
-- `bin/logtype-cluster` (+ `logtype-cluster.py`) — groups semantically similar logtypes using embeddings from the semantic server so the LLM classifies one representative per cluster. See [Logtype Cluster](#logtype-cluster).
-- `bin/logtype-insight-extract` — builds the `logtype-insights` insight-pass inputs from a classification, joining its template hashes to the texts it streams from the archive's frequencies file: templates grouped by category (top N by frequency, truncated), the core plan (the `core` entries, one per line, high priority first, reporting entries without a valid `match` filter or ranking as `QUERY_PLAN_INVALID=`), the `drill` entries apart (`/tmp/logtype-drill-plan.txt`), and, with frequencies, the exact records per category with the classifier's priority and why (`/tmp/logtype-category-totals.json`) and the top templates overall and per category with their counts and categories (`/tmp/logtype-top-templates.json`). Bounded, so classifications holding huge near-duplicate templates stay fast. It also empties the focus inbox, so a new analysis starts with no focus.
-- `bin/logtype-baseline-plan` — writes the app-agnostic baseline as its own plan (`/tmp/logtype-baseline-plan.txt`), run by its own pool while the templates are classified: it samples the schema's severity and logger values from the head of the archive, then adds a `count` per common value, a `count` for the residual (everything else), a `then` rule that fetches the records behind a small severity residual, and one scoped semantic entry. It never uses `--unique`, which scans every record.
-- `bin/logtype-query-plan-run` — the query pool. It executes the plan through `clp-s-search-kql`, rendering each entry's `match` filter to KQL with `kql-build`, printing each entry's result as it completes and recording the rendered KQL, count, share of records, status (`ok`, `zero`, `error`, `timeout`, non-selective), elapsed time, peak memory and samples in `/tmp/logtype-query-results.ndjson`. Searches run concurrently under memory control: the first runs alone, its peak resident memory is measured, and another starts only while free memory can take one more (sampled twice a second; a search is paused and requeued if memory runs short). An entry's `then` rule can add a follow-up query once its result is in, `--retry-failed` retries a failed entry once, and `--jobs N` pins the concurrency. With `--inbox FILE` the pool also takes entries from FILE while it runs, ahead of every plan entry not yet started, and stays open until FILE says `{"close": true}` (or `--inbox-timeout`, default 900 s, passes): the core plan starts while the user is still choosing a focus, and the focus runs next without a second pool counting the same free memory. `--print-table` renders the recorded results as Markdown, focus entries marked.
-- `bin/logtype-focus` — turns the user's answer to "what should this analysis focus on?" into queries: it queues the chosen categories' `drill` entries, plus any entries the agent wrote from the user's own question or context (validated like plan entries), into the pool's inbox, closes it, and records the focus and the user's context verbatim in `/tmp/logtype-focus.json`. Run once per analysis, even for "everything", since it is what closes the inbox.
-- `bin/logtype-insight-facts` — computes every number of the insight report in code, from both the baseline's and the plan's results (the user's focus and context with the focus queries' results first, then totals, severity and logger breakdowns with check lines, the category table with priorities, its sum and gap, top templates per category, the fetched warnings and errors grouped by message shape) into `/tmp/logtype-insight-facts.md`, so the report writer only puts them into words.
-- `bin/logtype-report-check` — checks a `logtype-insights` report against its inputs and prints `FLAG` lines for a figure absent from the facts and results table (with the two listed figures it sums to), a share never printed as a share, a count found only beside different wording, a timestamp the inputs lack, and a KQL filter on a field the archive does not have. The skill hands its `FLAG` lines back to the report writer, which fixes the real ones and leaves the ones the facts support.
+- `bin/log-shape-cache` — persistent cache of the `log-shape-insights` classification, with incremental update when an archive grows. See [Log Shape Cache](#log-shape-cache).
+- `bin/log-shape-insights-bootstrap` — one-command bootstrap for the `log-shape-insights` skill: schema-discovery sample, per-field value distributions, log shape dictionary dump, per-template frequencies from the counts stored in the archive, and the classification-cache probe, summarized as grep-able `KEY=VALUE` lines.
+- `bin/log-shape-cluster` (+ `log-shape-cluster.py`) — groups semantically similar log shapes using embeddings from the semantic server so the LLM classifies one representative per cluster. See [Log Shape Cluster](#log-shape-cluster).
+- `bin/log-shape-insight-extract` — builds the `log-shape-insights` insight-pass inputs from a classification, joining its template hashes to the texts it streams from the archive's frequencies file: templates grouped by category (top N by frequency, truncated), the core plan (the `core` entries, one per line, high priority first, reporting entries without a valid `match` filter or ranking as `QUERY_PLAN_INVALID=`), the `drill` entries apart (`/tmp/log-shape-drill-plan.txt`), and, with frequencies, the exact records per category with the classifier's priority and why (`/tmp/log-shape-category-totals.json`) and the top templates overall and per category with their counts and categories (`/tmp/log-shape-top-templates.json`). Bounded, so classifications holding huge near-duplicate templates stay fast. It also empties the focus inbox, so a new analysis starts with no focus.
+- `bin/log-shape-baseline-plan` — writes the app-agnostic baseline as its own plan (`/tmp/log-shape-baseline-plan.txt`), run by its own pool while the templates are classified: it samples the schema's severity and logger values from the head of the archive, then adds a `count` per common value, a `count` for the residual (everything else), a `then` rule that fetches the records behind a small severity residual, and one scoped semantic entry. It never uses `--unique`, which scans every record.
+- `bin/log-shape-query-plan-run` — the query pool. It executes the plan through `clp-s-search-kql`, rendering each entry's `match` filter to KQL with `kql-build`, printing each entry's result as it completes and recording the rendered KQL, count, share of records, status (`ok`, `zero`, `error`, `timeout`, non-selective), elapsed time, peak memory and samples in `/tmp/log-shape-query-results.ndjson`. Searches run concurrently under memory control: the first runs alone, its peak resident memory is measured, and another starts only while free memory can take one more (sampled twice a second; a search is paused and requeued if memory runs short). An entry's `then` rule can add a follow-up query once its result is in, `--retry-failed` retries a failed entry once, and `--jobs N` pins the concurrency. With `--inbox FILE` the pool also takes entries from FILE while it runs, ahead of every plan entry not yet started, and stays open until FILE says `{"close": true}` (or `--inbox-timeout`, default 900 s, passes): the core plan starts while the user is still choosing a focus, and the focus runs next without a second pool counting the same free memory. `--print-table` renders the recorded results as Markdown, focus entries marked.
+- `bin/log-shape-focus` — turns the user's answer to "what should this analysis focus on?" into queries: it queues the chosen categories' `drill` entries, plus any entries the agent wrote from the user's own question or context (validated like plan entries), into the pool's inbox, closes it, and records the focus and the user's context verbatim in `/tmp/log-shape-focus.json`. Run once per analysis, even for "everything", since it is what closes the inbox.
+- `bin/log-shape-insight-facts` — computes every number of the insight report in code, from both the baseline's and the plan's results (the user's focus and context with the focus queries' results first, then totals, severity and logger breakdowns with check lines, the category table with priorities, its sum and gap, top templates per category, the fetched warnings and errors grouped by message shape) into `/tmp/log-shape-insight-facts.md`, so the report writer only puts them into words.
+- `bin/log-shape-report-check` — checks a `log-shape-insights` report against its inputs and prints `FLAG` lines for a figure absent from the facts and results table (with the two listed figures it sums to), a share never printed as a share, a count found only beside different wording, a timestamp the inputs lack, and a KQL filter on a field the archive does not have. The skill hands its `FLAG` lines back to the report writer, which fixes the real ones and leaves the ones the facts support.
 - `bin/clp-compress-status` — reports the state (`running`, `done`, `failed`, `died`) and progress of a `clp-s-compress-folder` run from the status file it keeps beside the archive directory; `clp-s-compress-folder` also prints a `[compress]` heartbeat with progress and an estimated time left (`--heartbeat SECONDS`).
-- `bin/kql-build` (+ `lib/kql_build.py`) — renders a structured JSON filter (`all`/`any`/`not`, `eq`/`contains`/`prefix`/`exists`/`gt`…, scoped `semantic`) to KQL with every value quoted and escaped and every group parenthesized, so query plans never carry model-written KQL. `kql-build render '<filter>'` prints the KQL; `kql-build check-plan FILE` validates every query_plan entry, and its ranking (`lib/classification.py`): each entry's `category`, `priority` and `stage`, and each taxonomy category's `priority` and `why`. `logtype-cache merge`/`put` refuse classifications that fail the same check.
+- `bin/kql-build` (+ `lib/kql_build.py`) — renders a structured JSON filter (`all`/`any`/`not`, `eq`/`contains`/`prefix`/`exists`/`gt`…, scoped `semantic`) to KQL with every value quoted and escaped and every group parenthesized, so query plans never carry model-written KQL. `kql-build render '<filter>'` prints the KQL; `kql-build check-plan FILE` validates every query_plan entry, and its ranking (`lib/classification.py`): each entry's `category`, `priority` and `stage`, and each taxonomy category's `priority` and `why`. `log-shape-cache merge`/`put` refuse classifications that fail the same check.
 - `bin/kql-validate-wildcards` — the search wrapper's guard against an unquoted wildcard value with a space (`field:*a b*`, which clp-s reads as natural language); rejects the query before it runs.
 
 ## Session Workflow
@@ -215,7 +215,7 @@ Use single quotes around KQL in shell commands. Numeric comparisons use infix sy
 ./plugins/clp/bin/clp-s-search-kql /tmp/session-archive 'semantic("slow database queries")'
 ```
 
-Semantic search finds log events whose logtype is semantically similar to a natural language query, even when exact keywords differ. Use `semantic("query")` in KQL and combine with regular KQL using `AND`, e.g. `'semantic("errors") AND level:error'`.
+Semantic search finds log events whose log shape is semantically similar to a natural language query, even when exact keywords differ. Use `semantic("query")` in KQL and combine with regular KQL using `AND`, e.g. `'semantic("errors") AND level:error'`.
 
 Semantic search requires an embedding server that is **already running**. The plugin never starts one — no Docker container is spun up and no embedding model is downloaded locally. The wrapper health-checks the endpoint before running a semantic search; if it is unavailable, the search fails with a clear error.
 
@@ -234,7 +234,7 @@ echo 'https://embeddings.internal.example.com' \
   > ~/.config/yscope-clp-plugin/semantic-endpoint
 ```
 
-URLs must be HTTPS, a `localhost`/loopback address, or a `*.yscope.ai` host. The same resolution drives `logtype-cluster` (see below), so one setting covers both semantic search and logtype clustering.
+URLs must be HTTPS, a `localhost`/loopback address, or a `*.yscope.ai` host. The same resolution drives `log-shape-cluster` (see below), so one setting covers both semantic search and log shape clustering.
 
 Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T` (default 0.3, range 0.0-1.0), and `--embedding-batch-size N` (default auto).
 
@@ -246,24 +246,24 @@ Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T`
   /tmp/session-archive-decompressed
 ```
 
-## Logtype Insights
+## Log Shape Insights
 
-`logtype-insights` analyzes an archive by first dumping its **logtype dictionary** — the complete vocabulary of distinct message templates, with variables replaced by `<*>`:
+`log-shape-insights` analyzes an archive by first dumping its **log shape dictionary** — the complete vocabulary of distinct message templates, with variables replaced by `<*>`:
 
 ```bash
 # stats.log_shapes (shapes API, clp-core >= 0.13) dumps the dictionary as raw
 # {"archive_id","count","id","shape"} lines; the wrapper adds the required
 # --experimental automatically. Shape strings encode variables in an
 # archive-dependent form (raw placeholder bytes on regular archives,
-# %rule.name% TextShape placeholders on clpp archives) — `logtype-cache
+# %rule.name% TextShape placeholders on clpp archives) — `log-shape-cache
 # normalize` detects the encoding per line and renders both to the canonical
-# {"logtype":"...<*>..."} NDJSON.
+# {"log_shape":"...<*>..."} NDJSON.
 # The wrapper prints archive-metadata header lines to stdout, so filter to
 # JSON records with grep '^{' first. The legacy `stats.logtypes` spelling is
 # rejected: shapes-API binaries silently return nothing for it.
 ./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | ./plugins/clp/bin/logtype-cache normalize > /tmp/logtypes.ndjson
-jq -s 'length' /tmp/logtypes.ndjson
+  | grep '^{' | ./plugins/clp/bin/log-shape-cache normalize > /tmp/log-shapes.ndjson
+jq -s 'length' /tmp/log-shapes.ndjson
 ```
 
 This reads the dictionary rather than every record, so it is cheap regardless of archive size: a run with millions of records typically has tens to a few hundred templates. Every subsequent query is derived from a template that is known to exist, instead of guessing keywords that may not appear at all.
@@ -273,35 +273,35 @@ The skill is app-agnostic — it discovers the schema (timestamp/severity/logger
 The skill's mechanical preamble is packaged as one command:
 
 ```bash
-./plugins/clp/bin/logtype-insights-bootstrap /tmp/archive
+./plugins/clp/bin/log-shape-insights-bootstrap /tmp/archive
 ```
 
-It samples records for schema discovery, prints per-field value distributions, dumps + normalizes the dictionary, sums the per-template counts that clp-s stored at compression time, probes the classification cache, and prints a grep-able `KEY=VALUE` summary (`LOGTYPE_COUNT=`, `FREQS=`, `CACHE_MODE=`, `TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths). `FREQS=UNAVAILABLE` means an archive was compressed before clp-s stored those counts; recompress it to get frequencies.
+It samples records for schema discovery, prints per-field value distributions, dumps + normalizes the dictionary, sums the per-template counts that clp-s stored at compression time, probes the classification cache, and prints a grep-able `KEY=VALUE` summary (`LOG_SHAPE_COUNT=`, `FREQS=`, `CACHE_MODE=`, `TO_CLASSIFY=`, `MAX_CHARS=`, output-file paths). `FREQS=UNAVAILABLE` means an archive was compressed before clp-s stored those counts; recompress it to get frequencies.
 
-Note that `message:term` is an exact match against the whole field value, same as `field:term` on any field, so it correctly returns 0 unless a message equals exactly `term` — the message field being stored as a CLP-string doesn't change that. Exact match is faster, so prefer it whenever you know a field's full value; **wildcard** only for a substring match — `message:"*term*"` works and returns real hits, and message content almost always needs it, since it's free text. `semantic("…")` also searches the logtypes directly and is a good complement to wildcard search for concept-shaped questions.
+Note that `message:term` is an exact match against the whole field value, same as `field:term` on any field, so it correctly returns 0 unless a message equals exactly `term` — the message field being stored as a CLP-string doesn't change that. Exact match is faster, so prefer it whenever you know a field's full value; **wildcard** only for a substring match — `message:"*term*"` works and returns real hits, and message content almost always needs it, since it's free text. `semantic("…")` also searches the log shapes directly and is a good complement to wildcard search for concept-shaped questions.
 
-### Logtype Cache
+### Log Shape Cache
 
-Classifying templates into categories and deriving a query plan is the expensive step, and it is a property of the *application*, not the individual capture — the same build emits the same templates every run. `bin/logtype-cache` persists that classification, keyed by `sha256` of the sorted distinct logtype strings **capped at a character limit** (default 500, `--max-chars` / `$CLP_LOGTYPE_MAX_CHARS`) and de-duplicated — the same treatment the templates get before they are embedded, so the key fingerprints the *embedded* vocabulary. The placeholder-rendered form is hashed, so fingerprints are stable across binary generations. (Consequence of the limit: a template whose tail changes beyond it does not change the fingerprint, so it does not register as growth.)
+Classifying templates into categories and deriving a query plan is the expensive step, and it is a property of the *application*, not the individual capture — the same build emits the same templates every run. `bin/log-shape-cache` persists that classification, keyed by `sha256` of the sorted distinct log shape strings **capped at a character limit** (default 500, `--max-chars` / `$CLP_LOG_SHAPE_MAX_CHARS`) and de-duplicated — the same treatment the templates get before they are embedded, so the key fingerprints the *embedded* vocabulary. The placeholder-rendered form is hashed, so fingerprints are stable across binary generations. (Consequence of the limit: a template whose tail changes beyond it does not change the fingerprint, so it does not register as growth.)
 
-The cache is one SQLite database, `cache.sqlite` in the cache directory. Each entry holds the schema, taxonomy and query plan, and one row per template: its `hash` (sha256 of the full template), its `prefix_hash` (sha256 of the first `--max-chars` characters) and its category. Templates are stored by hash, never by text: some apps log templates of hundreds of KB (CockroachDB's Pebble stats tables average ~184 KB), and an entry that held their text grew to 2.28 GB, which every lookup parsed in full. That entry is 2.2 MB as rows, and looking it up, storing it or merging into it each takes well under a second. The text stays in the archive's own dictionary dump; `logtype-insight-extract` joins it on the hash. The shared hashing lives in `bin/lib/logtypes.py`.
+The cache is one SQLite database, `cache.sqlite` in the cache directory. Each entry holds the schema, taxonomy and query plan, and one row per template: its `hash` (sha256 of the full template), its `prefix_hash` (sha256 of the first `--max-chars` characters) and its category. Templates are stored by hash, never by text: some apps log templates of hundreds of KB (CockroachDB's Pebble stats tables average ~184 KB), and an entry that held their text grew to 2.28 GB, which every lookup parsed in full. That entry is 2.2 MB as rows, and looking it up, storing it or merging into it each takes well under a second. The text stays in the archive's own dictionary dump; `log-shape-insight-extract` joins it on the hash. The shared hashing lives in `bin/lib/log_shapes.py`.
 
 ```bash
-LC=./plugins/clp/bin/logtype-cache
-# Dump the dictionary and render it to canonical logtype NDJSON in one pipe:
+LC=./plugins/clp/bin/log-shape-cache
+# Dump the dictionary and render it to canonical log shape NDJSON in one pipe:
 ./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$LC" normalize > /tmp/logtypes.ndjson
-"$LC" count --logtypes-file /tmp/logtypes.ndjson   # distinct templates
+  | grep '^{' | "$LC" normalize > /tmp/log-shapes.ndjson
+"$LC" count --log-shapes-file /tmp/log-shapes.ndjson   # distinct templates
 ./plugins/clp/bin/clp-s-search-kql /tmp/archive 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$LC" freqs                         # {"count":N,"logtype":...}, most frequent first
-"$LC" diff  --logtypes-file /tmp/logtypes.ndjson   # UPTODATE | GROWTH | NEW
+  | grep '^{' | "$LC" freqs                         # {"count":N,"log_shape":...}, most frequent first
+"$LC" diff  --log-shapes-file /tmp/log-shapes.ndjson   # UPTODATE | GROWTH | NEW
 "$LC" list                                          # cached entries + lineage
 "$LC" show <APP_KEY>
 ```
 
 (`key`, `count`, and `diff` also accept a raw `stats.log_shapes` dump directly — lines carrying a `shape` field are rendered on the fly — but store and pass around the normalized form so every tool sees identical strings.)
 
-`diff` prints one tab-separated header line, followed by NDJSON `{"logtype":"…"}` lines for the templates that still need classifying:
+`diff` prints one tab-separated header line, followed by NDJSON `{"log_shape":"…"}` lines for the templates that still need classifying:
 
 | Header | Meaning |
 | --- | --- |
@@ -317,29 +317,29 @@ Every stored classification is ranked: each taxonomy category carries a `priorit
 
 Files of the old format (one `<APP_KEY>.json` file per entry, with template text) are ignored, and `diff` and `list` say so; they hold no ranking, so delete them.
 
-Cache location: `~/.config/yscope-clp-plugin/logtype-cache/`, overridable with `$CLP_LOGTYPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`diff`, `get`, `merge`, `put`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 500, or `$CLP_LOGTYPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint (`key`, `diff`, `put`); it must match the limit given to `logtype-cluster`, or embedding and cache fingerprints diverge.
+Cache location: `~/.config/yscope-clp-plugin/log-shape-cache/`, overridable with `$CLP_LOG_SHAPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`diff`, `get`, `merge`, `put`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 500, or `$CLP_LOG_SHAPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint (`key`, `diff`, `put`); it must match the limit given to `log-shape-cluster`, or embedding and cache fingerprints diverge.
 
-### Logtype Cluster
+### Log Shape Cluster
 
-Classification cost scales with the number of templates the LLM must label. `bin/logtype-cluster` shrinks that two ways: it truncates each template to a character limit and de-duplicates the results, so identical prefixes are only embedded once, then embeds the distinct texts through the semantic server's `/v1/embeddings` endpoint and greedily groups them at a cosine-similarity threshold, so the LLM classifies one representative per cluster (by cluster id) and `expand` propagates the category to every member mechanically, writing each member as its hashes — exact, because the LLM never echoes logtype strings. Representatives and members are always the FULL templates; truncation applies only to what is embedded.
+Classification cost scales with the number of templates the LLM must label. `bin/log-shape-cluster` shrinks that two ways: it truncates each template to a character limit and de-duplicates the results, so identical prefixes are only embedded once, then embeds the distinct texts through the semantic server's `/v1/embeddings` endpoint and greedily groups them at a cosine-similarity threshold, so the LLM classifies one representative per cluster (by cluster id) and `expand` propagates the category to every member mechanically, writing each member as its hashes — exact, because the LLM never echoes log shape strings. Representatives and members are always the FULL templates; truncation applies only to what is embedded.
 
 Embeddings come from the same already-running server that powers semantic search. Nothing is installed, downloaded, or started locally — the clustering is pure Python standard library, with no third-party dependency.
 
 ```bash
-LTC=./plugins/clp/bin/logtype-cluster
-"$LTC" cluster --max-chars 500 --input /tmp/logtypes-to-classify.ndjson
-"$LTC" expand --clusters /tmp/logtype-clusters.json \
-  --classification /tmp/logtype-class.json     # id-based assignments from the LLM
+LTC=./plugins/clp/bin/log-shape-cluster
+"$LTC" cluster --max-chars 500 --input /tmp/log-shapes-to-classify.ndjson
+"$LTC" expand --clusters /tmp/log-shape-clusters.json \
+  --classification /tmp/log-shape-class.json     # id-based assignments from the LLM
 ```
 
 `cluster` prints `CLUSTERS=`, `TEMPLATES=` (full count), `EMBEDDED=` (distinct truncated texts actually sent), and `MAX_CHARS=`.
 
 - Endpoint: `--semantic-endpoint`, then `$CLP_SEMANTIC_ENDPOINT`, then the `semantic-endpoint` config file, then the built-in remote endpoint — the same chain as [Semantic search](#semantic-search). The launcher resolves and health-checks it, then passes it down.
-- Model contract: `BAAI/bge-base-en-v1.5`, int8[768] — matching what `clp-s` advertises, so both hit the same server-side cache. Threshold: cosine 0.80 (override with `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to 0.85–0.90 to split more, lower to merge more). `--batch-size` sets texts per request (default 256); `--max-request-bytes` (`$CLP_LOGTYPE_MAX_REQUEST_BYTES`, default 100 000 000) caps the encoded size of any single request body.
-- Truncation: `--max-chars` (`$CLP_LOGTYPE_MAX_CHARS`, default 500) caps each template at that many UTF-8 characters before embedding; it must match the value used by `logtype-cache`, which fingerprints the same truncated set (both use `lib/logtypes.py`).
-- `expand` is stdlib-only and fully offline — it needs no endpoint — and validates that every cluster id is assigned exactly once before writing anything (exit 2 otherwise), which protects the logtype cache from partial classifications.
+- Model contract: `BAAI/bge-base-en-v1.5`, int8[768] — matching what `clp-s` advertises, so both hit the same server-side cache. Threshold: cosine 0.80 (override with `--threshold` or `$CLP_LOG_CLUSTER_THRESHOLD`; raise to 0.85–0.90 to split more, lower to merge more). `--batch-size` sets texts per request (default 256); `--max-request-bytes` (`$CLP_LOG_SHAPE_MAX_REQUEST_BYTES`, default 100 000 000) caps the encoded size of any single request body.
+- Truncation: `--max-chars` (`$CLP_LOG_SHAPE_MAX_CHARS`, default 500) caps each template at that many UTF-8 characters before embedding; it must match the value used by `log-shape-cache`, which fingerprints the same truncated set (both use `lib/log_shapes.py`).
+- `expand` is stdlib-only and fully offline — it needs no endpoint — and validates that every cluster id is assigned exactly once before writing anything (exit 2 otherwise), which protects the log shape cache from partial classifications.
 - Exit codes for `cluster`: 0 ok, 1 input problem, 2 the embedding server is unreachable/rejected, 3 usage error. `--help` and `expand` never touch the network.
-- `setup` has been removed; it now exits 2 with a pointer to the endpoint settings. Existing venvs under `~/.config/yscope-clp-plugin/venvs/logtype-cluster` are no longer used and can be deleted.
+- `setup` has been removed; it now exits 2 with a pointer to the endpoint settings. Existing venvs under `~/.config/yscope-clp-plugin/venvs/log-shape-cluster` are no longer used and can be deleted.
 
 ## Query Starters
 

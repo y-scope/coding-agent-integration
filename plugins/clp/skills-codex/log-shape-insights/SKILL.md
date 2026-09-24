@@ -1,15 +1,15 @@
 ---
-name: logtype-insights
-description: App-agnostic logtype-baseline log analysis with CLP. Dump the archive's logtype dictionary first, classify the real templates into (generic + app-discovered) categories, and drive targeted KQL from them — no blind queries. Caches the classification and updates it incrementally when the archive grows. Works on any structurized or native-JSON CLP archive (vLLM, MongoDB, nginx, …).
+name: log-shape-insights
+description: App-agnostic log-shape-baseline log analysis with CLP. Dump the archive's log shape dictionary first, classify the real templates into (generic + app-discovered) categories, and drive targeted KQL from them — no blind queries. Caches the classification and updates it incrementally when the archive grows. Works on any structurized or native-JSON CLP archive (vLLM, MongoDB, nginx, …).
 ---
 
-# Logtype Insights (App-Agnostic, Logtype-Baseline)
+# Log Shape Insights (App-Agnostic, Log-Shape Baseline)
 
 > **Never debug or verify the setup. Run the workflow as asked, directly.** Do not health-check endpoints, probe the environment, inspect installs, or try to repair anything. If a command fails, stop and report the failure to the user verbatim — the error text and exit code — then let them decide. Do not install, configure, or start anything, and do not re-run a failed command hoping for a different result. An error is an acceptable outcome; a silent workaround is not. (This governs environment/setup problems only. The one retry the workflow itself specifies — the stronger-model fallback when a subagent returns unusable output at steps 6–7 — is part of the task and still applies.)
 
-End-to-end analysis of **any** CLP archive using the **logtype baseline** method: dump the archive's logtype dictionary (the complete vocabulary of distinct message templates, `<*>` marking variables — tens to a few hundred templates no matter how many millions of records), classify those *real* templates into categories, and derive every later query from a template that is guaranteed to exist. No blind keyword batteries.
+End-to-end analysis of **any** CLP archive using the **log shape baseline** method: dump the archive's log shape dictionary (the complete vocabulary of distinct message templates, `<*>` marking variables — tens to a few hundred templates no matter how many millions of records), classify those *real* templates into categories, and derive every later query from a template that is guaranteed to exist. No blind keyword batteries.
 
-The classification is a property of the **application**, not the capture, so it is cached (keyed by `sha256` of the sorted template set, each template capped at a character limit — 500 by default — and de-duplicated, matching what is embedded) and updated incrementally when the archive grows — re-analyzing the same app skips classification entirely. The cache is one SQLite database that stores templates by hash, never by text, so it stays small and fast even for apps whose templates are hundreds of KB each. The skill reports the archive's logtype count.
+The classification is a property of the **application**, not the capture, so it is cached (keyed by `sha256` of the sorted template set, each template capped at a character limit — 500 by default — and de-duplicated, matching what is embedded) and updated incrementally when the archive grows — re-analyzing the same app skips classification entirely. The cache is one SQLite database that stores templates by hash, never by text, so it stays small and fast even for apps whose templates are hundreds of KB each. The skill reports the archive's log shape count.
 
 For a single ad-hoc KQL query, use the `search` skill. To compress raw logs first, use `compress-folder`.
 
@@ -32,32 +32,32 @@ Each shell invocation is independent — shell variables do not persist between 
 3. **Bootstrap.** Tell the user you are analyzing and classifying the log shape — then run the one command that does all of it (it also reads the per-template frequencies that clp-s stored in the archive):
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/logtype-insights-bootstrap <archive-dir>
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/log-shape-insights-bootstrap <archive-dir>
    ```
 
 From its `KEY=VALUE` output record:
    - `SAMPLE=` + `DIST field=... distinct=N values=...` → pick the **schema**: timestamp, severity, logger, **message** (the clp-string field — high distinct-count prose), payload leaves if any. Low-distinct fields are severity/logger-like; note their value vocabularies from the DIST lines.
-   - `LOGTYPE_COUNT=` → report to the user.
-   - `FREQS=OK` + `FREQS_FILE=` → per-template frequencies for the whole archive, summed from the counts clp-s stored at compression time: `{"count":N,"logtype":"..."}` NDJSON, most frequent first. Step 7 uses this file; never recompute frequencies by projecting and counting messages.
-   - `FREQS=UNAVAILABLE` → the archive was compressed before clp-s stored per-logtype counts (`FREQS_HINT=` says so). Tell the user that template frequencies are unavailable for this archive and that recompressing the source logs with the current plugin adds them. Do not compute them another way.
-   - `CACHE_MODE=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` / `MAX_CHARS=` → step 4. Pass `MAX_CHARS` through to `logtype-cluster` and `logtype-cache` so their fingerprints match.
+   - `LOG_SHAPE_COUNT=` → report to the user.
+   - `FREQS=OK` + `FREQS_FILE=` → per-template frequencies for the whole archive, summed from the counts clp-s stored at compression time: `{"count":N,"log_shape":"..."}` NDJSON, most frequent first. Step 7 uses this file; never recompute frequencies by projecting and counting messages.
+   - `FREQS=UNAVAILABLE` → the archive was compressed before clp-s stored per-log-shape counts (`FREQS_HINT=` says so). Tell the user that template frequencies are unavailable for this archive and that recompressing the source logs with the current plugin adds them. Do not compute them another way.
+   - `CACHE_MODE=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` / `MAX_CHARS=` → step 4. Pass `MAX_CHARS` through to `log-shape-cluster` and `log-shape-cache` so their fingerprints match.
 
-Then tell the user what the bootstrap found, in 2–3 lines: the logtype count, the schema you picked, whether per-template frequencies are available, and the cache mode.
+Then tell the user what the bootstrap found, in 2–3 lines: the log shape count, the schema you picked, whether per-template frequencies are available, and the cache mode.
 
 4. **Branch on `CACHE_MODE`** — and announce the branch to the user: UPTODATE → "cached classification found; skipping straight to the insight pass"; GROWTH → "N of M templates are new; classifying only those"; NEW → "first capture of this app; classifying all N templates".
-   - **UPTODATE** — the cached plan was already fetched to `/tmp/logtype-classification.json`. Verify its `.schema` matches step 3; if it does, skip to step 7. If it differs, treat as NEW (continue, clustering `/tmp/logtypes.ndjson`).
-   - **GROWTH** — only the new templates in `/tmp/logtypes-to-classify.ndjson` need classifying; the base plan was fetched to `/tmp/logtype-base-classification.json`. Continue to step 5.
-   - **NEW** — classify all of `/tmp/logtypes-to-classify.ndjson`. Continue.
+   - **UPTODATE** — the cached plan was already fetched to `/tmp/log-shape-classification.json`. Verify its `.schema` matches step 3; if it does, skip to step 7. If it differs, treat as NEW (continue, clustering `/tmp/log-shapes.ndjson`).
+   - **GROWTH** — only the new templates in `/tmp/log-shapes-to-classify.ndjson` need classifying; the base plan was fetched to `/tmp/log-shape-base-classification.json`. Continue to step 5.
+   - **NEW** — classify all of `/tmp/log-shapes-to-classify.ndjson`. Continue.
 
-5. **Cluster the templates to classify** — truncates each template to a character limit (`MAX_CHARS` from the bootstrap, 500 by default), de-duplicates the results, and merges semantically similar templates so you classify one representative per cluster, not every template (in step 4's schema-mismatch case, pass `--input /tmp/logtypes.ndjson` instead):
+5. **Cluster the templates to classify** — truncates each template to a character limit (`MAX_CHARS` from the bootstrap, 500 by default), de-duplicates the results, and merges semantically similar templates so you classify one representative per cluster, not every template (in step 4's schema-mismatch case, pass `--input /tmp/log-shapes.ndjson` instead):
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/logtype-cluster cluster \
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/log-shape-cluster cluster \
      --max-chars "$MAX_CHARS" \
-     --input /tmp/logtypes-to-classify.ndjson
+     --input /tmp/log-shapes-to-classify.ndjson
    ```
 
-Stdout prints a summary then one `{"id","count","representative"}` line per cluster (ids `c1..cN`, largest first). Full memberships go to `/tmp/logtype-clusters.json` for `expand`. Representatives and members are always FULL templates; only the embedding request uses the truncated, de-duplicated texts, so `EMBEDDED` is at most `TEMPLATES`. Embeddings come from the semantic server (nothing is installed or started locally). Exit 2 means the server is unreachable or rejected: **report the error verbatim to the user and stop** — do not diagnose it, do not start or configure a server, and do not silently switch methods. Report the reduction to the user (`TEMPLATES=N` → `EMBEDDED=K` → `CLUSTERS=M`).
+Stdout prints a summary then one `{"id","count","representative"}` line per cluster (ids `c1..cN`, largest first). Full memberships go to `/tmp/log-shape-clusters.json` for `expand`. Representatives and members are always FULL templates; only the embedding request uses the truncated, de-duplicated texts, so `EMBEDDED` is at most `TEMPLATES`. Embeddings come from the semantic server (nothing is installed or started locally). Exit 2 means the server is unreachable or rejected: **report the error verbatim to the user and stop** — do not diagnose it, do not start or configure a server, and do not silently switch methods. Report the reduction to the user (`TEMPLATES=N` → `EMBEDDED=K` → `CLUSTERS=M`).
 
 6. **Classify the clusters (GROWTH / NEW only) — inline, ids only.** Tell the user you are classifying the M representatives (the longest step) before you start. Assign EACH cluster id (judging by its representative) the best-fitting category. Use this GENERIC default taxonomy, AND for GROWTH the existing base categories (reuse where one fits; add new only if none fits), AND for NEW any APP-SPECIFIC categories the representatives suggest (e.g. Mongo: workload/operations, replication/election, sharding, indexing, storage; vLLM: worker-health, kv-cache, model-loading). Generic defaults:
 
@@ -75,7 +75,7 @@ Build a QUERY PLAN: targeted queries derived from the representatives, expressed
 
 Then RANK what you found, by what matters for the application rather than for this one capture (the classification is cached and reused for every later capture). Give every taxonomy category a `priority` — `high` (problems, or what tells whether the application is healthy and doing its job: errors, failures, request outcomes, latency; at most a handful), `medium` (useful context), or `low` (routine or uninformative) — and a one-line `why`: what a reader learns from it. Give every query_plan entry its `category` (a taxonomy category), a `priority` on the same scale, and a `stage`: `core` entries run on every analysis (the overview: counts and the key probes); `drill` entries run only when the user focuses on their category — write 1–3 per high or medium category, the next question a reader would ask once that category matters (the records behind a count, a narrower failure signal, the slow or failed subset). Example (Mongo): `{"label":"Slow queries","match":{"field":"attr.durationMillis","exists":true},"project":"t.$date,attr.durationMillis,msg","jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}`. Example (vLLM): `{"label":"Memory or OOM warnings","match":{"all":[{"field":"level","eq":"WARNING"},{"any":[{"field":"message","contains":"memory"},{"field":"message","contains":"OOM"},{"field":"message","contains":"oom-killer"}]}]},"project":"timestamp,level,message","method":"project+grep"}`.
 
-Write `/tmp/logtype-class.json` with this shape — `assignments` must contain EVERY cluster id exactly once, with ONLY ids, never logtype text (members are re-attached mechanically); omit `schema` for GROWTH:
+Write `/tmp/log-shape-class.json` with this shape — `assignments` must contain EVERY cluster id exactly once, with ONLY ids, never log shape text (members are re-attached mechanically); omit `schema` for GROWTH:
    ```
    {
      "schema": {"timestamp":"<TS>","severity":"<SEV>","logger":"<LOGGER>","message":"<MSG>","payload":["<leaf>",...]},
@@ -91,86 +91,86 @@ Then validate, expand ids to every member template (by hash, exact by constructi
    # Fields must be ARRAYS (a bare `.assignments` test passes for a scalar,
    # which would poison the cache entry):
    jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_plan|type=="array")' \
-     /tmp/logtype-class.json >/dev/null || exit 1
+     /tmp/log-shape-class.json >/dev/null || exit 1
    # Every query_plan entry needs a valid `match` filter and its ranking
    # (category, priority, stage), and every taxonomy entry its priority and
    # why: one "[i] OK <kql>" or "[i] ERROR <label>: <why>" line per entry,
    # "TAXONOMY ERROR" per unranked category, exit 1 on any error — fix them
    # and re-run; do NOT store in that case. On GROWTH add
-   # --categories-from /tmp/logtype-base-classification.json, since the new
+   # --categories-from /tmp/log-shape-base-classification.json, since the new
    # entries may use the base's categories:
-   "$BIN"/kql-build check-plan /tmp/logtype-class.json || exit 1
+   "$BIN"/kql-build check-plan /tmp/log-shape-class.json || exit 1
    # Exits 2 and writes NOTHING on missing/unknown/duplicate ids — fix the
    # assignments and re-run; do NOT store in that case:
-   "$BIN"/logtype-cluster expand --clusters /tmp/logtype-clusters.json \
-     --classification /tmp/logtype-class.json --output /tmp/logtype-expanded.json
+   "$BIN"/log-shape-cluster expand --clusters /tmp/log-shape-clusters.json \
+     --classification /tmp/log-shape-class.json --output /tmp/log-shape-expanded.json
    if [[ "$MODE" == "GROWTH" ]]; then
      # Guard: an empty BASE_KEY would silently keep ONLY the new templates.
      [[ -n "$BASE_KEY" ]] || { echo "error: GROWTH with empty BASE_KEY" >&2; exit 1; }
-     "$BIN"/logtype-cache merge --base-key "$BASE_KEY" < /tmp/logtype-expanded.json > /tmp/logtype-classification.json
+     "$BIN"/log-shape-cache merge --base-key "$BASE_KEY" < /tmp/log-shape-expanded.json > /tmp/log-shape-classification.json
    else
-     "$BIN"/logtype-cache merge < /tmp/logtype-expanded.json > /tmp/logtype-classification.json
+     "$BIN"/log-shape-cache merge < /tmp/log-shape-expanded.json > /tmp/log-shape-classification.json
    fi
    # Store it for the next run (milliseconds; step 7 reads the file above):
-   "$BIN"/logtype-cache put --key "$APP_KEY" --max-chars "$MAX_CHARS" < /tmp/logtype-classification.json
+   "$BIN"/log-shape-cache put --key "$APP_KEY" --max-chars "$MAX_CHARS" < /tmp/log-shape-classification.json
    ```
 
 After storing, report the taxonomy you produced, with each category's priority, and that the classification is now cached for future runs.
 
-7. **Summarize, ask, and stop.** Extract the plan with the bounded extractor (a raw `jq` over the classification file can take minutes when an app logs large near-duplicate blobs). It writes the core plan (`/tmp/logtype-query-plan.txt`, the `core` entries, high priority first), the drill entries (`/tmp/logtype-drill-plan.txt`), `/tmp/logtype-templates-by-category.txt` (the top templates per category by frequency) and `/tmp/logtype-category-totals.json` (exact records per category, with priority and why), and empties the focus inbox:
+7. **Summarize, ask, and stop.** Extract the plan with the bounded extractor (a raw `jq` over the classification file can take minutes when an app logs large near-duplicate blobs). It writes the core plan (`/tmp/log-shape-query-plan.txt`, the `core` entries, high priority first), the drill entries (`/tmp/log-shape-drill-plan.txt`), `/tmp/log-shape-templates-by-category.txt` (the top templates per category by frequency) and `/tmp/log-shape-category-totals.json` (exact records per category, with priority and why), and empties the focus inbox:
 
    ```bash
    BIN=~/.codex/marketplaces/yscope/plugins/clp/bin
-   "$BIN"/logtype-insight-extract          # add --no-freqs when FREQS=UNAVAILABLE
+   "$BIN"/log-shape-insight-extract          # add --no-freqs when FREQS=UNAVAILABLE
    ```
 
-   `QUERY_PLAN_INVALID=` is 0 for any classification `logtype-cache` produced; if it is not, report it and stop. Then post a short summary — the logtype count, the categories as a small table (records, templates, priority, from the extract's `CATEGORY` lines), the `why` of each high-priority category, and the severity split as the bootstrap's DIST lines sampled it — and ask two questions in the same message:
+   `QUERY_PLAN_INVALID=` is 0 for any classification `log-shape-cache` produced; if it is not, report it and stop. Then post a short summary — the log shape count, the categories as a small table (records, templates, priority, from the extract's `CATEGORY` lines), the `why` of each high-priority category, and the severity split as the bootstrap's DIST lines sampled it — and ask two questions in the same message:
 
    - **What do you already know about these logs?** Chasing a problem (what: a symptom, a time, a component), checking something specific, or just exploring.
    - **What should the report focus on?** Offer the high-priority categories by name with their record counts, "everything", or their own question.
 
    Then **end your turn and wait for the answer.** The questions come after classification because the focus options are its categories; asking once keeps it to one stop. In a non-interactive run (`codex exec`, or when told not to ask), skip the questions and treat the answer as "everything, no context".
 
-8. **Queue the focus, then run the queries.** Run `logtype-focus` ONCE with the answer — even for "everything", since it closes the inbox the pool reads:
+8. **Queue the focus, then run the queries.** Run `log-shape-focus` ONCE with the answer — even for "everything", since it closes the inbox the pool reads:
 
    ```bash
-   "$BIN"/logtype-focus --category <C> [--category <C2>] [--entries-file /tmp/logtype-focus-entries.ndjson] \
+   "$BIN"/log-shape-focus --category <C> [--category <C2>] [--entries-file /tmp/log-shape-focus-entries.ndjson] \
      --context '<what the user said they know, verbatim, or empty>' --question '<their own question, or empty>'
-   "$BIN"/logtype-focus --everything --context '<...>'           # the whole picture
+   "$BIN"/log-shape-focus --everything --context '<...>'           # the whole picture
    ```
 
-   A category queues its drill entries; `NO_DRILL=<C>` means it has none. For the user's own question, a category with no drill entries, or context that names something specific (a component, a symptom, an error text), write 1–3 entries to `/tmp/logtype-focus-entries.ndjson`, one per line, shaped like plan entries (`label`, `match`, `method`, `project` for projecting methods, `category` when one fits), derived from templates in `/tmp/logtype-templates-by-category.txt`; `logtype-focus` validates them and queues nothing if one is invalid (fix it and re-run). A time the user mentions cannot be a filter (`match` has no time range); keep it for the report. Never fold the answer into the classification: it is cached per app, and the answer is about this capture. Then run the baseline and the plan — the plan's pool takes the focus entries from the inbox ahead of the core plan, so they run first:
+   A category queues its drill entries; `NO_DRILL=<C>` means it has none. For the user's own question, a category with no drill entries, or context that names something specific (a component, a symptom, an error text), write 1–3 entries to `/tmp/log-shape-focus-entries.ndjson`, one per line, shaped like plan entries (`label`, `match`, `method`, `project` for projecting methods, `category` when one fits), derived from templates in `/tmp/log-shape-templates-by-category.txt`; `log-shape-focus` validates them and queues nothing if one is invalid (fix it and re-run). A time the user mentions cannot be a filter (`match` has no time range); keep it for the report. Never fold the answer into the classification: it is cached per app, and the answer is about this capture. Then run the baseline and the plan — the plan's pool takes the focus entries from the inbox ahead of the core plan, so they run first:
 
    ```bash
    # The severity/logger baseline, as its own plan and pool (samples the archive
    # for a few seconds; SCHEMA= is the extract's line):
-   "$BIN"/logtype-baseline-plan --archive <archive-dir> --schema-json '<SCHEMA= line>'
-   "$BIN"/logtype-query-plan-run --retry-failed --query-plan-file /tmp/logtype-baseline-plan.txt \
-     --results-file /tmp/logtype-baseline-results.ndjson <archive-dir>
+   "$BIN"/log-shape-baseline-plan --archive <archive-dir> --schema-json '<SCHEMA= line>'
+   "$BIN"/log-shape-query-plan-run --retry-failed --query-plan-file /tmp/log-shape-baseline-plan.txt \
+     --results-file /tmp/log-shape-baseline-results.ndjson <archive-dir>
    # Then the core plan, with the focus from the inbox first:
-   "$BIN"/logtype-query-plan-run --retry-failed --inbox /tmp/logtype-focus-inbox.ndjson <archive-dir>
+   "$BIN"/log-shape-query-plan-run --retry-failed --inbox /tmp/log-shape-focus-inbox.ndjson <archive-dir>
    # Both tables, each numbered from 1 (cite "baseline #N" or "plan #N"; focus entries marked):
-   "$BIN"/logtype-query-plan-run --print-table --results-file /tmp/logtype-baseline-results.ndjson | tee /tmp/logtype-baseline-table.md
-   "$BIN"/logtype-query-plan-run --print-table | tee /tmp/logtype-plan-table.md
+   "$BIN"/log-shape-query-plan-run --print-table --results-file /tmp/log-shape-baseline-results.ndjson | tee /tmp/log-shape-baseline-table.md
+   "$BIN"/log-shape-query-plan-run --print-table | tee /tmp/log-shape-plan-table.md
    ```
 
-   The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in its results file (`/tmp/logtype-baseline-results.ndjson` for the baseline, `/tmp/logtype-query-results.ndjson` for the plan); the run also records the archive's total record count. As entries finish, give one line per entry: its number, label, result or status, and elapsed time. The baseline entries (`origin: "baseline"`) give the severity and logger breakdown; when a rare-severity residual is small, a follow-up entry fetches those records, and its `samples` are the errors and warnings themselves. `/tmp/logtype-category-totals.json` holds the exact records per category, so report those instead of a keyword probe's count. Then run `"$BIN"/logtype-insight-facts --schema-json '<SCHEMA= line>' --freqs-file <FREQS_FILE>` (it reads both results files and `/tmp/logtype-focus.json`) (add `--freqs-file none --category-totals none` when frequencies are unavailable): it writes `/tmp/logtype-insight-facts.md` with every number of the report computed in code, the user's focus and context first, so quote figures from that file and never add up or derive your own. Before presenting the report, save it and run `"$BIN"/logtype-report-check <report file> --also /tmp/logtype-baseline-table.md --also /tmp/logtype-plan-table.md`; fix or remove any figure it flags. When the pools are done, show both tables verbatim and call out the entries that failed, matched nothing, or matched nearly everything. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give 3–5 lines of early numbers from the facts file, the focus first, and "queries done, writing the report" before step 9. For the queries you run yourself, pick the method that fits:
+   The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in its results file (`/tmp/log-shape-baseline-results.ndjson` for the baseline, `/tmp/log-shape-query-results.ndjson` for the plan); the run also records the archive's total record count. As entries finish, give one line per entry: its number, label, result or status, and elapsed time. The baseline entries (`origin: "baseline"`) give the severity and logger breakdown; when a rare-severity residual is small, a follow-up entry fetches those records, and its `samples` are the errors and warnings themselves. `/tmp/log-shape-category-totals.json` holds the exact records per category, so report those instead of a keyword probe's count. Then run `"$BIN"/log-shape-insight-facts --schema-json '<SCHEMA= line>' --freqs-file <FREQS_FILE>` (it reads both results files and `/tmp/log-shape-focus.json`) (add `--freqs-file none --category-totals none` when frequencies are unavailable): it writes `/tmp/log-shape-insight-facts.md` with every number of the report computed in code, the user's focus and context first, so quote figures from that file and never add up or derive your own. Before presenting the report, save it and run `"$BIN"/log-shape-report-check <report file> --also /tmp/log-shape-baseline-table.md --also /tmp/log-shape-plan-table.md`; fix or remove any figure it flags. When the pools are done, show both tables verbatim and call out the entries that failed, matched nothing, or matched nearly everything. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give 3–5 lines of early numbers from the facts file, the focus first, and "queries done, writing the report" before step 9. For the queries you run yourself, pick the method that fits:
    - `count`: run the KQL with `--count` (in-engine; cannot be combined with `--projection`), never `--projection ... | grep -c '^{'`. It prints one `{"archive_id":...,"count":N}` line per archive and nothing when zero records match; treat empty output as a real zero.
    - `project+grep`: fold the target into the KQL as `<message>:"*text*"`, and OR the wildcards for a keyword alternation (`<message>:"*a*" OR <message>:"*b*"`). Only when the target needs real regex features (anchors, character classes, backreferences), run the KQL with `--projection`, then `grep '^{' | jq -r '.<message>' | grep -Ei '<grep>'`. Add `--limit N` when a few example records are enough.
    - `project+jq`: run the KQL with `--projection`, then `grep '^{' | jq -r '<jq>'`.
    - `semantic`: run `semantic("...") AND <kql>` with `--projection`.
 
-MANDATORY semantic pass — in addition to any query_plan entries whose method is `semantic`, always run at least one scoped `semantic()` query derived from the goal or the dominant templates, e.g. `semantic("...") AND <severity>:<value>` or `semantic("...") AND <logger>:"*<substr>*"`. Never run an unscoped `semantic()`. Discard any query that returns nothing or only generic/meaningless logtypes — do not include it in the report.
+MANDATORY semantic pass — in addition to any query_plan entries whose method is `semantic`, always run at least one scoped `semantic()` query derived from the goal or the dominant templates, e.g. `semantic("...") AND <severity>:<value>` or `semantic("...") AND <logger>:"*<substr>*"`. Never run an unscoped `semantic()`. Discard any query that returns nothing or only generic/meaningless log shapes — do not include it in the report.
 
 Then:
-   - **Per-template frequencies** (the count baseline): read the bootstrap's `FREQS_FILE`, already sorted most frequent first — `head -20 /tmp/logtype-freqs.ndjson`. Never recompute them by projecting and counting messages. With `FREQS=UNAVAILABLE`, say so in the Logtype Baseline section and omit counts.
-   - **Total records**: `total_records` in `/tmp/logtype-query-results.ndjson` (already counted; do not recount). **Severity/logger breakdowns**: the bootstrap DIST lines cover only the sampled records; for exact totals run `--count` per value, including the dominant one (it costs the same as a rare one). List unknown values first with `--unique <field>` (it still scans the matching records). **Group totals**: sum `count` over the matching templates in `/tmp/logtype-freqs.ndjson` instead of scanning records. **Time span**: project the timestamp field and use `head`/`tail` (chronological; do NOT sort), or `--tge`/`--tle` if the timestamp is a real epoch.
+   - **Per-template frequencies** (the count baseline): read the bootstrap's `FREQS_FILE`, already sorted most frequent first — `head -20 /tmp/log-shape-freqs.ndjson`. Never recompute them by projecting and counting messages. With `FREQS=UNAVAILABLE`, say so in the Log Shape Baseline section and omit counts.
+   - **Total records**: `total_records` in `/tmp/log-shape-query-results.ndjson` (already counted; do not recount). **Severity/logger breakdowns**: the bootstrap DIST lines cover only the sampled records; for exact totals run `--count` per value, including the dominant one (it costs the same as a rare one). List unknown values first with `--unique <field>` (it still scans the matching records). **Group totals**: sum `count` over the matching templates in `/tmp/log-shape-freqs.ndjson` instead of scanning records. **Time span**: project the timestamp field and use `head`/`tail` (chronological; do NOT sort), or `--tge`/`--tle` if the timestamp is a real epoch.
    - `<message>:term` is an exact match, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so use it when you know a field's full value; message content is free text and almost always needs a substring wildcard — `<message>:"*term*"`. Combine with a scalar filter in one compound query when you can (`<severity>:<value> AND <message>:"*term*"`, `<logger>:"*<substr>*" AND <message>:"*term*"`). Fall back to projecting message + grep only when the match needs real regex features, never for a plain keyword alternation.
 
-9. Present a Markdown Logtype Insights Report, leading with the focus. The user's context is their account, not a finding: say whether the records support it, contradict it, or say nothing about it, quoting the lines that decide it.
+9. Present a Markdown Log Shape Insights Report, leading with the focus. The user's context is their account, not a finding: say whether the records support it, contradict it, or say nothing about it, quoting the lines that decide it.
    1. **Summary** — total records, severity counts, time span, top logger/component.
    2. **Focus** — what the user asked for, answered first: the focus categories' records and templates, the focus queries' results, and whether the records bear out the user's context.
-   3. **Logtype Baseline** — distinct template count, top N templates by frequency, the discovered category breakdown. The spine of the report.
+   3. **Log Shape Baseline** — distinct template count, top N templates by frequency, the discovered category breakdown. The spine of the report.
    4. **Issues & Warnings** — error/warning counts, top 3 warning *templates* (grounded, not guessed), actionable problems; semantic-only findings if any.
    5. **Notable Categories** — per category of interest, counts + representative templates and what they indicate.
    6. **Performance Signals** — timing/throughput/slow-operation templates and counts (if any); semantic-only findings if any.
@@ -183,7 +183,7 @@ Then:
 
 ## The message field needs the same wildcard rule as any field
 
-The message field (`message` structurized, `msg` native Mongo, …) is stored as a CLP-string (logtype template + encoded variables — what makes `stats.log_shapes` and the compression work). That storage is irrelevant to searching it: `<message>:term` is an exact match, same as `<field>:term` on any field, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so prefer it whenever you know the full field value; wildcard only for a substring match — `<message>:"*term*"` — which is what message content almost always needs, since it's free text. Prefer a direct wildcard search on the message field over project+grep:
+The message field (`message` structurized, `msg` native Mongo, …) is stored as a CLP-string (log shape + encoded variables — what makes `stats.log_shapes` and the compression work). That storage is irrelevant to searching it: `<message>:term` is an exact match, same as `<field>:term` on any field, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so prefer it whenever you know the full field value; wildcard only for a substring match — `<message>:"*term*"` — which is what message content almost always needs, since it's free text. Prefer a direct wildcard search on the message field over project+grep:
 
 ```bash
 S=~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql
@@ -198,11 +198,11 @@ Fall back to projecting the message field and grepping/jq-filtering only when th
   | grep '^{' | jq -rc 'select(.<message>|test("StaticText";"i"))'
 ```
 
-Semantic search (`semantic("…")`) also reads the logtypes directly and is a good complement to wildcard search for concept-shaped questions. The insight pass (step 8) always runs one mandatory scoped semantic cross-check; beyond that, use it only for an ambiguous template, grouping similar templates, or a conceptual user question — always scoped: `semantic("…") AND <severity>:<value>`. Flags: `--semantic-top-k` (default 5) and `--semantic-threshold` (default 0.3; raise for precision).
+Semantic search (`semantic("…")`) also reads the log shapes directly and is a good complement to wildcard search for concept-shaped questions. The insight pass (step 8) always runs one mandatory scoped semantic cross-check; beyond that, use it only for an ambiguous template, grouping similar templates, or a conceptual user question — always scoped: `semantic("…") AND <severity>:<value>`. Flags: `--semantic-top-k` (default 5) and `--semantic-threshold` (default 0.3; raise for precision).
 
 ## Classification cache notes
 
-- `app_key = sha256(sorted set of distinct logtype strings, each capped at `MAX_CHARS` characters)` — the fingerprint of the *embedded* vocabulary, since the same limit is applied before embedding; the cache is `cache.sqlite` in `~/.config/yscope-clp-plugin/logtype-cache/` (`$CLP_LOGTYPE_CACHE_DIR` or `--cache-dir` to override). Entries store `schema`, `taxonomy`, `query_plan`, `max_chars`, `classified_at`, `grown_from` lineage, and per template its `hash` (full text), `prefix_hash` (first `MAX_CHARS` characters) and `category` — never the text, which stays in the archive's dictionary dump and which `logtype-insight-extract` joins on the hash.
+- `app_key = sha256(sorted set of distinct log shape strings, each capped at `MAX_CHARS` characters)` — the fingerprint of the *embedded* vocabulary, since the same limit is applied before embedding; the cache is `cache.sqlite` in `~/.config/yscope-clp-plugin/log-shape-cache/` (`$CLP_LOG_SHAPE_CACHE_DIR` or `--cache-dir` to override). Entries store `schema`, `taxonomy`, `query_plan`, `max_chars`, `classified_at`, `grown_from` lineage, and per template its `hash` (full text), `prefix_hash` (first `MAX_CHARS` characters) and `category` — never the text, which stays in the archive's dictionary dump and which `log-shape-insight-extract` joins on the hash.
 - `diff` modes: **UPTODATE** (reuse, no classifying — but verify the cached schema; a template differing from a cached one only past the character limit takes its category through the shared prefix hash), **GROWTH** (classify only the new templates; `merge` unions them into the base entry), **NEW** (classify all). The bootstrap runs `diff` for you and fetches the relevant entries. An entry stored before classifications were ranked (no `priority`) is never reused: `diff` warns and reports NEW or GROWTH as if it were absent, and `put` replaces it. If `diff` warns that entries are in the old JSON format, tell the user they are ignored and can be deleted.
-- GROWTH matching compares hashes of the full templates; the subset test behind it uses the prefix hashes. Both are exact when you go through `logtype-cluster expand`, which hashes the members straight from the cluster file.
-- Inspect: `logtype-cache list` (shows lineage), `logtype-cache show <APP_KEY>`.
+- GROWTH matching compares hashes of the full templates; the subset test behind it uses the prefix hashes. Both are exact when you go through `log-shape-cluster expand`, which hashes the members straight from the cluster file.
+- Inspect: `log-shape-cache list` (shows lineage), `log-shape-cache show <APP_KEY>`.

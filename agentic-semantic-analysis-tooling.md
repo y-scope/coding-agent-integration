@@ -32,14 +32,14 @@ Read CLP's intrinsic metadata to learn what can be queried: fields and nesting, 
 |---|---|---|---|---|
 | `clp-s-search-kql` with `stats.schema_tree` | Reads stored record structure. | Archive. | Schema metadata. | Discover field paths and nesting before choosing filters. |
 | `clp-s-search-kql` with `stats.log_shapes` | Reads stored message patterns. | Archive. | Raw shape dictionary with identifiers and available counts. | Discover the event vocabulary and retain links to stored patterns. |
-| `logtype-insights-bootstrap` — helper | Samples records, normalizes the dictionary, and checks for reusable classifications. | Archive and optional sampling/cache settings. | Summary, sampled field distributions, template files, and classification-cache status. | Prepare an initial working context for an unfamiliar archive. |
+| `log-shape-insights-bootstrap` — helper | Samples records, normalizes the dictionary, and checks for reusable classifications. | Archive and optional sampling/cache settings. | Summary, sampled field distributions, template files, and classification-cache status. | Prepare an initial working context for an unfamiliar archive. |
 
 **Match discovery to the data scope.** These stats commands and bootstrap describe their input archive; they do not accept an arbitrary KQL predicate for filtered discovery. If the archive contains exactly the selected data, the scopes match. Otherwise, treat its metadata as candidates and execute scoped queries to establish which fields and patterns occur. A later record filter does not retroactively scope an archive-wide dictionary.
 
 ### Interpreting discovery output
 
 - `stats.log_shapes` requires a binary with the shapes API; the wrapper enables the experimental flag so clpp archives open too. Each entry's `count` is how many values in that archive carried the template, stored at compression time. It is `null` for archives compressed before clp-s stored these counts: that is not zero or a measured frequency.
-- `logtype-cache normalize` renders variable placeholders as `<*>` and deduplicates displayed templates. Retain the raw dictionary when identifiers and original encodings matter. Downstream, `logtype-cluster` caps each template at a character limit (500 by default) and de-duplicates the capped forms for embedding, and `logtype-cache` fingerprints that same capped, de-duplicated set — while the templates it stores stay full.
+- `log-shape-cache normalize` renders variable placeholders as `<*>` and deduplicates displayed templates. Retain the raw dictionary when identifiers and original encodings matter. Downstream, `log-shape-cluster` caps each template at a character limit (500 by default) and de-duplicates the capped forms for embedding, and `log-shape-cache` fingerprints that same capped, de-duplicated set — while the templates it stores stay full.
 - Bootstrap's `SAMPLE` and `DIST` come from sampled records, capped at 20,000 by default. They are discovery aids, not full-archive counts or stored numeric range/statistics metadata.
 - Bootstrap reports `FREQS=OK` with a `FREQS_FILE=` when every archive stored its counts; that file holds complete per-template frequencies. `FREQS=UNAVAILABLE` means at least one archive predates the stored counts, and no frequencies are reported for it.
 
@@ -52,7 +52,7 @@ Use discovered fields and patterns to retrieve evidence from the compressed data
 | Tool | What it does | Input | Output | When to use |
 |---|---|---|---|---|
 | `clp-s-search-kql` — wrapper | Executes key-value, wildcard, and semantic search queries, including combined predicates. | Archive, KQL query, and optional time bounds/projection. | Matching results on stdout, plus wrapper metadata headers. | Narrow the investigation, test a hypothesis, or retrieve supporting records. |
-| `logtype-query-plan-run` — helper | Executes a classification's query plan through `clp-s-search-kql`, entry by entry, rendering each entry's structured `match` filter to KQL with `kql-build`, and reports each result as it completes. | Archive and the extracted query plan. | Per-entry KQL, count, share of records, status (ok, zero, error, timeout, non-selective), elapsed time, and samples, as NDJSON and a Markdown table. | Run a stored plan with visible progress and see which of its queries fail or do not discriminate. |
+| `log-shape-query-plan-run` — helper | Executes a classification's query plan through `clp-s-search-kql`, entry by entry, rendering each entry's structured `match` filter to KQL with `kql-build`, and reports each result as it completes. | Archive and the extracted query plan. | Per-entry KQL, count, share of records, status (ok, zero, error, timeout, non-selective), elapsed time, and samples, as NDJSON and a Markdown table. | Run a stored plan with visible progress and see which of its queries fail or do not discriminate. |
 | `clp-s-decompress` — wrapper | Reconstructs stored records. | Archive. | Decompressed records. | Export or inspect raw data when query results are insufficient. |
 
 Filter wrapper metadata headers before parsing search output as NDJSON. Counting returned JSON lines is local processing, not archive-side aggregation; a record can also contain multiple events or tool calls.
@@ -75,7 +75,7 @@ See the [shared search reference](plugins/clp/skills-claude/references/shared-se
 
 ### Semantic-search controls and measurement
 
-The documented wrapper path matches message-template embeddings and retrieves records satisfying the selected templates and structured predicates. Controls include `--semantic-endpoint`, `--semantic-top-k`, and `--semantic-threshold`. The broader capability includes semantic matching over record structure; a corresponding invocation is not established by this wrapper's documented logtype-search interface.
+The documented wrapper path matches message-template embeddings and retrieves records satisfying the selected templates and structured predicates. Controls include `--semantic-endpoint`, `--semantic-top-k`, and `--semantic-threshold`. The broader capability includes semantic matching over record structure; a corresponding invocation is not established by this wrapper's documented log-shape-search interface.
 
 Pin the endpoint for reproducible runs: without an explicit endpoint, the wrapper can try local and remote endpoints.
 
@@ -87,9 +87,9 @@ Group patterns when that helps the question, and reuse applicable work as the in
 
 | Tool / operation | What it does | Input | Output | When to use |
 |---|---|---|---|---|
-| `logtype-cluster cluster` — helper | Groups similar templates using embeddings from the configured semantic server, after capping each at a character limit (500 by default) and de-duplicating. | Normalized templates and server/threshold settings. | Representatives and retained cluster memberships (full templates). | Reduce the number of patterns the agent needs to classify individually. |
-| `logtype-cluster expand` — helper | Propagates assigned cluster labels to members. | Clusters and agent-produced classifications. | Template-level classifications. | Apply and review representative labels across the inventory. |
-| `logtype-cache` — helper | Normalizes templates, fingerprints truncated and de-duplicated template sets, and retrieves, stores, or merges classifications. | Shape dictionaries, template sets, or classification JSON, depending on the subcommand. | Normalized templates, cache status/diffs, or cached categories and query plans. | Reuse applicable labels and identify additions needing classification. |
+| `log-shape-cluster cluster` — helper | Groups similar templates using embeddings from the configured semantic server, after capping each at a character limit (500 by default) and de-duplicating. | Normalized templates and server/threshold settings. | Representatives and retained cluster memberships (full templates). | Reduce the number of patterns the agent needs to classify individually. |
+| `log-shape-cluster expand` — helper | Propagates assigned cluster labels to members. | Clusters and agent-produced classifications. | Template-level classifications. | Apply and review representative labels across the inventory. |
+| `log-shape-cache` — helper | Normalizes templates, fingerprints truncated and de-duplicated template sets, and retrieves, stores, or merges classifications. | Shape dictionaries, template sets, or classification JSON, depending on the subcommand. | Normalized templates, cache status/diffs, or cached categories and query plans. | Reuse applicable labels and identify additions needing classification. |
 
 **The agent assigns categories; the helpers cluster, expand, and cache them.** The typical path is cluster → agent labels representatives → expand → review → store or merge. Membership is retained, but a representative's category can be wrong for an individual member. Keep questionable or unclassified templates visible. Clustering uses the same embedding server as semantic search — there is no separate local model or setup step.
 
@@ -113,7 +113,7 @@ Source-specific skills add guidance about how records are emitted and what their
 
 | Skill | What it does | Input | Output | When to use |
 |---|---|---|---|---|
-| `logtype-insights` | Guides discovery, classification, query planning, and evidence gathering. | Question, archive, and explicit investigation filters. | Findings with executed queries, supporting records, and uncertainty. | Investigate unfamiliar service data or an operational symptom. |
+| `log-shape-insights` | Guides discovery, classification, query planning, and evidence gathering. | Question, archive, and explicit investigation filters. | Findings with executed queries, supporting records, and uncertainty. | Investigate unfamiliar service data or an operational symptom. |
 | `claude-code-trajectory` | Analyzes activity using the Claude Code session schema. | Selected session and question. | Session analysis grounded in tool calls, outcomes, and timing. | Investigate repetition, failures, long turns, or compaction in Claude Code. |
 | `codex-trajectory` | Analyzes activity using the Codex session schema. | Selected session and question. | Session analysis grounded in that format's records. | Investigate Codex behavior without assuming Claude field names. |
 
@@ -141,7 +141,7 @@ flowchart TD
 
 ### Investigate an operational symptom
 
-Start with an archive and a declared service/time scope. Use `logtype-insights-bootstrap` and schema discovery to establish candidate context, then scoped `clp-s-search-kql` queries to check what occurs. Use semantic search to locate relevant events; optionally cluster and classify the inventory to examine other categories. Query occurrences and compare with an explicit reference window or expectation.
+Start with an archive and a declared service/time scope. Use `log-shape-insights-bootstrap` and schema discovery to establish candidate context, then scoped `clp-s-search-kql` queries to check what occurs. Use semantic search to locate relevant events; optionally cluster and classify the inventory to examine other categories. Query occurrences and compare with an explicit reference window or expectation.
 
 If semantic matches define the selected data, the inventory covers those matches. To evaluate coverage beyond semantic retrieval, use a separately declared broader scope. The [demo walkthrough](agentic-semantic-analysis-demo.md) details the evaluation procedure; it does not yet contain measured results.
 

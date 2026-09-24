@@ -39,7 +39,7 @@ A bare `INFO` (no wildcards) returns 0 even when `INFO` appears in the data — 
 
 ## Semantic search
 
-Use `semantic("natural language query")` in KQL to find log events whose logtype is semantically similar to the query, even when exact keywords differ. No flags needed — the wrapper auto-selects a working endpoint. Combine with regular KQL using `AND`.
+Use `semantic("natural language query")` in KQL to find log events whose log shape is semantically similar to the query, even when exact keywords differ. No flags needed — the wrapper auto-selects a working endpoint. Combine with regular KQL using `AND`.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'semantic("slow database queries")'

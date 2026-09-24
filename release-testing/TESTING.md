@@ -2,7 +2,7 @@
 
 A step-by-step, copy-paste walkthrough of the CLP coding-agent plugin for someone who has **never used CLP** and doesn't know what it is. Every command shows its expected output so you can tell immediately whether something is wrong. Total time: ~10 minutes.
 
-**What is CLP?** CLP (Compressed Log Processor) compresses log files into a small archive that you can *search without decompressing*. This plugin wraps CLP for coding agents (Claude Code / Codex): compress logs, search them with KQL queries, ask natural-language ("semantic") questions, and analyze an archive by its "logtypes" — the distinct message templates the application emits.
+**What is CLP?** CLP (Compressed Log Processor) compresses log files into a small archive that you can *search without decompressing*. This plugin wraps CLP for coding agents (Claude Code / Codex): compress logs, search them with KQL queries, ask natural-language ("semantic") questions, and analyze an archive by its "log_shapes" — the distinct message templates the application emits.
 
 **The test data** is three real vLLM server logs in `sample-logs/vllm/` (a failed smoke run, a successful one, and a bug-fix run — ~38 KB of plain text). vLLM is an LLM inference server; you don't need to know anything about it. The logs look like this:
 
@@ -20,7 +20,7 @@ INFO 06-15 03:52:34 [importing.py:81] Triton not installed or not compatible; ..
   ./plugins/clp/bin/clp-s --help >/dev/null 2>&1 && echo OK || echo MISSING
   ```
 
-If `MISSING`: install CLP (the plugin's hosted installer ships the binary, or download a clp-core release), or point the wrappers at an existing binary once per shell with `export CLP_S_BIN=/path/to/clp-s`. Note the check only confirms the binary exists — it cannot read the version. If your build is older than 0.13, Steps 1–4, 7 and 8 still work; Step 5 will fail with `no shape/logtype entries found` (see Troubleshooting — your archive stays valid, only the binary needs updating).
+If `MISSING`: install CLP (the plugin's hosted installer ships the binary, or download a clp-core release), or point the wrappers at an existing binary once per shell with `export CLP_S_BIN=/path/to/clp-s`. Note the check only confirms the binary exists — it cannot read the version. If your build is older than 0.13, Steps 1–4, 7 and 8 still work; Step 5 will fail with `no log shape entries found` (see Troubleshooting — your archive stays valid, only the binary needs updating).
 
 All commands are run **from the repository root**. Outputs go to `release-testing/workdir/` (gitignored — safe to delete at any time).
 
@@ -30,7 +30,7 @@ mkdir -p release-testing/workdir
 B=./plugins/clp/bin      # the plugin's command wrappers
 ```
 
-> **Keep one shell open for the whole walkthrough.** Later steps reuse variables defined earlier (`B`, `ARCHIVE`, `LC`, `KEY`, `A2`, `K2`, `CLP_LOGTYPE_CACHE_DIR`). If you lose your shell, re-run the Setup block above and the `ARCHIVE=` line in Step 1, then continue where you left off.
+> **Keep one shell open for the whole walkthrough.** Later steps reuse variables defined earlier (`B`, `ARCHIVE`, `LC`, `KEY`, `A2`, `K2`, `CLP_LOG_SHAPE_CACHE_DIR`). If you lose your shell, re-run the Setup block above and the `ARCHIVE=` line in Step 1, then continue where you left off.
 
 One output convention used throughout: the wrappers print human-readable header lines (archive path, metadata, the underlying command) to **stdout** before the JSON results. `grep '^{'` keeps only the JSON records — that is why it appears in every pipeline below. (The `2>/dev/null` merely silences occasional wrapper warnings; it is *not* what removes the headers.)
 
@@ -156,17 +156,17 @@ To search message content, *project* the field and grep it:
 
 Expected: `18` — the text was there all along; you just have to reach it this way. Tip: narrow with a searchable field first (`level:WARNING`) and then grep the projected messages — cheaper than scanning everything.
 
-## Step 5 — Dump the logtype dictionary
+## Step 5 — Dump the log shape dictionary
 
-A *logtype* is a message template with variables replaced by `<*>`. The dictionary is the complete vocabulary of distinct messages in the archive — the fastest way to learn what an unfamiliar log actually contains, without reading every record.
+A *log shape* is a message template with variables replaced by `<*>`. The dictionary is the complete vocabulary of distinct messages in the archive — the fastest way to learn what an unfamiliar log actually contains, without reading every record.
 
-`stats.log_shapes` is **not KQL** — it is a special directive the search wrapper recognizes in the query slot. It dumps the archive's internal logtype dictionary; each raw line encodes the variable positions as special placeholder bytes, so the pipeline below pipes it through `logtype-cache normalize`, which renders every placeholder as `<*>` and emits one clean `{"logtype":"..."}` JSON line per template. Works on any archive (the wrapper adds the required `--experimental` flag itself):
+`stats.log_shapes` is **not KQL** — it is a special directive the search wrapper recognizes in the query slot. It dumps the archive's internal log shape dictionary; each raw line encodes the variable positions as special placeholder bytes, so the pipeline below pipes it through `log-shape-cache normalize`, which renders every placeholder as `<*>` and emits one clean `{"log_shape":"..."}` JSON line per template. Works on any archive (the wrapper adds the required `--experimental` flag itself):
 
 ```bash
-LC="$B/logtype-cache"
+LC="$B/log-shape-cache"
 "$B/clp-s-search-kql" "$ARCHIVE" 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$LC" normalize > release-testing/workdir/logtypes.ndjson
-jq -s 'length' release-testing/workdir/logtypes.ndjson
+  | grep '^{' | "$LC" normalize > release-testing/workdir/log-shapes.ndjson
+jq -s 'length' release-testing/workdir/log-shapes.ndjson
 ```
 
 Expected: `100` — 250 records collapse to 100 distinct templates.
@@ -175,13 +175,13 @@ Which templates repeat most? The archive stores a count per template at compress
 
 ```bash
 "$B/clp-s-search-kql" "$ARCHIVE" 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$B/logtype-cache" freqs | head -3
+  | grep '^{' | "$B/log-shape-cache" freqs | head -3
 ```
 
 Expected (top entry):
 
 ```
-{"count": 9, "logtype": "Triton not installed or not compatible; certain GPU-related functions will not <*> available."}
+{"count": 9, "log_shape": "Triton not installed or not compatible; certain GPU-related functions will not <*> available."}
 ```
 
 The counts over all 100 templates sum to 250, the number of records.
@@ -196,40 +196,40 @@ Analyzing an archive means classifying its templates — expensive the first tim
 
 `<count>` is the true full template count. The GROWTH subset test compares the hashes of the first 500 characters, so a tail-only change reports UPTODATE rather than GROWTH.
 
-(`logtype-cache --help` documents all subcommands.)
+(`log-shape-cache --help` documents all subcommands.)
 
 ```bash
 # Note: exported relative path — valid only while you stay at the repo root.
-export CLP_LOGTYPE_CACHE_DIR=release-testing/workdir/lt-cache
-LC="$B/logtype-cache"
+export CLP_LOG_SHAPE_CACHE_DIR=release-testing/workdir/lt-cache
+LC="$B/log-shape-cache"
 
-"$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | head -1
+"$LC" diff --log-shapes-file release-testing/workdir/log-shapes.ndjson | head -1
 ```
 
 Expected: a line starting with `NEW` — first time seeing this app; all 100 templates would need classifying.
 
-Normally the *agent* classifies the templates (Step 9): the templates are clustered, the agent labels each cluster by id, and `logtype-cluster expand` gives every member template the label of its cluster, written as the template's hashes. Here we build a minimal stand-in by hand just to exercise the cache: one cluster holding every template, labeled `other`. The `stand_in` function below writes that cluster file and the agent's side of the classification (`schema`, a ranked `taxonomy`, the cluster `assignments`, and a one-entry ranked `query_plan`), then runs the real `expand` and prints its output:
+Normally the *agent* classifies the templates (Step 9): the templates are clustered, the agent labels each cluster by id, and `log-shape-cluster expand` gives every member template the label of its cluster, written as the template's hashes. Here we build a minimal stand-in by hand just to exercise the cache: one cluster holding every template, labeled `other`. The `stand_in` function below writes that cluster file and the agent's side of the classification (`schema`, a ranked `taxonomy`, the cluster `assignments`, and a one-entry ranked `query_plan`), then runs the real `expand` and prints its output:
 
 ```bash
-stand_in() {   # usage: stand_in LOGTYPES_NDJSON > classification.json
+stand_in() {   # usage: stand_in LOG_SHAPES_NDJSON > classification.json
   W=release-testing/workdir
-  jq -s '{max_chars:500, clusters:[{id:"c1", representative:.[0].logtype,
-          members:[.[].logtype], count:length}]}' "$1" > "$W/clusters.json"
+  jq -s '{max_chars:500, clusters:[{id:"c1", representative:.[0].log_shape,
+          members:[.[].log_shape], count:length}]}' "$1" > "$W/clusters.json"
   echo '{"schema":{"message":"message"},
          "taxonomy":[{"category":"other","description":"walkthrough","priority":"low","why":"walkthrough"}],
          "assignments":[{"id":"c1","category":"other"}],
          "query_plan":[{"label":"All","match":{"field":"message","exists":true},"method":"count",
                        "category":"other","priority":"low","stage":"core"}]}' \
     > "$W/class.json"
-  "$B/logtype-cluster" expand --clusters "$W/clusters.json" \
+  "$B/log-shape-cluster" expand --clusters "$W/clusters.json" \
     --classification "$W/class.json" --output "$W/expanded.json" >/dev/null
   cat "$W/expanded.json"
 }
 
-KEY="$("$LC" key --logtypes-file release-testing/workdir/logtypes.ndjson)"
-stand_in release-testing/workdir/logtypes.ndjson | "$LC" put --key "$KEY"
+KEY="$("$LC" key --log-shapes-file release-testing/workdir/log-shapes.ndjson)"
+stand_in release-testing/workdir/log-shapes.ndjson | "$LC" put --key "$KEY"
 
-"$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | head -1
+"$LC" diff --log-shapes-file release-testing/workdir/log-shapes.ndjson | head -1
 ```
 
 Expected: `put` confirms with `Stored classification for app_key <key>: 100 templates in 0.0s -> .../cache.sqlite` (on stderr — not an error), and the second `diff` now prints a line starting with `UPTODATE` — cache hit; nothing to classify.
@@ -247,40 +247,40 @@ cp release-testing/sample-logs/vllm/macos-m1-smoke-failure-2026-06-15.log \
 
 A2="$(ls -dt release-testing/workdir/archives2/folder-* | head -1)"
 "$B/clp-s-search-kql" "$A2" 'stats.log_shapes' 2>/dev/null \
-  | grep '^{' | "$LC" normalize > release-testing/workdir/logtypes-2.ndjson
-jq -s 'length' release-testing/workdir/logtypes-2.ndjson
+  | grep '^{' | "$LC" normalize > release-testing/workdir/log-shapes-2.ndjson
+jq -s 'length' release-testing/workdir/log-shapes-2.ndjson
 ```
 
 Expected: `96` — the 2-file archive has 96 templates.
 
 ```bash
 # Fresh cache so the demo is deterministic; store the 96-template classification:
-export CLP_LOGTYPE_CACHE_DIR=release-testing/workdir/lt-cache-growth
-K2="$("$LC" key --logtypes-file release-testing/workdir/logtypes-2.ndjson)"
-stand_in release-testing/workdir/logtypes-2.ndjson | "$LC" put --key "$K2"
+export CLP_LOG_SHAPE_CACHE_DIR=release-testing/workdir/lt-cache-growth
+K2="$("$LC" key --log-shapes-file release-testing/workdir/log-shapes-2.ndjson)"
+stand_in release-testing/workdir/log-shapes-2.ndjson | "$LC" put --key "$K2"
 
 # Probe with the FULL 3-file dictionary — the archive "grew":
-"$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | head -1
+"$LC" diff --log-shapes-file release-testing/workdir/log-shapes.ndjson | head -1
 ```
 
 Expected: a line starting with `GROWTH`, with `100` and `4` as the last two fields (total templates, new templates) — the cache recognized the 96 known templates and asks you to classify **only the 4 new ones**, not all 100. The NDJSON lines after the header are exactly those 4 templates:
 
 ```bash
-"$LC" diff --logtypes-file release-testing/workdir/logtypes.ndjson | grep -c '^{'
+"$LC" diff --log-shapes-file release-testing/workdir/log-shapes.ndjson | grep -c '^{'
 ```
 
 Expected: `4`
 
 This is the feature's core value: re-analyzing a growing log costs only the classification of what's new.
 
-By the way — Steps 2, 5, and the cache probe are what the `logtype-insights` skill runs as its first command, via one helper:
+By the way — Steps 2, 5, and the cache probe are what the `log-shape-insights` skill runs as its first command, via one helper:
 
 ```bash
-"$B/logtype-insights-bootstrap" --cache-dir release-testing/workdir/lt-cache \
+"$B/log-shape-insights-bootstrap" --cache-dir release-testing/workdir/lt-cache \
   --out-dir release-testing/workdir/bootstrap "$ARCHIVE"
 ```
 
-Expected: a `SAMPLE=` record, `DIST field=...` value distributions for the four fields, `LOGTYPE_COUNT=100`, `FREQS=OK` with a `FREQS_FILE=` path, and `CACHE_MODE=UPTODATE` (the classification you stored above is fetched to `release-testing/workdir/bootstrap/logtype-classification.json`).
+Expected: a `SAMPLE=` record, `DIST field=...` value distributions for the four fields, `LOG_SHAPE_COUNT=100`, `FREQS=OK` with a `FREQS_FILE=` path, and `CACHE_MODE=UPTODATE` (the classification you stored above is fetched to `release-testing/workdir/bootstrap/log-shape-classification.json`).
 
 ## Step 7 — Semantic search (natural language)
 
@@ -320,9 +320,9 @@ claude --plugin-dir ./plugins/clp
 
 then ask:
 
-> Compress the logs in release-testing/sample-logs/vllm and give me logtype insights.
+> Compress the logs in release-testing/sample-logs/vllm and give me log shape insights.
 
-The agent should: compress with `--structurize`, report the compression stats, run `logtype-insights-bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above), cluster the templates with `logtype-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with an opus subagent (caching the expanded result) while it asks what you already know about these logs, summarize the ranked categories and ask what to focus on while the core queries run, queue the focus ahead of the rest, post the early numbers, and return a report that leads with the focus, with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives. Answer the first question with a problem (for example "requests seemed to fail") and check that the focus question recommends the categories it points at and that the report says whether the records support it.
+The agent should: compress with `--structurize`, report the compression stats, run `log-shape-insights-bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above), cluster the templates with `log-shape-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with an opus subagent (caching the expanded result) while it asks what you already know about these logs, summarize the ranked categories and ask what to focus on while the core queries run, queue the focus ahead of the rest, post the early numbers, and return a report that leads with the focus, with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives. Answer the first question with a problem (for example "requests seemed to fail") and check that the focus question recommends the categories it points at and that the report says whether the records support it.
 
 ## Cleanup
 
@@ -337,10 +337,10 @@ rm -rf release-testing/workdir
 | `error: clp-s binary not found` | Install CLP or set `CLP_S_BIN=/path/to/clp-s`. |
 | `jq: parse error: Invalid numeric literal` | You piped wrapper output straight into `jq`. The wrapper prints header lines first — always filter with `grep '^{'`. |
 | `message:<word>` returns 0 | Expected (Step 4). Message content is not KQL-searchable; project + grep instead. |
-| Step 5 prints `error: no shape/logtype entries found in input` and the count is 0 | Your `clp-s` predates the shapes API (e.g. clp-core 0.12.x) — the underlying error (`--experimental flag set but archive was not created with --experimental`) is hidden by the `2>/dev/null` in the pipeline. Your archive is fine and Steps 1–4/7–8 remain valid; only the binary is too old. Point `CLP_S_BIN` at a 0.13+ build and re-run Step 5 — no recompression needed. |
-| `logtype-insights-bootstrap` exits 1 with `error: stats.log_shapes emitted no logtypes` | Same 0.12.x cause as above. Point `CLP_S_BIN` at a 0.13+ build and re-run. |
-| `logtype-cache freqs` fails, or the bootstrap prints `FREQS=UNAVAILABLE` | The archive was compressed by a `clp-s` build that did not store per-template counts (`count` is `null` in `stats.log_shapes`). Recompress with the current build. |
+| Step 5 prints `error: no log shape entries found in input` and the count is 0 | Your `clp-s` predates the shapes API (e.g. clp-core 0.12.x) — the underlying error (`--experimental flag set but archive was not created with --experimental`) is hidden by the `2>/dev/null` in the pipeline. Your archive is fine and Steps 1–4/7–8 remain valid; only the binary is too old. Point `CLP_S_BIN` at a 0.13+ build and re-run Step 5 — no recompression needed. |
+| `log-shape-insights-bootstrap` exits 1 with `error: stats.log_shapes emitted no log shapes` | Same 0.12.x cause as above. Point `CLP_S_BIN` at a 0.13+ build and re-run. |
+| `log-shape-cache freqs` fails, or the bootstrap prints `FREQS=UNAVAILABLE` | The archive was compressed by a `clp-s` build that did not store per-template counts (`count` is `null` in `stats.log_shapes`). Recompress with the current build. |
 | `error: stats.logtypes was renamed to stats.log_shapes` | You ran the legacy query spelling; use `stats.log_shapes` as shown in Step 5. |
-| Semantic search: endpoint error | The embedding server is unreachable. Check the endpoint (`--semantic-endpoint`, `CLP_SEMANTIC_ENDPOINT`, or `~/.config/yscope-clp-plugin/semantic-endpoint`); the plugin never starts a server itself. Keyword/logtype steps are unaffected. |
-| `logtype-cluster` exits 2 | The embedding server is unreachable or rejected (same fix as above). Clustering is pure Python standard library, so there is no dependency to install. `setup` no longer exists — clustering uses the server, not a local model. |
+| Semantic search: endpoint error | The embedding server is unreachable. Check the endpoint (`--semantic-endpoint`, `CLP_SEMANTIC_ENDPOINT`, or `~/.config/yscope-clp-plugin/semantic-endpoint`); the plugin never starts a server itself. Keyword/log shape steps are unaffected. |
+| `log-shape-cluster` exits 2 | The embedding server is unreachable or rejected (same fix as above). Clustering is pure Python standard library, so there is no dependency to install. `setup` no longer exists — clustering uses the server, not a local model. |
 | Numbers differ slightly from this doc | Byte counts vary with clp-s version; record/template counts (250 / 100 / 96 / 4 / 35 / 18) should match exactly. |

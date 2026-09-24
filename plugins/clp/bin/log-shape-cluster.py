@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""logtype-cluster.py — merge semantically similar logtypes before classification.
+"""log-shape-cluster.py — merge semantically similar log shapes before classification.
 
-Invoked via the `logtype-cluster` bash launcher, which resolves the embedding
+Invoked via the `log-shape-cluster` bash launcher, which resolves the embedding
 server URL and exports it as CLP_SEMANTIC_ENDPOINT. Two subcommands:
 
-  cluster  Truncate each logtype to a character limit (default 500, UTF-8
+  cluster  Truncate each log shape to a character limit (default 500, UTF-8
            characters), de-duplicate the results, embed the distinct texts
            via the semantic server's /v1/embeddings endpoint, and group them by
            greedy leader clustering at a cosine threshold. The LLM then
            classifies only the cluster representatives, by cluster id.
   expand   Propagate the LLM's per-cluster category assignments to every member
            (stdlib-only). Each member is written as its hashes -- of the full
-           template and of its first max_chars characters (lib/logtypes.py) --
+           template and of its first max_chars characters (lib/log_shapes.py) --
            computed from the member strings themselves, never re-generated, so
            cache GROWTH matching stays exact by construction.
 
 Truncation and de-duplication concern only what is POSTed for embedding. `members`
-and `representative` are always FULL logtype strings; the character limit is
-also the cache fingerprint (truncate_chars is shared with logtype-cache through
-lib/logtypes.py).
+and `representative` are always FULL log shape strings; the character limit is
+also the cache fingerprint (truncate_chars is shared with log-shape-cache through
+lib/log_shapes.py).
 
 Embeddings come from an already-running server; this tool never starts one and
 never downloads a model. Point it at a server with --semantic-endpoint,
@@ -42,7 +42,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
-from logtypes import prefix_hash, template_hash, truncate_chars  # noqa: E402
+from log_shapes import prefix_hash, template_hash, truncate_chars  # noqa: E402
 
 DEFAULT_THRESHOLD = os.environ.get("CLP_LOG_CLUSTER_THRESHOLD", "0.80")
 
@@ -62,7 +62,7 @@ RESPONSE_CONTENT_TYPE = "application/vnd.clp.embeddings.indexed.v1"
 TERMINAL_INDEX = 0xFFFF_FFFF
 # Cloudflare fronts the hosted endpoints and rejects urllib's default
 # User-Agent with HTTP 403 (error 1010), so send an explicit one.
-USER_AGENT = "clp-logtype-cluster/1"
+USER_AGENT = "clp-log-shape-cluster/1"
 # Texts per request. 400 templates embed in ~4 s; keeps bodies well under any
 # proxy limit while holding the round-trip count low. A malformed or
 # non-positive override falls back to the default rather than crashing later.
@@ -80,17 +80,17 @@ REQUEST_TIMEOUT_S = _positive_env_int("CLP_SEMANTIC_TIMEOUT_S", 120)
 # Templates are truncated to this many UTF-8 characters before embedding, then
 # de-duplicated, so a long template cannot bloat a request and templates sharing
 # a prefix are only ever embedded once. Configurable per session. The SAME limit
-# is the classification-cache fingerprint (logtype-cache shares truncate_chars
-# through lib/logtypes.py and reads the same env var), so changing it
+# is the classification-cache fingerprint (log-shape-cache shares truncate_chars
+# through lib/log_shapes.py and reads the same env var), so changing it
 # deliberately re-keys the cache. 500, not 512: the embedding model's context is 512 TOKENS
 # including its special tokens, and punctuation-heavy templates (`,<*>,<*>,...`)
 # tokenize to about one token per character, so a 512-character cap can overflow
 # it and the server rejects the whole batch. 500 leaves headroom.
-DEFAULT_MAX_CHARS = _positive_env_int("CLP_LOGTYPE_MAX_CHARS", 500)
+DEFAULT_MAX_CHARS = _positive_env_int("CLP_LOG_SHAPE_MAX_CHARS", 500)
 # Hard ceiling on the encoded size of one /v1/embeddings request body, applied
 # independently of the batch count. Decimal MB so it is under 100 MB however the
 # limit is read.
-DEFAULT_MAX_REQUEST_BYTES = _positive_env_int("CLP_LOGTYPE_MAX_REQUEST_BYTES", 100_000_000)
+DEFAULT_MAX_REQUEST_BYTES = _positive_env_int("CLP_LOG_SHAPE_MAX_REQUEST_BYTES", 100_000_000)
 
 
 class Parser(argparse.ArgumentParser):
@@ -106,9 +106,9 @@ def fail(code, *lines):
     sys.exit(code)
 
 
-def load_logtypes(path):
-    """Read {"logtype": ...} NDJSON; return sorted unique logtype strings."""
-    logtypes = set()
+def load_log_shapes(path):
+    """Read {"log_shape": ...} NDJSON; return sorted unique log shape strings."""
+    log_shapes = set()
     skipped = 0
     try:
         with open(path, encoding="utf-8") as fh:
@@ -121,19 +121,19 @@ def load_logtypes(path):
                 except json.JSONDecodeError:
                     skipped += 1
                     continue
-                value = obj.get("logtype") if isinstance(obj, dict) else None
+                value = obj.get("log_shape") if isinstance(obj, dict) else None
                 if isinstance(value, str) and value:
-                    logtypes.add(value)
+                    log_shapes.add(value)
                 else:
                     skipped += 1
     except OSError as exc:
         fail(1, f"cannot read --input file: {exc}")
     if skipped:
-        print(f"warning: skipped {skipped} line(s) without a usable \"logtype\" field",
+        print(f"warning: skipped {skipped} line(s) without a usable \"log shape\" field",
               file=sys.stderr)
-    if not logtypes:
-        fail(1, f"no logtypes found in {path}")
-    return sorted(logtypes)
+    if not log_shapes:
+        fail(1, f"no log shapes found in {path}")
+    return sorted(log_shapes)
 
 
 def dedup_truncated(templates, max_chars):
@@ -422,7 +422,7 @@ def cmd_cluster(args):
         fail(3, f"--max-request-bytes must be a positive integer, got: "
                 f"{args.max_request_bytes}")
 
-    templates = load_logtypes(args.input)
+    templates = load_log_shapes(args.input)
 
     url = embeddings_url(resolve_endpoint(args.semantic_endpoint))
     # Embed each distinct truncated text once, then realign onto the full
@@ -498,7 +498,7 @@ def cmd_cluster(args):
     print(f"THRESHOLD={threshold}")
     print(f"OUTPUT={args.output}")
     # Paste-ready NDJSON for the classification prompt: id + member count +
-    # representative only — the LLM never sees (or echoes) member logtypes.
+    # representative only — the LLM never sees (or echoes) member log shapes.
     for c in clusters:
         print(json.dumps({"id": c["id"], "count": c["count"],
                           "representative": c["representative"]},
@@ -567,7 +567,7 @@ def cmd_expand(args):
         print("warning: classification contains \"templates\"; ignoring it — "
               "templates are rebuilt from the cluster members", file=sys.stderr)
 
-    # Templates are identified by hash, never by text (see lib/logtypes.py):
+    # Templates are identified by hash, never by text (see lib/log_shapes.py):
     # the text can be hundreds of KB per template, and it stays in the
     # archive's own dictionary dump. prefix_hash uses the limit the clusters
     # were embedded at, which is also the cache fingerprint's limit.
@@ -601,14 +601,14 @@ def cmd_expand(args):
 
 def main():
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-    parser = Parser(prog="logtype-cluster", description=__doc__,
+    parser = Parser(prog="log-shape-cluster", description=__doc__,
                     formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_cluster = sub.add_parser("cluster",
-                               help="group similar logtypes; print representatives")
+                               help="group similar log shapes; print representatives")
     p_cluster.add_argument("--input", required=True,
-                           help='{"logtype": ...} NDJSON (e.g. /tmp/logtypes-to-classify.ndjson)')
+                           help='{"log_shape": ...} NDJSON (e.g. /tmp/log-shapes-to-classify.ndjson)')
     p_cluster.add_argument("--semantic-endpoint", default=None,
                            help="embedding server URL (default: $CLP_SEMANTIC_ENDPOINT, "
                                 "then the semantic-endpoint config file)")
@@ -619,14 +619,14 @@ def main():
     p_cluster.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS,
                            help=f"truncate each template to this many UTF-8 "
                                 f"characters before embedding (default: "
-                                f"{DEFAULT_MAX_CHARS}, or $CLP_LOGTYPE_MAX_CHARS)")
+                                f"{DEFAULT_MAX_CHARS}, or $CLP_LOG_SHAPE_MAX_CHARS)")
     p_cluster.add_argument("--max-request-bytes", type=int,
                            default=DEFAULT_MAX_REQUEST_BYTES,
                            help=f"ceiling on one embedding request body "
                                 f"(default: {DEFAULT_MAX_REQUEST_BYTES}, or "
-                                f"$CLP_LOGTYPE_MAX_REQUEST_BYTES)")
-    p_cluster.add_argument("--output", default="/tmp/logtype-clusters.json",
-                           help="clusters JSON path (default: /tmp/logtype-clusters.json)")
+                                f"$CLP_LOG_SHAPE_MAX_REQUEST_BYTES)")
+    p_cluster.add_argument("--output", default="/tmp/log-shape-clusters.json",
+                           help="clusters JSON path (default: /tmp/log-shape-clusters.json)")
     p_cluster.set_defaults(func=cmd_cluster)
 
     p_expand = sub.add_parser("expand",
@@ -635,8 +635,8 @@ def main():
                           help="clusters JSON produced by `cluster`")
     p_expand.add_argument("--classification", required=True,
                           help='LLM output JSON with "assignments" (per cluster id)')
-    p_expand.add_argument("--output", default="/tmp/logtype-expanded.json",
-                          help="expanded classification path (default: /tmp/logtype-expanded.json)")
+    p_expand.add_argument("--output", default="/tmp/log-shape-expanded.json",
+                          help="expanded classification path (default: /tmp/log-shape-expanded.json)")
     p_expand.set_defaults(func=cmd_expand)
 
     args = parser.parse_args()
