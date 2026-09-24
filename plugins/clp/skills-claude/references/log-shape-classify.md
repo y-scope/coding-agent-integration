@@ -224,11 +224,19 @@ jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_pl
 # 3. Expand id-based assignments to every member template, by hash. Exits 2
 #    and writes NOTHING on missing/unknown/duplicate ids — in that case do NOT
 #    go on; announce the retry to the user, re-run the subagent once, and
-#    expand again:
+#    expand again. On GROWTH add
+#    --categories-from /tmp/log-shape-base-classification.json: the classifier
+#    lists only the categories it adds, so a field rule's category that the base
+#    already ranks would otherwise be refused:
 "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-cluster" expand \
   --clusters /tmp/log-shape-clusters.json \
   --classification /tmp/log-shape-class.json \
-  --output /tmp/log-shape-expanded.json
+  --output /tmp/log-shape-expanded.json                                       # NEW
+"${CLAUDE_PLUGIN_ROOT}/bin/log-shape-cluster" expand \
+  --clusters /tmp/log-shape-clusters.json \
+  --classification /tmp/log-shape-class.json \
+  --categories-from /tmp/log-shape-base-classification.json \
+  --output /tmp/log-shape-expanded.json                                       # GROWTH
 
 # 4. Merge (milliseconds). Use MODE/BASE_KEY from the bootstrap output
 #    (re-declare — fresh shell). GROWTH merges the new templates into the base
