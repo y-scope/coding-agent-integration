@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""
+logtype-focus - turn the user's answer to "what should this analysis focus
+on?" into queries for the running plan pool (logtype-insights skill).
+
+The classifier ranks its categories and writes, besides the core plan that
+runs on every analysis, "drill" entries per category that run only when the
+user focuses on that category (logtype-insight-extract writes them to
+/tmp/logtype-drill-plan.txt). This tool queues the chosen categories' drill
+entries, plus any entries the agent wrote from the user's own words, into the
+plan runner's inbox (logtype-query-plan-run --inbox), then closes the inbox so
+the pool finishes. It also records the focus and the user's context in
+/tmp/logtype-focus.json, which logtype-insight-facts puts at the top of the
+facts file for the report writer.
+
+Call it ONCE per analysis: the runner stops reading the inbox at the close
+line, so entries queued by a second call are not run.
+
+Usage:
+  logtype-focus [--category C]... [--entries-file F] [--everything]
+                [--question TEXT] [--context TEXT]
+
+Options:
+  --category C       Focus on category C (repeatable): queue its drill
+                     entries. C must be a taxonomy category.
+  --entries-file F   Also queue the entries in F (NDJSON, or a JSON array),
+                     written by the agent from the user's question or
+                     context. Each needs a valid `match` filter and method
+                     (lib/kql_build.py); a `category`, when given, must be a
+                     taxonomy category. Nothing is queued when any is invalid.
+  --everything       The user wants the whole picture; with no categories and
+                     no entries this only closes the inbox.
+  --question TEXT    The user's own focus question, verbatim.
+  --context TEXT     What the user said they already know about these logs,
+                     verbatim (empty when they skipped it).
+  --classification-file F   (default: /tmp/logtype-classification.json)
+  --drill-plan-file F       (default: /tmp/logtype-drill-plan.txt)
+  --inbox F                 (default: /tmp/logtype-focus-inbox.ndjson)
+  --focus-file F            (default: /tmp/logtype-focus.json)
+
+Prints one line per queued entry, "[k] <label> (<category>) <kql>", then
+FOCUS=<everything|categories|question> FOCUS_ENTRIES=<n>, a NO_DRILL=<C> line
+for a chosen category with no drill entries (write entries for it with
+--entries-file instead), and INBOX_CLOSED=1.
+
+Exit codes: 0 queued and closed, 1 invalid entries or unknown category
+(nothing written), 2 usage or unreadable input.
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from classification import category_names  # noqa: E402
+from kql_build import FilterError, check_entry  # noqa: E402
+
+
+def read_entries(path):
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+    if isinstance(obj, dict):
+        obj = obj.get("query_plan", [obj])
+    if not isinstance(obj, list):
+        raise ValueError("expected NDJSON entries or a JSON array")
+    return obj
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Queue the user's focus into the running plan pool.")
+    ap.add_argument("--category", action="append", default=[])
+    ap.add_argument("--entries-file", default=None)
+    ap.add_argument("--everything", action="store_true")
+    ap.add_argument("--question", default="")
+    ap.add_argument("--context", default="")
+    ap.add_argument("--classification-file", default="/tmp/logtype-classification.json")
+    ap.add_argument("--drill-plan-file", default="/tmp/logtype-drill-plan.txt")
+    ap.add_argument("--inbox", default="/tmp/logtype-focus-inbox.ndjson")
+    ap.add_argument("--focus-file", default="/tmp/logtype-focus.json")
+    args = ap.parse_args(argv)
+    if not (args.category or args.entries_file or args.everything or args.question):
+        ap.error("give --everything, --category, --question, or --entries-file")
+
+    try:
+        with open(args.classification_file, "r", encoding="utf-8") as f:
+            taxonomy = json.load(f).get("taxonomy", [])
+        drill = read_entries(args.drill_plan_file) if os.path.exists(args.drill_plan_file) else []
+        extra = read_entries(args.entries_file) if args.entries_file else []
+    except (OSError, ValueError, AttributeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    names = category_names(taxonomy)
+
+    errors = [f"unknown category {c!r} (taxonomy: {', '.join(sorted(names))})"
+              for c in args.category if c not in names]
+    for i, entry in enumerate(extra, 1):
+        try:
+            check_entry(entry)
+            if "category" in entry and entry["category"] not in names:
+                raise FilterError(f"category {entry['category']!r} is not in the taxonomy")
+        except FilterError as exc:
+            label = entry.get("label", "") if isinstance(entry, dict) else ""
+            errors.append(f"entries[{i}] {label}: {exc}")
+    if errors:
+        for line in errors:
+            print(f"error: {line}", file=sys.stderr)
+        print("error: nothing queued; the inbox is still open", file=sys.stderr)
+        return 1
+
+    queued = []
+    for c in args.category:
+        mine = [e for e in drill if isinstance(e, dict) and e.get("category") == c]
+        if not mine:
+            print(f"NO_DRILL={c}")
+        queued += mine
+    queued += [dict(e, stage="focus") for e in extra]
+    queued = [dict(e, origin="focus") for e in queued]
+
+    kind = "categories" if args.category else "question" if (args.question or extra) else "everything"
+    with open(args.inbox, "a", encoding="utf-8") as f:
+        for e in queued:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        f.write(json.dumps({"close": True}) + "\n")
+    focus = {
+        "focus": kind,
+        "categories": args.category,
+        "question": args.question,
+        "context": args.context,
+        "entries": [{"label": e.get("label", ""), "category": e.get("category"), "kql": check_entry(e)}
+                    for e in queued],
+    }
+    with open(args.focus_file, "w", encoding="utf-8") as f:
+        json.dump(focus, f, indent=1, ensure_ascii=False)
+
+    for k, e in enumerate(focus["entries"], 1):
+        print(f"[{k}] {e['label']} ({e['category'] or '-'}) {e['kql']}")
+    print(f"FOCUS={kind} FOCUS_ENTRIES={len(queued)}")
+    print("INBOX_CLOSED=1")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -42,6 +42,17 @@ Options:
   --retry-failed        Re-run an entry that ended in error or timeout once,
                         and mark it retried.
   --max-followups N     Cap on queries added by `then` rules (default: 20).
+  --inbox F             Also take entries from F while running, and hold the
+                        pool open until F says {"close": true}: each complete
+                        line is a plan entry, queued AHEAD of every plan entry
+                        not yet started, with origin "focus" unless it has its
+                        own. logtype-focus writes it once the user picks a
+                        focus, so one pool runs the core plan and the focus
+                        without a second pool counting the same free memory.
+                        Its entries get indexes after the plan's last entry.
+  --inbox-timeout SECONDS
+                        Stop holding after this long with nothing left to run
+                        and no close line (default: 900); INBOX=timed-out.
 
 A plan entry may also carry:
   samples, sample_chars  Keep more or longer example lines for this entry.
@@ -264,7 +275,7 @@ def run_entry(entry, index, n, args, total, lines, run=None):
         "total_records": total,
         "ran_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     }
-    for key in ("match", "project", "grep", "jq", "origin"):
+    for key in ("match", "project", "grep", "jq", "origin", "category", "priority", "stage"):
         if entry.get(key):
             result[key] = entry[key]
 
@@ -506,8 +517,9 @@ def print_table(results):
             if r.get("non_selective"):
                 outcome += " **non-selective**"
         kql = r.get("kql", "")
+        label = r.get("label", "") + (" (focus)" if r.get("origin") == "focus" else "")
         print(
-            f"| {index} | {md_cell(r.get('label', ''))} | {r.get('method', '')} "
+            f"| {index} | {md_cell(label)} | {r.get('method', '')} "
             f"| `{md_cell(kql)}` | {md_cell(outcome)} | {r.get('elapsed_s', '')}s |"
         )
 
@@ -535,6 +547,8 @@ def main(argv=None) -> int:
         default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"),
     )
     parser.add_argument("--print-table", action="store_true")
+    parser.add_argument("--inbox", default=None)
+    parser.add_argument("--inbox-timeout", type=int, default=900)
     args = parser.parse_args(argv)
 
     if args.print_table:
@@ -671,11 +685,68 @@ def main(argv=None) -> int:
         return avail - unfilled - reserve_kib >= est["kib"] * 1.15
 
     queue = list(picked)
+    inbox = {"offset": 0, "closed": args.inbox is None, "added": 0, "idle_since": None, "waiting": False}
+
+    def read_inbox():
+        """Queue the inbox's new complete lines ahead of the plan entries not
+        yet started, in the order they were written."""
+        try:
+            with open(args.inbox, "rb") as f:
+                f.seek(inbox["offset"])
+                data = f.read()
+        except FileNotFoundError:
+            return
+        end = data.rfind(b"\n")
+        if end < 0:
+            return
+        inbox["offset"] += end + 1
+        added = []
+        for line in data[: end + 1].decode("utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                print(f"       inbox: skipped a line that is not JSON: {line[:120]}", flush=True)
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("close"):
+                inbox["closed"] = True
+                print(f"INBOX closed ({inbox['added']} focus entr{'y' if inbox['added'] == 1 else 'ies'})",
+                      flush=True)
+                continue
+            with lock:
+                plan.append(dict(entry, origin=entry.get("origin", "focus")))
+                added.append(len(plan))
+            inbox["added"] += 1
+            print(f"       [{len(plan)}] queued from inbox: {entry.get('label', '')}", flush=True)
+        # Ahead of the plan, behind the earlier focus entries still queued.
+        ahead = [i for i in queue if i > n and plan[i - 1].get("origin") == "focus"]
+        rest = [i for i in queue if i not in ahead]
+        queue[:] = ahead + added + rest
+
     preempts = {}
     running = {}  # future -> (entry index, Run)
     peak_jobs = 0
     with ThreadPoolExecutor(max_workers=cap) as pool:
-        while queue or running:
+        while queue or running or not inbox["closed"]:
+            if not inbox["closed"]:
+                read_inbox()
+                if not queue and not running and not inbox["closed"]:
+                    now = time.monotonic()
+                    if inbox["idle_since"] is None:
+                        inbox["idle_since"] = now
+                        print(f"INBOX waiting for the focus entries or a close line in {args.inbox}",
+                              flush=True)
+                    elif now - inbox["idle_since"] > args.inbox_timeout:
+                        inbox["closed"] = True
+                        print("INBOX=timed-out", flush=True)
+                        break
+                    time.sleep(0.5)
+                    continue
+                inbox["idle_since"] = None
             for fut in [f for f in running if f.done()]:
                 index, _ = running.pop(fut)
                 if fut.result() is None:  # preempted by the memory guard

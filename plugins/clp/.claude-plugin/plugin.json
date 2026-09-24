@@ -1,7 +1,7 @@
 {
   "name": "clp",
   "displayName": "CLP",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Compress, search, and decompress Claude Code and Codex session log archives with CLP.",
   "skills": "./skills-claude/",
   "author": {

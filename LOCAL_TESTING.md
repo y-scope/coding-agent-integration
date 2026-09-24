@@ -175,9 +175,10 @@ LC=./plugins/clp/bin/logtype-cache
 stand_in() {   # usage: stand_in LOGTYPES_NDJSON > classification.json
   jq -s '{max_chars:500, clusters:[{id:"c1", representative:.[0].logtype,
           members:[.[].logtype], count:length}]}' "$1" > /tmp/smoke-clusters.json
-  echo '{"schema":{"message":"message"},"taxonomy":[{"category":"other","description":"smoke"}],
+  echo '{"schema":{"message":"message"},"taxonomy":[{"category":"other","description":"smoke","priority":"low","why":"smoke"}],
          "assignments":[{"id":"c1","category":"other"}],
-         "query_plan":[{"label":"All","match":{"field":"message","exists":true},"method":"count"}]}' \
+         "query_plan":[{"label":"All","match":{"field":"message","exists":true},"method":"count",
+                       "category":"other","priority":"low","stage":"core"}]}' \
     > /tmp/smoke-class.json
   ./plugins/clp/bin/logtype-cluster expand --clusters /tmp/smoke-clusters.json \
     --classification /tmp/smoke-class.json --output /tmp/smoke-expanded.json >/dev/null

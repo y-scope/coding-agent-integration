@@ -123,7 +123,9 @@ for f in plugins/clp/bin/clp-s-* \
          plugins/clp/bin/logtype-insights-bootstrap \
          plugins/clp/bin/logtype-cluster; do bash -n "$f"; done
 python3 -m py_compile plugins/clp/bin/logtype-cluster.py plugins/clp/bin/logtype-cache \
-  plugins/clp/bin/clp-detect-logs plugins/clp/bin/lib/logtypes.py
+  plugins/clp/bin/clp-detect-logs plugins/clp/bin/kql-build plugins/clp/bin/logtype-insight-extract \
+  plugins/clp/bin/logtype-query-plan-run plugins/clp/bin/logtype-insight-facts plugins/clp/bin/logtype-focus \
+  plugins/clp/bin/lib/logtypes.py plugins/clp/bin/lib/kql_build.py plugins/clp/bin/lib/classification.py
 
 # Static analysis (if shellcheck is installed)
 shellcheck \

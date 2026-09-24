@@ -58,20 +58,45 @@ _VALUE_ESCAPES = {
     "\t": "\\t",
 }
 
-# field:*value* where the opening * is not preceded by a quote, i.e. the value
-# is unquoted. Shared with kql-validate-wildcards.
-_UNQUOTED_WILDCARD_RE = re.compile(r'(?<!["\']):\*([^*\n]*)\*')
+# field:*value* with an unquoted value. It runs on the query with its quoted
+# strings masked (see _mask_quoted), so a `:*` inside a quoted value -- as in
+# message:"*Error:*" -- is never taken for one. The value stops at a quote,
+# colon or parenthesis, so `a:* AND b:*` (two exists filters) is not read as
+# one value spanning the AND. Shared with kql-validate-wildcards.
+_UNQUOTED_WILDCARD_RE = re.compile(r'(?<!["\']):\*([^*\n":()]*)\*')
 
 
 class FilterError(ValueError):
     """A filter or plan entry that cannot be rendered."""
 
 
+def _mask_quoted(kql):
+    """kql with the contents of every double-quoted string (escapes included)
+    replaced by "_", so positions are unchanged but nothing inside a quoted
+    value can match. An unterminated quote masks to the end."""
+    out, quoted, escaped = [], False, False
+    for ch in kql:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                quoted = False
+                out.append(ch)
+                continue
+            out.append("_")
+        else:
+            quoted = ch == '"'
+            out.append(ch)
+    return "".join(out)
+
+
 def unquoted_wildcard_terms(kql):
     """Return the unquoted wildcard values in kql that contain whitespace."""
     return [
-        m.group(0)
-        for m in _UNQUOTED_WILDCARD_RE.finditer(kql)
+        kql[m.start():m.end()]
+        for m in _UNQUOTED_WILDCARD_RE.finditer(_mask_quoted(kql))
         if " " in m.group(1) or "\t" in m.group(1)
     ]
 

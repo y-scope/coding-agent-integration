@@ -208,7 +208,7 @@ LC="$B/logtype-cache"
 
 Expected: a line starting with `NEW` — first time seeing this app; all 100 templates would need classifying.
 
-Normally the *agent* classifies the templates (Step 9): the templates are clustered, the agent labels each cluster by id, and `logtype-cluster expand` gives every member template the label of its cluster, written as the template's hashes. Here we build a minimal stand-in by hand just to exercise the cache: one cluster holding every template, labeled `other`. The `stand_in` function below writes that cluster file and the agent's side of the classification (`schema`, `taxonomy`, the cluster `assignments`, and a one-entry `query_plan`), then runs the real `expand` and prints its output:
+Normally the *agent* classifies the templates (Step 9): the templates are clustered, the agent labels each cluster by id, and `logtype-cluster expand` gives every member template the label of its cluster, written as the template's hashes. Here we build a minimal stand-in by hand just to exercise the cache: one cluster holding every template, labeled `other`. The `stand_in` function below writes that cluster file and the agent's side of the classification (`schema`, a ranked `taxonomy`, the cluster `assignments`, and a one-entry ranked `query_plan`), then runs the real `expand` and prints its output:
 
 ```bash
 stand_in() {   # usage: stand_in LOGTYPES_NDJSON > classification.json
@@ -216,9 +216,10 @@ stand_in() {   # usage: stand_in LOGTYPES_NDJSON > classification.json
   jq -s '{max_chars:500, clusters:[{id:"c1", representative:.[0].logtype,
           members:[.[].logtype], count:length}]}' "$1" > "$W/clusters.json"
   echo '{"schema":{"message":"message"},
-         "taxonomy":[{"category":"other","description":"walkthrough"}],
+         "taxonomy":[{"category":"other","description":"walkthrough","priority":"low","why":"walkthrough"}],
          "assignments":[{"id":"c1","category":"other"}],
-         "query_plan":[{"label":"All","match":{"field":"message","exists":true},"method":"count"}]}' \
+         "query_plan":[{"label":"All","match":{"field":"message","exists":true},"method":"count",
+                       "category":"other","priority":"low","stage":"core"}]}' \
     > "$W/class.json"
   "$B/logtype-cluster" expand --clusters "$W/clusters.json" \
     --classification "$W/class.json" --output "$W/expanded.json" >/dev/null
@@ -321,7 +322,7 @@ then ask:
 
 > Compress the logs in release-testing/sample-logs/vllm and give me logtype insights.
 
-The agent should: compress with `--structurize`, report the compression stats, run `logtype-insights-bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above), cluster the templates with `logtype-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with a fast subagent (caching the expanded result), and return a report with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives.
+The agent should: compress with `--structurize`, report the compression stats, run `logtype-insights-bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above), cluster the templates with `logtype-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with an opus subagent (caching the expanded result) while it asks what you already know about these logs, summarize the ranked categories and ask what to focus on while the core queries run, queue the focus ahead of the rest, post the early numbers, and return a report that leads with the focus, with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives. Answer the first question with a problem (for example "requests seemed to fail") and check that the focus question recommends the categories it points at and that the report says whether the records support it.
 
 ## Cleanup
 

@@ -21,8 +21,13 @@ Inputs (all produced earlier in the run):
                          numbered separately, so a query is cited as
                          [baseline #N] or [plan #N].
   --category-totals F    logtype-insight-extract's {category: {templates,
-                         records}} (default: /tmp/logtype-category-totals.json,
-                         or "none" when frequencies were unavailable)
+                         records, priority, why}} (default:
+                         /tmp/logtype-category-totals.json, or "none" when
+                         frequencies were unavailable)
+  --focus-file F         logtype-focus's record of the user's focus and
+                         context (default: /tmp/logtype-focus.json; absent
+                         when no one was asked). Its section comes first, with
+                         the results of the focus entries (origin "focus").
   --top-templates-file F The extract's top templates, overall and per category,
                          each with its category and exact count (default:
                          /tmp/logtype-top-templates.json). Without it the top
@@ -137,6 +142,7 @@ def main(argv=None) -> int:
     ap.add_argument("--baseline-results-file", default="/tmp/logtype-baseline-results.ndjson",
                     help="the baseline queries' results, run in their own pool")
     ap.add_argument("--category-totals", default="/tmp/logtype-category-totals.json")
+    ap.add_argument("--focus-file", default="/tmp/logtype-focus.json")
     ap.add_argument("--freqs-file", default="/tmp/logtype-freqs.ndjson")
     ap.add_argument("--top-templates-file", default="/tmp/logtype-top-templates.json")
     ap.add_argument("--schema-json", required=True)
@@ -191,6 +197,53 @@ def main(argv=None) -> int:
     w(f"- Fields a KQL query may filter on: {names}" + (f"; payload: {payload}" if payload else "")
       + ". Nothing else is a field: the classification's categories exist only in the analysis, "
       "so a query cannot filter on a category name.\n")
+
+    # -- the user's focus and context
+    focus = None
+    try:
+        with open(args.focus_file, "r", encoding="utf-8") as f:
+            focus = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        pass
+    if focus:
+        w("## Focus (the user's choice; lead the report with it)")
+        kind = focus.get("focus")
+        if kind == "categories":
+            w(f"- Focus: the categories {', '.join(f'`{c}`' for c in focus.get('categories', []))}")
+        elif kind == "question":
+            w("- Focus: the user's own question (below)")
+        else:
+            w("- Focus: everything (no single area)")
+        if focus.get("question"):
+            w(f"- The user's question, verbatim: \"{focus['question']}\"")
+        if focus.get("context"):
+            w(f"- What the user said they already know, verbatim: \"{focus['context']}\". This is the "
+              "user's account, not a finding: say whether the records below support it, contradict it, "
+              "or say nothing about it.")
+        else:
+            w("- The user gave no background about these logs.")
+        for cat in focus.get("categories", []):
+            c = (totals or {}).get(cat)
+            if c:
+                w(f"- `{cat}`: {c['templates']:,} templates, {c['records']:,} records "
+                  f"({pct(c['records'], total)}); classifier priority {c.get('priority') or '-'}"
+                  + (f": {c['why']}" if c.get("why") else ""))
+        mine = [r for r in results if r.get("origin") == "focus"]
+        if mine:
+            w("- Focus queries (their own counts):")
+            for r in mine:
+                w(f"  - [plan #{r['index']}] {r.get('label')}: status {r.get('status')}, "
+                  f"{r.get('count') or 0:,} ({pct(r.get('count') or 0, total)}); kql `{r.get('kql')}`")
+                for smp in (r.get("samples") or [])[:3]:
+                    try:
+                        rec = json.loads(smp)
+                        text = str(dig(rec, msg) if msg else smp)
+                    except json.JSONDecodeError:
+                        text = smp
+                    w(f"    - sample: `{text.replace(chr(10), ' <NL> ')[:200]}`")
+        elif focus.get("entries"):
+            w("- Focus queries: queued but no results recorded.")
+        w("")
 
     # -- baseline: severity and logger
     baseline = [r for r in results if r.get("origin") == "baseline" and r.get("status") in ("ok", "zero")]
@@ -253,13 +306,19 @@ def main(argv=None) -> int:
     # -- categories
     if totals:
         w("## Categories (exact: the stored per-template counts, summed; no keyword involved)")
-        w("| Category | Templates | Records | Share of records |")
-        w("|---|---|---|---|")
+        w("| Category | Priority | Templates | Records | Share of records |")
+        w("|---|---|---|---|---|")
         rec_sum = 0
         for cat, c in sorted(totals.items(), key=lambda kv: -kv[1]["records"]):
             rec_sum += c["records"]
-            w(f"| {cat} | {c['templates']:,} | {c['records']:,} | {pct(c['records'], total)} |")
-        w(f"| **sum** | {sum(c['templates'] for c in totals.values()):,} | {rec_sum:,} | {pct(rec_sum, total)} |")
+            w(f"| {cat} | {c.get('priority') or '-'} | {c['templates']:,} | {c['records']:,} "
+              f"| {pct(c['records'], total)} |")
+        w(f"| **sum** | | {sum(c['templates'] for c in totals.values()):,} | {rec_sum:,} | {pct(rec_sum, total)} |")
+        whys = [(cat, c) for cat, c in totals.items() if c.get("why") and c.get("priority") == "high"]
+        if whys:
+            w("\nWhy the classifier ranked these categories high (its judgement, not a finding):")
+            for cat, c in whys:
+                w(f"- `{cat}`: {c['why']}")
         if total:
             w(f"\nRecords no template accounts for: {total - rec_sum:,} ({pct(total - rec_sum, total)}).")
         blobs = [(cat, c) for cat, c in totals.items() if c["templates"] > 500 and c["templates"] > 0.9 * c["records"]]
