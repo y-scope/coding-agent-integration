@@ -57,6 +57,14 @@ For unstructured text logs (vLLM logs, plain-text app logs):
      --structurize
    ```
 
+   A compression of a multi-GB log takes a minute or more. Run the wrapper as a background Bash call (`run_in_background: true`) in the FOREGROUND of that call: no trailing `&` (that detaches it, and the harness reports the call finished at once), and no `pgrep`/`ps` wait loop (`pgrep -f` can match the checking command itself and never end). The harness notifies you when the wrapper exits. Meanwhile the wrapper prints a `[compress] ...` heartbeat every 30 seconds (`--heartbeat SECONDS`, 0 to silence) with elapsed time, input read, an estimated time left and the archive size so far; read the call's output file and relay one line to the user each time. For a state check at any moment:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp-compress-status" <archives-dir>
+   ```
+
+   It prints `STATE=` (`running`, `done`, `failed`, or `died` when the process vanished without finishing), `PROGRESS_PCT=` and the byte counts, and exits 0 for done, 3 for running, 1 for failed or died.
+
 3. After compression, always report:
 
    - `Raw input bytes`

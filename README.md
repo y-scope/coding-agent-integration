@@ -30,7 +30,8 @@ plugins/clp/.codex-plugin/plugin.json
 plugins/clp/bin/
     Restricted-passthrough bash wrappers for clp-s, plus local helpers
     (structurize.py, logtype-cache, logtype-insights-bootstrap,
-    logtype-cluster, logtype-insight-extract, logtype-query-plan-run,
+    logtype-cluster, logtype-insight-extract, logtype-baseline-plan,
+    logtype-query-plan-run, logtype-insight-facts, clp-compress-status,
     kql-build, kql-validate-wildcards) that are not clp-s passthroughs.
 plugins/clp/skills-claude/
     Claude Code skills: compress, compress-folder, search, logtype-insights,

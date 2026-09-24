@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""
+logtype-insight-facts - compute every number of a logtype-insights report in
+code, so the report writer only has to put them into words
+(logtype-insights skill, step 7).
+
+A small model asked to add up a category table, pick the right severity count,
+or work out a time span from example records gets them wrong: in a trial it
+reported 49 warnings for 92, 5,370 templates for 11,558, and a 9.5-minute span
+for a 74-hour log. Nothing here needs judgement, so nothing here is left to it.
+
+Inputs (all produced earlier in the run):
+  --results-file F       logtype-query-plan-run's NDJSON (default:
+                         /tmp/logtype-query-results.ndjson). Entries marked
+                         origin "baseline" carry the severity and logger
+                         breakdown; "follow-up of N" entries carry the fetched
+                         records behind a small count.
+  --category-totals F    logtype-insight-extract's {category: {templates,
+                         records}} (default: /tmp/logtype-category-totals.json,
+                         or "none" when frequencies were unavailable)
+  --top-templates-file F The extract's top templates, overall and per category,
+                         each with its category and exact count (default:
+                         /tmp/logtype-top-templates.json). Without it the top
+                         templates come from --freqs-file, without categories.
+  --freqs-file F         Per-template counts, most frequent first (default:
+                         /tmp/logtype-freqs.ndjson, or "none")
+  --schema-json JSON     The classification schema (the extract's SCHEMA= line)
+  --top N                Templates and message groups to list (default: 20)
+  --out F                Where to write the facts (default:
+                         /tmp/logtype-insight-facts.md)
+
+Every section says where its numbers come from. What cannot be known is said
+to be unavailable rather than estimated: notably the archive's time span, which
+needs a timestamp index (compress with --timestamp-key). The fetched records'
+own first and last timestamp are given, labelled as covering only those records.
+
+Prints the output path. Exit codes: 0 ok, 1 input problem.
+"""
+
+import argparse
+import datetime
+import json
+import re
+import sys
+from collections import defaultdict
+
+
+def load_results(path):
+    results = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    results.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return sorted(results, key=lambda r: r.get("index", 0))
+
+
+def field_values(match):
+    """(field, [values]) for an eq match or a not-of-eq(s) match, else None."""
+    if not isinstance(match, dict):
+        return None
+    if "field" in match and "eq" in match:
+        return match["field"], [match["eq"]], False
+    inner = match.get("not")
+    if isinstance(inner, dict):
+        if "field" in inner and "eq" in inner:
+            return inner["field"], [inner["eq"]], True
+        eqs = inner.get("any")
+        if isinstance(eqs, list) and eqs and all("eq" in e and "field" in e for e in eqs):
+            fields = {e["field"] for e in eqs}
+            if len(fields) == 1:
+                return fields.pop(), [e["eq"] for e in eqs], True
+    return None
+
+
+def dig(record, path):
+    if path in record:
+        return record[path]
+    cur = record
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def fmt_ts(value):
+    try:
+        return datetime.datetime.fromtimestamp(float(value), datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return str(value)
+
+
+MASK = re.compile(r"\d+(?:\.\d+)?")
+QUOTED = re.compile(r'"[^"\s]{1,40}"')
+
+
+def shape(message, limit=140):
+    text = QUOTED.sub('"S"', MASK.sub("N", " ".join(str(message).split())))
+    return text[:limit]
+
+
+def pct(n, total):
+    if not total:
+        return ""
+    p = 100.0 * n / total
+    return "<0.01%" if 0 < p < 0.01 else f"{p:.2f}%"
+
+
+def read_top_templates(path, n, chars=220):
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if len(out) >= n:
+                break
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            text = rec.get("logtype", "").replace("\n", " <NL> ")
+            out.append((rec.get("count", 0), text[:chars] + ("…" if len(text) > chars else "")))
+    return out
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Compute a logtype-insights report's numbers in code.")
+    ap.add_argument("--results-file", default="/tmp/logtype-query-results.ndjson")
+    ap.add_argument("--category-totals", default="/tmp/logtype-category-totals.json")
+    ap.add_argument("--freqs-file", default="/tmp/logtype-freqs.ndjson")
+    ap.add_argument("--top-templates-file", default="/tmp/logtype-top-templates.json")
+    ap.add_argument("--schema-json", required=True)
+    ap.add_argument("--top", type=int, default=20)
+    ap.add_argument("--out", default="/tmp/logtype-insight-facts.md")
+    args = ap.parse_args(argv)
+
+    try:
+        schema = json.loads(args.schema_json)
+        results = load_results(args.results_file)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not results:
+        print(f"error: no results in {args.results_file}", file=sys.stderr)
+        return 1
+
+    sev, log, ts, msg = (schema.get(k) for k in ("severity", "logger", "timestamp", "message"))
+    total = next((r["total_records"] for r in results if r.get("total_records")), None)
+    out = []
+    w = out.append
+
+    # -- totals
+    totals = None
+    if args.category_totals != "none":
+        try:
+            with open(args.category_totals, "r", encoding="utf-8") as f:
+                totals = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            totals = None
+    w("# Facts (computed in code; every figure below is exact)\n")
+    w("## Totals")
+    w(f"- Total records: {total:,}" if total else "- Total records: unavailable")
+    if totals:
+        w(f"- Distinct templates: {sum(c['templates'] for c in totals.values()):,} "
+          "(sum of the category table below)")
+    w("- Time span: unavailable. The archive has no timestamp index, so it cannot be computed "
+      "from it; compress with --timestamp-key to get one.")
+    names = ", ".join(f"{role} = `{schema[role]}`" for role in ("timestamp", "severity", "logger", "message") if schema.get(role))
+    payload = ", ".join(f"`{p}`" for p in schema.get("payload", []) or [])
+    w(f"- Fields a KQL query may filter on: {names}" + (f"; payload: {payload}" if payload else "")
+      + ". Nothing else is a field: the classification's categories exist only in the analysis, "
+      "so a query cannot filter on a category name.\n")
+
+    # -- baseline: severity and logger
+    baseline = [r for r in results if r.get("origin") == "baseline" and r.get("status") in ("ok", "zero")]
+    by_field = defaultdict(lambda: {"values": [], "residual": None})
+    for r in baseline:
+        fv = field_values(r.get("match"))
+        if not fv or r.get("method") != "count":
+            continue
+        field, values, negated = fv
+        if negated:
+            by_field[field]["residual"] = (values, r.get("count", 0))
+        else:
+            by_field[field]["values"].append((values[0], r.get("count", 0)))
+
+    fetched = defaultdict(list)  # follow-up records by the entry they followed
+    for r in results:
+        origin = r.get("origin", "")
+        if origin.startswith("follow-up of ") and r.get("samples"):
+            for s in r["samples"]:
+                try:
+                    fetched[origin].append(json.loads(s))
+                except json.JSONDecodeError:
+                    pass
+
+    def breakdown(title, field, fetched_records=None):
+        info = by_field.get(field)
+        if not info:
+            return
+        w(f"## {title} (field `{field}`; exact counts from `count` queries)")
+        for v, c in sorted(info["values"], key=lambda x: -x[1]):
+            w(f"- {v}: {c:,} ({pct(c, total)})")
+        if info["residual"]:
+            values, c = info["residual"]
+            w(f"- everything other than {', '.join(map(str, values))}: {c:,} ({pct(c, total)})")
+            if fetched_records:
+                counts = defaultdict(int)
+                for rec in fetched_records:
+                    counts[dig(rec, field)] += 1
+                note = "" if len(fetched_records) == c else f" (fetched {len(fetched_records):,} of {c:,})"
+                w("  - of which, by value" + note + ": "
+                  + ", ".join(f"{v}={n:,}" for v, n in sorted(counts.items(), key=lambda x: -x[1])))
+        counted = sum(c for _, c in info["values"]) + (info["residual"][1] if info["residual"] else 0)
+        if total:
+            if counted == total:
+                w(f"- check: the lines above sum to all {total:,} records")
+            elif counted < total:
+                w(f"- check: the lines above sum to {counted:,}; the other {total - counted:,} records "
+                  f"({pct(total - counted, total)}) have no `{field}` value")
+            else:
+                w(f"- check: the lines above sum to {counted:,}, more than the {total:,} records, "
+                  f"so `{field}` is multi-valued in some records")
+        w("")
+
+    fetched_all = [rec for recs in fetched.values() for rec in recs]
+    if sev:
+        breakdown("Severity", sev, fetched_all)
+    if log:
+        breakdown("Logger / component", log)
+
+    # -- categories
+    if totals:
+        w("## Categories (exact: the stored per-template counts, summed; no keyword involved)")
+        w("| Category | Templates | Records | Share of records |")
+        w("|---|---|---|---|")
+        rec_sum = 0
+        for cat, c in sorted(totals.items(), key=lambda kv: -kv[1]["records"]):
+            rec_sum += c["records"]
+            w(f"| {cat} | {c['templates']:,} | {c['records']:,} | {pct(c['records'], total)} |")
+        w(f"| **sum** | {sum(c['templates'] for c in totals.values()):,} | {rec_sum:,} | {pct(rec_sum, total)} |")
+        if total:
+            w(f"\nRecords no template accounts for: {total - rec_sum:,} ({pct(total - rec_sum, total)}).")
+        blobs = [(cat, c) for cat, c in totals.items() if c["templates"] > 500 and c["templates"] > 0.9 * c["records"]]
+        for cat, c in blobs:
+            w(f"- `{cat}` has {c['templates']:,} templates for {c['records']:,} records: about one template per "
+              "record, i.e. large near-duplicate messages that never collapse into one recurring template, "
+              "not that many different behaviours.")
+        w("")
+
+    # -- top templates
+    top_json = None
+    try:
+        with open(args.top_templates_file, "r", encoding="utf-8") as f:
+            top_json = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        pass
+    if top_json:
+        w(f"## Top {min(args.top, len(top_json['overall']))} templates by records, with their category (stored per-template counts)")
+        for t in top_json["overall"][: args.top]:
+            w(f"- {t['count']:,} ({pct(t['count'], total)}) [{t['category']}]: `{t['logtype']}`")
+        w("")
+        w("## Top templates within each category (exact counts; use these for any per-template figure)")
+        cats = sorted(top_json["by_category"].items(),
+                      key=lambda kv: -(totals.get(kv[0], {}).get("records", 0) if totals else 0))
+        for cat, items in cats:
+            w(f"### {cat}")
+            for t in items:
+                w(f"- {t['count']:,}: `{t['logtype']}`")
+        w("")
+    elif args.freqs_file != "none":
+        try:
+            top = read_top_templates(args.freqs_file, args.top)
+            w(f"## Top {len(top)} templates by records (stored per-template counts)")
+            for c, t in top:
+                w(f"- {c:,} ({pct(c, total)}): `{t}`")
+            w("")
+        except OSError:
+            pass
+
+    # -- fetched records, grouped
+    if fetched_all:
+        groups = defaultdict(lambda: {"n": 0, "first": None, "last": None, "example": None})
+        for rec in fetched_all:
+            key = (dig(rec, sev) if sev else None, shape(dig(rec, msg) if msg else ""))
+            g = groups[key]
+            g["n"] += 1
+            t = dig(rec, ts) if ts else None
+            try:
+                tv = float(t)
+                g["first"] = tv if g["first"] is None else min(g["first"], tv)
+                g["last"] = tv if g["last"] is None else max(g["last"], tv)
+            except (TypeError, ValueError):
+                pass
+            g["example"] = g["example"] or str(dig(rec, msg) if msg else "").replace("\n", " <NL> ")[:260]
+        w(f"## The fetched non-dominant-severity records, grouped by message shape (numbers masked as N, quoted names as \"S\")")
+        w(f"{len(fetched_all):,} records fetched; {len(groups):,} distinct shapes. "
+          "First/last are the timestamps of these records only, not the archive's span.")
+        for (severity, shp), g in sorted(groups.items(), key=lambda kv: -kv[1]["n"])[: args.top]:
+            span = f", {fmt_ts(g['first'])} to {fmt_ts(g['last'])}" if g["first"] is not None else ""
+            w(f"- **{g['n']:,} x [{severity}]**{span}\n  - shape: `{shp}`\n  - example: `{g['example']}`")
+        w("")
+
+    # -- semantic and flags
+    sem = [r for r in results if r.get("method") == "semantic"]
+    if sem:
+        w("## Semantic entries")
+        for r in sem:
+            w(f"- [{r['index']}] {r.get('label')}: status {r.get('status')}, {r.get('count') or 0:,} rows; kql `{r.get('kql')}`")
+            for s in (r.get("samples") or [])[:3]:
+                try:
+                    rec = json.loads(s)
+                    w(f"  - `{str(dig(rec, msg) if msg else s).replace(chr(10), ' <NL> ')[:200]}`")
+                except json.JSONDecodeError:
+                    w(f"  - `{s[:200]}`")
+        w("")
+    flagged = [r for r in results if r.get("non_selective") or r.get("status") in ("error", "timeout", "zero") or r.get("retried")]
+    if flagged:
+        w("## Query flags")
+        for r in flagged:
+            why = [x for x in ("non_selective" if r.get("non_selective") else "", r.get("status") if r.get("status") != "ok" else "",
+                               "retried" if r.get("retried") else "") if x]
+            w(f"- [{r['index']}] {r.get('label')}: {', '.join(why)} (count {r.get('count') or 0:,})")
+        w("")
+
+    with open(args.out, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+    print(f"FACTS_FILE={args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
