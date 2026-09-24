@@ -18,8 +18,9 @@ Create a queryable CLP archive from the data selected for investigation. For res
 |---|---|---|---|---|
 | `clp-s-list-sessions` — wrapper | Lists available Claude Code or Codex sessions. | Session root and selection options. | TSV manifest. | Find the session to investigate. |
 | `clp-s-compress-session` — wrapper | Compresses a selected session. | Session JSONL, directly or through a manifest selection. | Archive directory and compression stats. | Prepare a session for trajectory analysis. |
-| `clp-s-compress-folder` — wrapper | Compresses files in a folder. | Supported structured logs, or supported text with `--structurize`. | Archive directory and compression stats. | Prepare service logs or externally retrieved records. |
-| `structurize.py` — helper | Converts supported text formats to structured records. | Text logs. | JSONL. | Preprocess text through the folder wrapper's `--structurize` option. |
+| `clp-detect-logs` — helper | Reads the first 128 KiB of each log file: JSON with its structure and timestamp field, or text lines (checked against the bundled vLLM formats) for the agent to read; suggests compress flags and can dry-run a parser. Read-only. | Log files or folders. | Per-file report and suggested commands. | Before compressing logs whose format you don't already know. |
+| `clp-s-compress-folder` — wrapper | Compresses log files and folders (`--path`, repeatable) into one archive. | JSON logs, or text logs with `--structurize` (built-in vLLM formats, or `--parser FILE` for others). | Archive directory and compression stats. | Prepare service logs or externally retrieved records. |
+| `structurize.py` — helper | Converts text logs to structured records, with the built-in vLLM formats or an agent-written `parse_line` parser. | Text logs. | JSONL. | Preprocess text through the compress wrapper's `--structurize` option. |
 
 Preserve the source, filters, and retrieval time alongside externally retrieved data. The cache covers that selection, not the entire source. Inspect preprocessing warnings and skipped files; the archive cannot recover records omitted before compression.
 

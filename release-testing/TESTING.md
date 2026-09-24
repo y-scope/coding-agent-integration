@@ -36,11 +36,29 @@ One output convention used throughout: the wrappers print human-readable header 
 
 ## Step 1 — Compress the logs into an archive
 
-These are plain-text logs, so pass `--structurize`: it parses each line into `timestamp / logger / level / message` fields first, which is what makes the archive searchable by field.
+First ask the detector what these files hold. It reads only the first 128 KiB of each and writes nothing:
+
+```bash
+"$B/clp-detect-logs" release-testing/sample-logs/vllm
+```
+
+Expected — the lines to check (paths are printed absolute):
+
+```
+Input: /.../release-testing/sample-logs/vllm is a folder, 3 matching file(s)
+...
+== macos-m1-smoke-failure-2026-06-15.log (10.0 KiB; read all, 62 line(s))
+format:     text: 55 of 62 lines match the bundled vllm-raw format; --structurize converts it to timestamp, logger, level, message
+...
+SUMMARY files=3 text=3
+SUGGEST clp-s-compress-folder --path /.../release-testing/sample-logs/vllm --structurize
+```
+
+These are plain-text vLLM logs, so the suggestion is `--structurize`: it parses each line into `timestamp / logger / level / message` fields first, which is what makes the archive searchable by field.
 
 ```bash
 "$B/clp-s-compress-folder" \
-  --folder release-testing/sample-logs/vllm \
+  --path release-testing/sample-logs/vllm \
   --structurize \
   --archives-root release-testing/workdir/archives
 ```
@@ -48,6 +66,9 @@ These are plain-text logs, so pass `--structurize`: it parses each line into `ti
 Expected output — the run prints ~20 lines (source folder, flags, the underlying `clp-s` command, metadata paths); the ones to check are these (sizes may vary by a few bytes, and paths are printed absolute):
 
 ```
+[structurize] macos-m1-smoke-failure-2026-06-15.log: 56 records in 0s
+[structurize] macos-m1-smoke-openmp-hang-fix-2026-06-26.log: 97 records in 0s
+[structurize] macos-m1-smoke-success-2026-06-30.log: 97 records in 0s
 Structurize: converted 3 file(s) to structured JSONL
 ...
 Raw input bytes: 54989
@@ -210,7 +231,7 @@ cp release-testing/sample-logs/vllm/macos-m1-smoke-failure-2026-06-15.log \
    release-testing/sample-logs/vllm/macos-m1-smoke-success-2026-06-30.log \
    release-testing/workdir/two-files/
 
-"$B/clp-s-compress-folder" --folder release-testing/workdir/two-files \
+"$B/clp-s-compress-folder" --path release-testing/workdir/two-files \
   --structurize --archives-root release-testing/workdir/archives2 >/dev/null
 
 A2="$(ls -dt release-testing/workdir/archives2/folder-* | head -1)"

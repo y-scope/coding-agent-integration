@@ -19,7 +19,7 @@ plugins/clp/.codex-plugin/plugin.json
     enforces this.
 plugins/clp/bin/
     Restricted-passthrough bash wrappers (clp-s-*) and shared lib/clp-common.sh,
-    plus local helpers that are not clp-s passthroughs (structurize.py,
+    plus local helpers that are not clp-s passthroughs (clp-detect-logs, structurize.py,
     logtype-cache, logtype-insights-bootstrap, logtype-cluster,
     logtype-insight-extract, logtype-baseline-plan, logtype-query-plan-run,
     logtype-insight-facts, logtype-report-check, clp-compress-status,

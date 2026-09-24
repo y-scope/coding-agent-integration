@@ -16,7 +16,7 @@ For a single ad-hoc KQL query, use the `search` skill. To compress raw logs firs
 ## Supported inputs
 
 - A CLP archive directory (any kind). Primary input.
-- A folder of raw logs — compress first (compression is the one app-specific step): vLLM wrapper text logs `--structurize`; MongoDB JSON `--extensions '*' --timestamp-key t.$date`; generic JSON `--timestamp-key <field>`. Then point this skill at the archive.
+- Raw log files or folders — compress first (compression is the one app-specific step), as the `compress-folder` skill describes: `clp-detect-logs` shows what the first 128 KiB of each file holds (JSON structure and timestamp field, or text lines), you pick the flags from that report (`--timestamp-key <field>` for JSON, `--structurize` for vLLM text, a parser you write for other text), and `clp-s-compress-folder --path ...` compresses. Then point this skill at the archive.
 - If nothing was provided, ask for an archive or folder path.
 
 ## Workflow
@@ -25,9 +25,9 @@ Each shell invocation is independent — shell variables do not persist between 
 
 **Keep the user posted at every step.** Before each command, say in one short line what you are about to do; after it, report the key numbers it produced. Never chain steps silently — steps 5–7 run long, and without your narration the user sees no progress at all. Say the expected duration when you announce a command that can run over a minute (the bootstrap on a multi-GB archive, plan batches, a subagent); run such commands in the background and post a one-line status at least once a minute until they finish, so a slow step is never indistinguishable from a stuck one. When a cache hit or recorded results let you skip steps or plan entries, say which ones and why before skipping them, not afterward.
 
-1. Determine the input: archive path → use it; folder → compress with the app-appropriate settings above (ask if the app is unknown); nothing → ask.
+1. Determine the input: archive path → use it; log files or folders → detect, then compress, as the `compress-folder` skill describes (tell the user in a line what the detector found and which flags you chose); nothing → ask.
 
-2. Report compression stats when you compressed the folder: `Raw input bytes`, `Archive bytes`, `Compression ratio`, `File size reduction`, `Input files`, `Archives dir`, `Archive metadata`.
+2. Report compression stats when you compressed: `Raw input bytes`, `Archive bytes`, `Compression ratio`, `File size reduction`, `Input files`, `Archives dir`, `Archive metadata`.
 
 3. **Bootstrap.** Tell the user you are analyzing and classifying the log shape — then run the one command that does all of it (it also reads the per-template frequencies that clp-s stored in the archive):
 

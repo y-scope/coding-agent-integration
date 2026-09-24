@@ -29,7 +29,7 @@ plugins/clp/.codex-plugin/plugin.json
     Codex plugin manifest.
 plugins/clp/bin/
     Restricted-passthrough bash wrappers for clp-s, plus local helpers
-    (structurize.py, logtype-cache, logtype-insights-bootstrap,
+    (clp-detect-logs, structurize.py, logtype-cache, logtype-insights-bootstrap,
     logtype-cluster, logtype-insight-extract, logtype-baseline-plan,
     logtype-query-plan-run, logtype-insight-facts, logtype-report-check,
     clp-compress-status,
