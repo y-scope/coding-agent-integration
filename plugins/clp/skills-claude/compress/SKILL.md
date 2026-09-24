@@ -32,4 +32,4 @@ That covers: list sessions → choose an `IDX` → compress → report stats, th
   --timestamp-key timestamp
 ```
 
-After compression, report: raw input bytes, archive bytes, compression ratio, file size reduction, archives dir, selected session, archive metadata. Use the printed top-level `Archives dir` for search/decompress — wrappers resolve the inner `clp-s` archive directory automatically.
+After compression, report: raw input bytes, archive bytes, compression ratio, file size reduction, time range (the earliest and latest timestamp across every record, also stored as `timeRange` in the metadata), archives dir, selected session, archive metadata. Use the printed top-level `Archives dir` for search/decompress — wrappers resolve the inner `clp-s` archive directory automatically.

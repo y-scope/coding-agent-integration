@@ -75,7 +75,9 @@ Methods, as defined by the classification contract (KQL is the rendered
   count          wrapper --count ARCHIVES_DIR KQL; the per-archive counts are
                  summed.
   project+grep   wrapper --projection P ARCHIVES_DIR KQL [| grep -Ei GREP];
-                 matching lines are counted.
+                 matching lines are counted. The wrapper rewrites a column
+                 clp-s cannot project (one inside an array, or an object);
+                 its notes are recorded as projection_notes.
   project+jq     wrapper --projection P ARCHIVES_DIR KQL | jq -c JQ; output
                  lines are counted.
   semantic       wrapper --projection P ARCHIVES_DIR KQL; the match carries
@@ -144,6 +146,18 @@ def parse_ranges(spec: str, n: int) -> list:
     return sorted(picked)
 
 
+def clip_strings(value, chars: int):
+    """Clip every string longer than chars, at any depth: a projected column
+    can be an object or an array whose text sits in nested values."""
+    if isinstance(value, str):
+        return value[:chars] + "…" if len(value) > chars else value
+    if isinstance(value, dict):
+        return {k: clip_strings(v, chars) for k, v in value.items()}
+    if isinstance(value, list):
+        return [clip_strings(v, chars) for v in value]
+    return value
+
+
 def clip_record(line: str, chars: int) -> str:
     """Shorten an over-long record by clipping its long string values, so the
     sample stays valid JSON (cutting the raw line would leave it unparseable)."""
@@ -155,9 +169,14 @@ def clip_record(line: str, chars: int) -> str:
         return line[:chars]
     if not isinstance(rec, dict):
         return line[:chars]
-    clipped = {k: (v[:chars] + "…" if isinstance(v, str) and len(v) > chars else v)
-               for k, v in rec.items()}
-    return json.dumps(clipped, ensure_ascii=False)
+    return json.dumps(clip_strings(rec, chars), ensure_ascii=False)
+
+
+def projection_notes(stderr: bytes) -> list:
+    """The search wrapper's "projection: ..." lines: the columns it rewrote
+    because clp-s cannot project them as given (see lib/projection.py)."""
+    return [ln.strip() for ln in stderr.decode("utf-8", "replace").splitlines()
+            if ln.startswith("projection: ")]
 
 
 def first_lines(data: bytes, limit: int = 5) -> str:
@@ -320,6 +339,10 @@ def run_entry(entry, index, n, args, total, lines, run=None):
         result["peak_rss_mb"] = run.peak_kib // 1024
     if samples:
         result["samples"] = samples
+    notes = projection_notes(stderr[0]) if entry.get("project") else []
+    if notes:
+        result["projection_notes"] = notes
+        lines.extend(f"       {note}" for note in notes)
 
     failed = [(argv, code, err) for argv, code, err in zip(stages, codes, stderr)
               if stage_failed(argv, code)]

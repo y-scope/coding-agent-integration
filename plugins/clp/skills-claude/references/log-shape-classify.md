@@ -76,6 +76,12 @@ Method:
 2. Build a QUERY PLAN: targeted queries derived from the representatives,
    expressed in the discovered field names. Per entry: label, the filter as
    a structured `match` object, the columns to --projection, and the method.
+   clp-s projects leaf columns only, and an array is a leaf returned whole:
+   a column inside an array, or an object, projects nothing. The search
+   wrapper rewrites such a column to the array that holds it (or the leaf
+   columns under the object) and notes it in the result's
+   projection_notes; a "jq" program sees the rewritten shape, so index into
+   an array as `.message.content[]?.text`, not `.message.content.text`.
    Never write a KQL string: the plan runner renders `match` to KQL itself,
    quoting and escaping every value and parenthesizing every group, and an
    entry carrying a "kql" key is rejected. `match` grammar (nest freely):

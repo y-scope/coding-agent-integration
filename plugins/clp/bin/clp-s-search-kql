@@ -364,6 +364,20 @@ if [[ -n "$embedding_batch_size" ]]; then
   search_options+=(--embedding-batch-size "$embedding_batch_size")
 fi
 
+# clp-s projects leaf columns only: a column inside an array, or an object,
+# projects nothing although a filter on it matches. Rewrite such columns from
+# the archive's schema tree, which clp-s reads from the archive's metadata in
+# milliseconds even on a large archive (lib/projection.py). Without a schema
+# tree the columns stay as given.
+if [[ ${#projections[@]} -gt 0 ]]; then
+  if schema_tree="$("$clp_s_bin" s --experimental "$archives_dir" stats.schema_tree 2>/dev/null)" \
+      && resolved_projections="$(python3 "${CLP_PLUGIN_BIN_DIR}/lib/projection.py" "${projections[@]}" \
+           <<<"$schema_tree")" \
+      && [[ -n "$resolved_projections" ]]; then
+    mapfile -t projections <<<"$resolved_projections"
+  fi
+fi
+
 cmd=("$clp_s_bin" s ${search_options[@]+"${search_options[@]}"} "$archives_dir" "$kql_query")
 
 if [[ ${#projections[@]} -gt 0 ]]; then
