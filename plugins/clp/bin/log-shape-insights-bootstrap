@@ -233,9 +233,9 @@ run_stage() {
 # Every stage runs in the background (run_stage), so it hands its results to the
 # rest of the script through files, not variables.
 # --limit stops the search after $sample_cap records, even on huge archives.
-# grep exits 1 when nothing matched; the emptiness check below reports that.
+# An empty sample is reported by the emptiness check below.
 describe_sample() {
-  "$SEARCH" --limit "$sample_cap" "$archives_dir" '*' 2>/dev/null | grep '^{' > "$sample_file" || true
+  "$SEARCH" --limit "$sample_cap" "$archives_dir" '*' 2>/dev/null > "$sample_file" || true
   [[ -s "$sample_file" ]] || return 0
 
   local sampled_records sample_record field dist distinct values
@@ -276,9 +276,9 @@ cat "$dist_file"
 # --- 2. Log shape dictionary + per-template frequencies ------------------------
 # The counts come from the archive itself, so no record scan is needed. A dump
 # is rendered once, by ingest, which also stores the archive for next time.
-# grep exits 1 on an empty dump; ingest then fails and reports it below.
+# On an empty dump, ingest fails and reports it below.
 dump_log_shapes() {
-  "$SEARCH" "$archives_dir" 'stats.log_shapes' 2>"$err_file" | grep '^{' > "$shapes_file" || true
+  "$SEARCH" "$archives_dir" 'stats.log_shapes' 2>"$err_file" > "$shapes_file" || true
   "$CACHE_BIN" ingest ${cache_args[@]+"${cache_args[@]}"} --max-chars "$max_chars" \
     --shapes-file "$shapes_file" --log-shapes-out "$log_shapes_file" > "$ingest_file" 2>"$ingest_err_file" \
     || return 1
