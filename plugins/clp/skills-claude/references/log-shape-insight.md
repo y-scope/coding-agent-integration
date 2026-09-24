@@ -51,7 +51,7 @@ Per low-cardinality field (the schema's severity and logger) the planner adds a 
 
 Run the plan yourself, before spawning the report writer, with `log-shape-query-plan-run`, a query pool: it holds the plan's entries and runs as many at once as memory allows. It renders each entry's `match` with `kql-build` — every value quoted and escaped, every group parenthesized — sends the KQL through `clp-s-search-kql`, prints each entry's result as soon as it finishes, and records it in `/tmp/log-shape-query-results.ndjson`, one JSON line per entry: `label`, `method`, the rendered `kql`, the exact `command`, `status`, `count`, `pct`, `elapsed_s`, a few `samples` for projecting methods, and `error` for failures. An entry without a valid `match` is recorded as an error without running.
 
-Run it once over the core plan, as a background Bash call (`run_in_background: true`, no trailing `&`, or the harness reports it finished at once), with the focus inbox, and read its output file about every 30 seconds until `PLAN_STATUS` appears:
+Run it once over the core plan, as a background Bash call (`run_in_background: true`, no trailing `&`, or the harness reports it finished at once), with the focus inbox, and follow its output file with the Monitor tool until `PLAN_STATUS` appears: `tail -n +1 -F <output-file> | grep --line-buffered -E '^\[[0-9]+/[0-9]+\]|^INBOX|PLAN_STATUS|Traceback|rror'`, `timeout_ms` at its maximum (re-arm it if it expires first), stopped with TaskStop when the harness reports the call exited. Never wait with `sleep` between reads; the harness blocks a foreground `sleep N; <command>`:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/log-shape-query-plan-run" --retry-failed \
