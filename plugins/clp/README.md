@@ -303,6 +303,7 @@ LC=./plugins/clp/bin/log-shape-cache
 "$LC" stored --archive-ids <ID>                      # exit 0 when stored with counts
 "$LC" freqs  --archive-ids <ID>                      # {"count","hash","length","log_shape":<prefix>}
 "$LC" diff   --archive-ids <ID>                      # UPTODATE, or exit 3 when the full text is needed
+"$LC" forget <APP_KEY> --archive-ids <ID>            # delete a classification and/or stored archives
 "$LC" list                                          # cached entries + lineage
 "$LC" show <APP_KEY>
 ```
@@ -325,7 +326,7 @@ Every stored classification is ranked: each taxonomy category carries a `priorit
 
 Files of the old format (one `<APP_KEY>.json` file per entry, with template text) are ignored, and `diff` and `list` say so; they hold no ranking, so delete them.
 
-Cache location: `~/.config/yscope-clp-plugin/log-shape-cache/`, overridable with `$CLP_LOG_SHAPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`freqs`, `ingest`, `stored`, `diff`, `get`, `merge`, `put`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 500, or `$CLP_LOG_SHAPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint or cut the stored prefixes (`key`, `ingest`, `stored`, `diff`, `put`); it must match the limit given to `log-shape-cluster`, or embedding and cache fingerprints diverge.
+Cache location: `~/.config/yscope-clp-plugin/log-shape-cache/`, overridable with `$CLP_LOG_SHAPE_CACHE_DIR`, or per-command with `--cache-dir` on the subcommands that read or write the cache (`freqs`, `ingest`, `stored`, `diff`, `get`, `merge`, `put`, `forget`, `list`, `show`). `normalize`, `count`, and `key` only transform/hash the input and do not accept it. `--max-chars` (default 500, or `$CLP_LOG_SHAPE_MAX_CHARS`) is accepted by the subcommands that compute or stamp the fingerprint or cut the stored prefixes (`key`, `ingest`, `stored`, `diff`, `put`); it must match the limit given to `log-shape-cluster`, or embedding and cache fingerprints diverge.
 
 ### Log Shape Cluster
 

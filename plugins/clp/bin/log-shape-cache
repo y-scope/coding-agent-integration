@@ -139,6 +139,11 @@ Subcommands:
                                   `classified_at`. Safe to run in the
                                   background: readers see the old entry or the
                                   new one, never a mix.
+    forget [KEY] [--archive-ids A,B]
+                                  Delete the classification stored under KEY,
+                                  and/or the stored archives A,B. Prints what
+                                  it removed; deleting nothing is not an error,
+                                  so cleanup steps can run it twice.
     list                           List cached entries: key, template count,
                                   classified_at, grown_from.
     show  KEY                      Pretty-print one cached entry.
@@ -906,6 +911,27 @@ def cmd_put(args):
     return 0
 
 
+def cmd_forget(args):
+    if not args.key and not args.archive_ids:
+        print("error: give a KEY, --archive-ids, or both", file=sys.stderr)
+        return 2
+    db = connect(args.cache_dir)
+    with db:
+        if args.key:
+            key = check_key(args.key)
+            # By hand as well as by cascade: see cmd_ingest.
+            db.execute("DELETE FROM templates WHERE app_key = ?", (key,))
+            n = db.execute("DELETE FROM entries WHERE app_key = ?", (key,)).rowcount
+            print(f"Forgot {n} classification{'' if n == 1 else 's'} ({key})", file=sys.stderr)
+        if args.archive_ids:
+            ids = parse_ids(args.archive_ids)
+            marks = ",".join("?" * len(ids))
+            db.execute(f"DELETE FROM archive_shapes WHERE archive_id IN ({marks})", ids)
+            n = db.execute(f"DELETE FROM archives WHERE archive_id IN ({marks})", ids).rowcount
+            print(f"Forgot {n} stored archive{'' if n == 1 else 's'}", file=sys.stderr)
+    return 0
+
+
 def cmd_list(args):
     warn_legacy(args.cache_dir)
     rows = connect(args.cache_dir).execute(
@@ -982,6 +1008,11 @@ def main(argv=None):
     pp.add_argument("--key", required=True, help="app_key to store it under.")
     pp.set_defaults(func=cmd_put)
 
+    pfg = sub.add_parser("forget", help="Delete a classification and/or stored archives.")
+    pfg.add_argument("key", nargs="?", default=None, help="app_key of the classification to delete.")
+    pfg.add_argument("--archive-ids", default=None, help="Comma-separated stored archive ids to delete.")
+    pfg.set_defaults(func=cmd_forget)
+
     pl = sub.add_parser("list", help="List cached classifications.")
     pl.set_defaults(func=cmd_list)
 
@@ -989,7 +1020,7 @@ def main(argv=None):
     ps.add_argument("key")
     ps.set_defaults(func=cmd_show)
 
-    for subp in (pf, pi, pst, pd, pg, pm, pp, pl, ps):
+    for subp in (pf, pi, pst, pd, pg, pm, pp, pfg, pl, ps):
         subp.add_argument(
             "--cache-dir",
             default=default_cache_dir(),

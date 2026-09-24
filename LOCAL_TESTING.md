@@ -210,11 +210,12 @@ Exercise the `log-shape-insights` helper scripts. The bootstrap wraps the schema
 # Clusterer: embeds via the semantic server (no setup, no local model).
 # Needs a reachable endpoint — the built-in remote default is used unless
 # CLP_SEMANTIC_ENDPOINT or the semantic-endpoint config file says otherwise:
-./plugins/clp/bin/log-shape-cluster cluster \
-  --max-chars 500 --input /tmp/smoke-bootstrap/log-shapes.ndjson
+./plugins/clp/bin/log-shape-cluster cluster --max-chars 500 \
+  --input /tmp/smoke-bootstrap/log-shapes.ndjson --output /tmp/smoke-lt-clusters.json
 # Expect CLUSTERS<=EMBEDDED<=TEMPLATES and one {"id","count","representative"}
-# line per cluster; /tmp/log-shape-clusters.json holds the memberships for
-# `expand`. Representatives/members are FULL templates.
+# line per cluster; /tmp/smoke-lt-clusters.json holds the memberships for
+# `expand`. Representatives/members are FULL templates. (Without --output they
+# go to /tmp/log-shape-clusters.json, which a running analysis may be using.)
 ```
 
 Truncation and fingerprinting (no embedding server needed). The cache key is computed over templates capped at `MAX_CHARS` characters and de-duplicated, so a change that only affects a template's tail past the limit must NOT register as growth, while a change within the limit must:
@@ -239,7 +240,9 @@ stand_in "$D/base.ndjson" | "$LC" put --max-chars 500 --key "$("$LC" key --log-s
 "$LC" get "$("$LC" key --log-shapes-file "$D/other.ndjson")" > "$D/class.json"
 ./plugins/clp/bin/log-shape-insight-extract --classification-file "$D/class.json" \
   --no-freqs --log-shapes-file "$D/other.ndjson" --out-templates "$D/t.txt" \
-  --out-query-plan "$D/q.txt" | grep CATEGORY   # -> CATEGORY other 1 (no UNCLASSIFIED=)
+  --out-query-plan "$D/q.txt" --out-drill-plan "$D/d.txt" \
+  --focus-inbox "$D/inbox.ndjson" --focus-file "$D/focus.json" \
+  | grep CATEGORY   # -> CATEGORY other 1 (no UNCLASSIFIED=)
 "$LC" diff --log-shapes-file "$D/grown.ndjson" | head -1   # -> GROWTH ... 1
 ```
 
@@ -249,6 +252,18 @@ Note that the message field is a CLP-string: `message:term` returns 0 by design.
 ./plugins/clp/bin/clp-s-search-kql "$ARCHIVE" 'level:WARNING' 2>/dev/null | grep -c '^{'
 ./plugins/clp/bin/clp-s-search-kql --projection message "$ARCHIVE" '*' 2>/dev/null \
   | grep '^{' | jq -r '.message' | grep -c 'SomeStaticText'
+```
+
+### Cleanup
+
+The smoke tests keep their caches and outputs under `/tmp/smoke-*` and the two `mktemp` directories, so your real cache (`~/.config/yscope-clp-plugin/log-shape-cache`) and the `/tmp/log-shape-*` files of a running analysis are untouched. In the shell you ran them from:
+
+```bash
+rm -rf "$SMOKE_DIR" "$FOLDER_DIR" /tmp/clp-s-local-selection.tsv \
+  /tmp/smoke-log-shapes.ndjson /tmp/smoke-lt-cache /tmp/smoke-clusters.json \
+  /tmp/smoke-class.json /tmp/smoke-expanded.json /tmp/smoke-bootstrap \
+  /tmp/smoke-bootstrap-stored /tmp/smoke-lt-clusters.json /tmp/smoke-trunc
+unset CLP_LOG_SHAPE_CACHE_DIR
 ```
 
 ## Manual Local Marketplace Install
