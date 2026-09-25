@@ -25,7 +25,7 @@ import time
 
 import bundle as B
 import session_graph as G
-from session_turns import is_human_prompt
+from session_turns import final_usage, is_human_prompt, usage_of
 
 # kind, where it goes (an archive or files/), and a regex on the path relative to the session directory.
 SESSION_RULES = [
@@ -142,7 +142,7 @@ def make_bundle(main_path, out, clp_s=None, claude_home=None, force=False, log=l
                 if p.nul_bytes:
                     log(f"REPAIRED {s['path']} nul_bytes={p.nul_bytes} damaged_lines={p.damaged_lines}")
             log(f"ARCHIVE {kind} files={len(members)} records={pos} id={archive_id}")
-        manifest = {"layout": B.LAYOUT, "session_id": sid, "source_root": claude_home or os.path.dirname(main_path),
+        manifest = {"layout": B.MANIFEST_LAYOUT, "session_id": sid, "source_root": claude_home or os.path.dirname(main_path),
                     "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "clp_s": clp_s,
                     "sources": [{k: v for k, v in s.items() if k != "full"} for s in sources]}
         with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as fh:
@@ -221,8 +221,8 @@ def build_catalog(out, clp_s=None, log=lambda line: None):
             manifest = json.load(fh)
     except FileNotFoundError:
         raise B.BundleError(f"not a bundle (no manifest.json): {out}") from None
-    if manifest.get("layout") != B.LAYOUT:
-        raise B.BundleError(f"{out} was made with bundle layout {manifest.get('layout')}, not {B.LAYOUT}; "
+    if manifest.get("layout") != B.MANIFEST_LAYOUT:
+        raise B.BundleError(f"{out} was made with bundle layout {manifest.get('layout')}, not {B.MANIFEST_LAYOUT}; "
                             "make it again with `build --force`")
     clp_s = B.resolve_clp_s(clp_s)
     session, positioned, counts, opened = _load_session(out, manifest, clp_s)
@@ -304,7 +304,11 @@ def _event(kind, pos, r):
             is_error |= err
             tools.append((blk.get("tool_use_id"), "result", None, err))
     ts = r.get("timestamp")
-    row = dict(uuid=uuid, kind=kind, pos=pos, agent_id=r.get("agentId"), ts=ts[:23] if isinstance(ts, str) else None,
+    usage = None
+    if r.get("type") == "assistant" and isinstance(message.get("id"), str) and message.get("model") != "<synthetic>":
+        usage = usage_of(message)
+    row = dict(message_id=message.get("id") if r.get("type") == "assistant" else None, usage=usage,
+               uuid=uuid, kind=kind, pos=pos, agent_id=r.get("agentId"), ts=ts[:23] if isinstance(ts, str) else None,
                type=r.get("type"), turn=None,
                human=int(kind == "main" and r.get("type") == "user" and any(is_human_prompt(r, t) for t in texts)),
                interrupt=int(any(t.lstrip().startswith("[Request interrupted") for t in texts)), is_error=is_error,
@@ -330,12 +334,27 @@ def _write_events(db, positioned):
                     unlisted += 1
                 else:
                     rows.append((row, tools))
+        # one record per response carries its final usage (the most output, with cache fields; the later
+        # record on a tie), so a token column sums each response once
+        carrier = {}
+        for i, (r, _) in enumerate(rows):
+            if r["usage"] is not None:
+                key = (r["agent_id"], r["message_id"])
+                best = carrier.get(key)
+                if best is None or final_usage(rows[best][0]["usage"], r["usage"]) is r["usage"] or \
+                        r["usage"]["final"] == rows[best][0]["usage"]["final"]:
+                    carrier[key] = i
+        carriers = set(carrier.values())
+        for i, (r, _) in enumerate(rows):
+            u = r["usage"] if i in carriers else None
+            for name in ("input", "output", "cache_read", "cache_write"):
+                r[f"tokens_{name}"] = u[name] if u else None
         if kind == "main":  # a turn runs from one human prompt to the next
             prompts = sorted(r["ts"] for r, _ in rows if r["human"] and r["ts"])
             for r, _ in rows:
                 r["turn"] = bisect.bisect_right(prompts, r["ts"]) if r["ts"] else None
         cols = ["uuid", "kind", "pos", "agent_id", "ts", "type", "turn", "human", "interrupt", "is_error", "ref_agent_id",
-                "ref_task_id"]
+                "ref_task_id", "message_id", "tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_write"]
         for r, tools in rows:
             cur = db.execute(f"INSERT INTO events({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [r[c] for c in cols])
             db.executemany("INSERT INTO event_tools VALUES(?,?,?,?,?)", [(cur.lastrowid, *t) for t in tools])
@@ -374,6 +393,7 @@ def _write_graph(db, g):
     states = _attempt_states(g)
     plain = {"id", "kind", "label", "start", "end", "status", "cause", "attempts", "tool_calls", "errors", "tokens",
              "phase", "run_id", "task_id", "instance"}
+    no_tokens = {"input": None, "output": None, "cache_read": None, "cache_write": None}
     for n in g.nodes.values():
         kind = n["kind"]
         agent_id = n["id"].split(":", 1)[1] if kind in ("agent", "attempt") else None
@@ -387,10 +407,11 @@ def _write_graph(db, g):
             status = agent_result.get(n["id"], "no-notification")
         extra = {k: v for k, v in n.items() if k not in plain}
         instance = n["id"] if kind == "workflow" else n.get("instance")
-        db.execute("INSERT INTO nodes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        tokens = n.get("tokens") or no_tokens
+        db.execute("INSERT INTO nodes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                    (n["id"], kind, n.get("label"), agent_id, run_id, n.get("task_id"), instance, n.get("phase"),
                     n.get("start"), n.get("end"), status, cause, n.get("attempts"), n.get("tool_calls"), n.get("errors"),
-                    n.get("tokens"), json.dumps(extra)))
+                    tokens["input"], tokens["output"], tokens["cache_read"], tokens["cache_write"], json.dumps(extra)))
     db.executemany("INSERT INTO edges VALUES(?,?,?,?,?,?,?)",
                    [(e["from"], e["to"], e["kind"], e["at"], e.get("via"), int(bool(e.get("inferred"))),
                      e.get("tool_use_id")) for e in g.edges])

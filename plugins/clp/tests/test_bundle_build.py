@@ -88,9 +88,12 @@ def T(h, m, s=0):
     return f"2026-01-01T{h:02d}:{m:02d}:{s:02d}.000Z"
 
 
-def use(u, ts, tid, name, inp=None, **extra):
-    return line(uuid=u, type="assistant", timestamp=ts, message={"role": "assistant", "id": "m" + u, "content": [
-        {"type": "tool_use", "id": tid, "name": name, "input": inp or {}}]}, **extra)
+def use(u, ts, tid, name, inp=None, tokens=None, **extra):
+    message = {"role": "assistant", "id": "m" + u, "content": [{"type": "tool_use", "id": tid, "name": name, "input": inp or {}}]}
+    if tokens:
+        message["usage"] = {"input_tokens": tokens[0], "output_tokens": tokens[1], "cache_read_input_tokens": 0,
+                            "cache_creation_input_tokens": 0}
+    return line(uuid=u, type="assistant", timestamp=ts, message=message, **extra)
 
 
 def result(u, ts, tid, tur=None, error=False, **extra):
@@ -126,7 +129,7 @@ def make_session(home, with_agents=True):
     main = [
         text("u01", T(10, 0), "user", "hello"),
         line(type="mode", mode="plan"),                                              # no uuid: bookkeeping
-        use("u02", T(10, 0, 5), "tu1", "Agent"),
+        use("u02", T(10, 0, 5), "tu1", "Agent", tokens=(5000, 50)),
         result("u03", T(10, 0, 6), "tu1", {"agentId": "a1", "status": "async_launched"}),
         use("u04", T(10, 1, 0), "tw1", "Workflow", {"scriptPath": "x.js"}),
         result("u05", T(10, 1, 1), "tw1", {"runId": "wf_x", "taskId": "tk1", "status": "async_launched"}),
@@ -150,17 +153,23 @@ def make_session(home, with_agents=True):
             line(uuid="a1u3", type="attachment", timestamp=T(10, 0, 21), agentId="a1", attachment={"type": "hook"}),   # unlisted
             line(type="fork-context-ref", agentId="a1"),                                                            # no uuid
         ])
+        def split(u, ts, usage):                         # one response (id mR) written as two records
+            return line(uuid=u, type="assistant", timestamp=ts, agentId="a2",
+                        message={"role": "assistant", "id": "mR", "content": [{"type": "text", "text": "."}], "usage": usage})
         write(f"{root}/subagents/agent-a2.jsonl", [
+            split("a2r1", T(10, 0, 31), {"input_tokens": 999, "output_tokens": 0}),            # preliminary
+            split("a2r2", T(10, 0, 32), {"input_tokens": 700, "output_tokens": 70, "cache_read_input_tokens": 5,
+                                         "cache_creation_input_tokens": 0}),
             use("a2u1", T(10, 0, 30), "b2", "Read", agentId="a2"), result("a2u2", T(10, 0, 40), "b2", agentId="a2"),
             text("a2u3", T(10, 0, 50), "assistant", "done", agentId="a2")])
         wf = f"{root}/subagents/workflows/wf_x"
         for aid in ("w1", "w2", "w3"):
             meta(f"{wf}/agent-{aid}.meta.json", agentType="workflow-agent", spawnDepth=2)
-        write(f"{wf}/agent-w1.jsonl", [use("w1u1", T(10, 2), "c1", "Bash", agentId="w1"), result("w1u2", T(10, 4), "c1", agentId="w1"),
+        write(f"{wf}/agent-w1.jsonl", [use("w1u1", T(10, 2), "c1", "Bash", tokens=(100, 10), agentId="w1"), result("w1u2", T(10, 4), "c1", agentId="w1"),
                                        line(uuid="w1u3", type="system", timestamp=T(10, 4, 1), agentId="w1")])           # unlisted
-        write(f"{wf}/agent-w2.jsonl", [use("w2u1", T(10, 2, 30), "c2", "Bash", agentId="w2"), result("w2u2", T(10, 2, 31), "c2", agentId="w2"),
+        write(f"{wf}/agent-w2.jsonl", [use("w2u1", T(10, 2, 30), "c2", "Bash", tokens=(200, 20), agentId="w2"), result("w2u2", T(10, 2, 31), "c2", agentId="w2"),
                                        text("w2u3", T(10, 5, 31), "user", "[Request interrupted by user]", agentId="w2")])
-        write(f"{wf}/agent-w3.jsonl", [use("w3u1", T(10, 21), "c3", "Read", agentId="w3"), result("w3u2", T(10, 23), "c3", agentId="w3")])
+        write(f"{wf}/agent-w3.jsonl", [use("w3u1", T(10, 21), "c3", "Read", tokens=(300, 30), agentId="w3"), result("w3u2", T(10, 23), "c3", agentId="w3")])
         write(f"{wf}/journal.jsonl", [line(type="started", key="v2:k1aaaaaaaa", agentId="w1"), line(type="started", key="v2:k2bbbbbbbb", agentId="w2"),
                                       line(type="started", key="v2:k2bbbbbbbb", agentId="w3"),
                                       line(type="result", key="v2:k1aaaaaaaa", agentId="w1", result={}), line(type="result", key="v2:k2bbbbbbbb", agentId="w3", result={})])
@@ -223,7 +232,7 @@ class Full(BuildTest):
 
     def test_archives_hold_every_record(self):
         rows = dict(self.db().execute("SELECT kind, records FROM archives").fetchall())
-        self.assertEqual(rows, {"main": 13, "agent": 7, "workflow-agent": 8, "workflow-journal": 5, "workflow-run": 1})
+        self.assertEqual(rows, {"main": 13, "agent": 9, "workflow-agent": 8, "workflow-journal": 5, "workflow-run": 1})
 
     def test_events_are_counted_and_the_leftovers_accounted_for(self):
         b = dict(self.db().execute("SELECT k, v FROM bundle").fetchall())
@@ -231,7 +240,7 @@ class Full(BuildTest):
         self.assertEqual((b["events_unlisted_agent"], b["events_skipped_agent"]), ("1", "1"))
         self.assertEqual(b["events_unlisted_workflow-agent"], "1")
         kinds = dict(self.db().execute("SELECT kind, COUNT(*) FROM events GROUP BY kind").fetchall())
-        self.assertEqual(kinds, {"main": 11, "agent": 5, "workflow-agent": 7})
+        self.assertEqual(kinds, {"main": 11, "agent": 7, "workflow-agent": 7})
         self.assertEqual(b["layout"], str(bundle.LAYOUT))
 
     def test_interrupts_equal_attempts_without_an_outcome(self):
@@ -255,6 +264,24 @@ class Full(BuildTest):
         self.assertIn("NODE wf:wf_x kind=workflow relation=refers_to", out)
         _, out, _ = self.cli("who", "--uuid", "u03")
         self.assertIn("NODE agent:a1 kind=agent relation=refers_to", out)
+
+    def test_tokens_add_up_from_attempts_to_instances_and_runs(self):
+        t = {r["id"]: (r["tokens_input"], r["tokens_output"]) for r in self.db().execute("SELECT * FROM nodes")}
+        self.assertEqual(t["attempt:w1"], (100, 10))
+        self.assertEqual(t["wf:wf_x"], (300, 30))           # w1 and w2 ran in the first instance
+        self.assertEqual(t["wf:wf_x~2"], (300, 30))         # w3 ran in the resume
+        self.assertEqual(t["run:wf_x"], (600, 60))
+        self.assertEqual(t["main"], (5000, 50))
+
+    def test_a_response_split_over_records_counts_once_on_one_event(self):
+        db = self.db()
+        rows = db.execute("SELECT uuid, tokens_input, tokens_output FROM events WHERE message_id = 'mR' ORDER BY pos").fetchall()
+        self.assertEqual([tuple(r) for r in rows], [("a2r1", None, None), ("a2r2", 700, 70)])
+        agent = db.execute("SELECT tokens_input, tokens_output, tokens_cache_read FROM nodes WHERE id = 'agent:a2'").fetchone()
+        self.assertEqual(tuple(agent), (700, 70, 5))
+        mismatched = db.execute("SELECT COUNT(*) FROM nodes n WHERE n.kind IN ('agent','attempt') AND n.tokens_input != "
+                                "(SELECT COALESCE(SUM(e.tokens_input), 0) FROM events e WHERE e.agent_id = n.agent_id)").fetchone()[0]
+        self.assertEqual(mismatched, 0)
 
     def test_nested_agent_and_turns(self):
         rows = {r["id"]: r for r in self.db().execute("SELECT * FROM nodes WHERE kind='agent'")}
@@ -414,7 +441,7 @@ class Rebuild(BuildTest):
         db.close()
         code, _, err = self.cli("show", "main")
         self.assertEqual(code, 1)
-        self.assertIn("has layout 1, not layout 2; rebuild it with", err)
+        self.assertIn(f"has layout 1, not layout {bundle.LAYOUT}; rebuild it with", err)
         self.assertEqual(self.cli("rebuild")[0], 0)
         self.assertEqual(self.cli("show", "main")[0], 0)
 

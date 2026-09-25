@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "bin", "lib"))
 
-from session_turns import breakdown, collect, longest_waits  # noqa: E402
+from session_turns import breakdown, collect, longest_waits, response_tokens  # noqa: E402
 
 BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -153,3 +153,38 @@ class RefusesSeveralArchives(unittest.TestCase):
             self.assertEqual(p.returncode, 2)
             self.assertIn("holds 2 archives", p.stderr)
             self.assertIn("select archive_id from archives where kind='main'", p.stderr)
+
+
+def usage(record, inp, out, cache=True):
+    record["message"]["usage"] = {"input_tokens": inp, "output_tokens": out}
+    if cache:
+        record["message"]["usage"].update(cache_read_input_tokens=0, cache_creation_input_tokens=0)
+    return record
+
+
+class TokensTest(unittest.TestCase):
+    """A response is written as several records sharing its message id: the first may carry a preliminary
+    usage (output 0, no cache fields), the rest repeat the final one. It must count once, with the final."""
+
+    def records(self):
+        return [
+            prompt(0, "go"),
+            usage(assistant(1, "m1", thinking()), 900, 0, cache=False),       # preliminary
+            usage(assistant(2, "m1", text()), 800, 40),
+            usage(assistant(2, "m1", tool_use("t1", "Bash")), 800, 40),
+            result(3, "t1"),
+            usage(assistant(4, "m2", text()), 1000, 7),
+            prompt(10, "next"),
+            usage(assistant(11, "m3", text()), 50, 5),
+        ]
+
+    def test_each_response_counts_once_with_its_final_usage(self):
+        self.assertEqual(response_tokens(self.records()), {"input": 1850, "output": 52, "cache_read": 0, "cache_write": 0})
+
+    def test_order_does_not_matter(self):
+        self.assertEqual(response_tokens(reversed(self.records())), response_tokens(self.records()))
+
+    def test_tokens_per_turn(self):
+        turns = breakdown(collect(reversed(self.records())))
+        self.assertEqual([t["tokens"]["input"] for t in turns], [1800, 50])
+        self.assertEqual([t["tokens"]["output"] for t in turns], [47, 5])
