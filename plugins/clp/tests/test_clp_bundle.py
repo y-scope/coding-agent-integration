@@ -48,6 +48,7 @@ class BundleCommands(unittest.TestCase):
         os.chmod(self.wrapper, os.stat(self.wrapper).st_mode | stat.S_IXUSR)
         db = sqlite3.connect(os.path.join(self.dir, "catalog.sqlite"))
         db.executescript(bundle.SCHEMA)
+        db.execute("INSERT INTO bundle VALUES('layout', ?)", (str(bundle.LAYOUT),))
         db.executemany("INSERT INTO archives VALUES(?,?,?)", [("arch-wfagent", "workflow-agent", 3), ("arch-run", "workflow-run", 1), ("arch-main", "main", 2)])
         cols = "id,kind,label,agent_id,run_id,task_id,instance,start,end,status,cause,attrs"
         rows = [

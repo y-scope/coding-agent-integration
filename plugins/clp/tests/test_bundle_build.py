@@ -24,8 +24,13 @@ SID = "5e550000-0000-0000-0000-000000000001"
 
 STUB = textwrap.dedent(r"""
     #!/usr/bin/env python3
-    import json, os, sys, uuid
+    # A stand-in for clp-s: `c --files-from LIST DIR` keeps each file's records in the order listed and fails
+    # like clp-s on a line that is not a JSON object; `s --count DIR *` counts per archive; `s ARCHIVE * file
+    # --path OUT` writes each record with its position as msgpack, in reverse order (the builder must sort).
+    import json, os, struct, sys, uuid
     a = sys.argv[1:]
+    def records(d):
+        return [l for l in open(f"{d}/records.jsonl") if l.strip()]
     if a[0] == "c":
         files_from = a[a.index("--files-from") + 1]
         out = a[-1]
@@ -35,23 +40,43 @@ STUB = textwrap.dedent(r"""
             open(f"{out}/{aid}/{n}", "w").close()
         with open(f"{out}/{aid}/records.jsonl", "w") as dst:
             for path in open(files_from).read().split():
-                for line in open(path):
+                offset = 0
+                lines = open(path, "rb").readlines()
+                for number, line in enumerate(lines, 1):
+                    if number == len(lines) and not line.endswith(b"\n"):
+                        try:
+                            json.loads(line)
+                        except ValueError:
+                            break               # like clp-s: a record cut off at the end is dropped silently
                     if line.strip():
-                        dst.write(line if line.endswith("\n") else line + "\n")
+                        try:
+                            ok = isinstance(json.loads(line), dict)
+                        except ValueError:
+                            ok = False
+                        if not ok:
+                            end = offset - 1 if offset else 0      # like clp-s: the end of the last good record
+                            sys.stderr.write(f"[error] Encountered non-json-object while trying to parse {path} after parsing {end} bytes\n")
+                            sys.exit(1)
+                        dst.write(line.decode().rstrip("\n") + "\n")
+                    offset += len(line)
     elif a[0] == "s":
         pos = [x for x in a[1:] if not x.startswith("--")]
-        target, query = pos[0], pos[1]
-        def count(d, field=None):
-            n = 0
-            for line in open(f"{d}/records.jsonl"):
-                n += (field is None) or (field in json.loads(line))
-            return n
-        extra = int(os.environ.get("STUB_UUID_OFF_BY", "0"))
-        if os.path.exists(f"{target}/records.jsonl"):
-            print(json.dumps({"archive_id": os.path.basename(target), "count": count(target, "uuid") + extra}))
-        else:
+        target = pos[0]
+        if "--count" in a:
             for aid in sorted(os.listdir(target)):
-                print(json.dumps({"archive_id": aid, "count": count(f"{target}/{aid}")}))
+                n = len(records(f"{target}/{aid}")) + int(os.environ.get("STUB_COUNT_OFF_BY", "0"))
+                print(json.dumps({"archive_id": aid, "count": n}))
+        elif "file" in pos:
+            rows = list(enumerate(records(target)))
+            if os.environ.get("STUB_DROP_ONE"):
+                rows = rows[1:]
+            def s(text):
+                b = text.encode()
+                return b"\xdb" + struct.pack(">I", len(b)) + b
+            with open(a[a.index("--path") + 1], "wb") as fh:
+                for i, line in reversed(rows):
+                    fh.write(b"\x95" + b"\xd3" + struct.pack(">q", 0) + s(line) + s("") + s(os.path.basename(target))
+                             + b"\xce" + struct.pack(">I", i))
 """).lstrip()
 
 
@@ -190,7 +215,9 @@ class Full(BuildTest):
         self.assertIn("INVENTORY files=", self.stdout)
         n = self.db().execute("SELECT COUNT(*) FROM sources").fetchone()[0]
         self.assertEqual(n, 1 + 2 + 2 + 3 + 3 + 1 + 1 + 1 + 1 + 1 + 1)  # main, agents+metas, wf agents+metas, journal, run, script, tool result, task, snapshot
-        self.assertTrue(os.path.isfile(f"{self.out}/files/tool-result/t1.txt"))
+        self.assertTrue(os.path.isfile(f"{self.out}/files/tool-results/t1.txt"))      # at its path in the session
+        self.assertTrue(os.path.isfile(f"{self.out}/files/subagents/agent-a1.meta.json"))
+        self.assertTrue(os.path.isfile(f"{self.out}/manifest.json"))
         self.assertTrue(os.path.isfile(f"{self.out}/files/file-history/abc@v1"))
         self.assertEqual(len(os.listdir(f"{self.out}/archives")), 5)   # one archive per kind of log
 
@@ -205,7 +232,7 @@ class Full(BuildTest):
         self.assertEqual(b["events_unlisted_workflow-agent"], "1")
         kinds = dict(self.db().execute("SELECT kind, COUNT(*) FROM events GROUP BY kind").fetchall())
         self.assertEqual(kinds, {"main": 11, "agent": 5, "workflow-agent": 7})
-        self.assertEqual(b["layout"], "1")
+        self.assertEqual(b["layout"], str(bundle.LAYOUT))
 
     def test_interrupts_equal_attempts_without_an_outcome(self):
         db = self.db()
@@ -264,27 +291,50 @@ class Failures(BuildTest):
         self.assertIn("unclassified file", err)
         self.assertFalse(os.path.exists(self.out))
 
-    def test_events_that_disagree_with_the_archive_fail_the_build_and_clean_up(self):
+    def test_an_archive_that_disagrees_with_the_manifest_fails_the_build_and_cleans_up(self):
         make_session(self.home)
-        code, _, err = self.build(env={"STUB_UUID_OFF_BY": "1"})
+        code, _, err = self.build(env={"STUB_COUNT_OFF_BY": "1"})
         self.assertEqual(code, 1)
-        self.assertIn("records with a uuid", err)
+        self.assertIn("the manifest says", err)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_an_archive_read_with_a_gap_fails_the_build(self):
+        make_session(self.home)
+        code, _, err = self.build(env={"STUB_DROP_ONE": "1"})
+        self.assertEqual(code, 1)
+        self.assertIn("expected positions 0 to", err)
         self.assertFalse(os.path.exists(self.out))
 
     def test_a_line_that_is_not_json_names_its_file_and_line(self):
         make_session(self.home)
-        with open(f"{self.home}/projects/p/{SID}.jsonl", "a") as fh:
-            fh.write("{broken\n")
+        path = f"{self.home}/projects/p/{SID}.jsonl"
+        lines = open(path).read().split("\n")
+        lines.insert(4, "{broken")                                   # in the middle: clp-s reports it
+        with open(path, "w") as fh:
+            fh.write("\n".join(lines))
         code, _, err = self.build()
         self.assertEqual(code, 1)
-        self.assertIn(f"{SID}.jsonl:14: not JSON", err)
+        self.assertIn(f"{SID}.jsonl:5: not a JSON record", err)
+        with open(path, "w") as fh:                                  # at the end, complete: named the same way
+            fh.write("\n".join(l for l in lines if l != "{broken") + "{broken\n")
+        code, _, err = self.build()
+        self.assertIn(f"{SID}.jsonl:14: not a JSON record", err)
+
+    def test_a_record_cut_off_at_the_end_is_named_not_dropped(self):
+        make_session(self.home)
+        with open(f"{self.home}/projects/p/{SID}.jsonl", "a") as fh:     # a write that stopped mid-record
+            fh.write('{"uuid":"u99","type":"user","timestamp":"2026-01-01T11:30:00.000Z","mess')
+        code, _, err = self.build()
+        self.assertEqual(code, 1)
+        self.assertIn(f"{SID}.jsonl:14: the last record is cut off", err)
+        self.assertFalse(os.path.exists(self.out))
 
     def test_a_meta_without_its_transcript_is_an_error(self):
         make_session(self.home)
         os.remove(f"{self.home}/projects/p/{SID}/subagents/agent-a1.jsonl")
         code, _, err = self.build()
         self.assertEqual(code, 1)
-        self.assertIn("has no transcript", err)
+        self.assertIn("agents with a meta file but no transcript: a1", err)
 
     def test_a_missing_engine_is_a_plain_error(self):
         make_session(self.home)
@@ -300,6 +350,81 @@ class Failures(BuildTest):
         code, _, err = self.cli("build", "--session-file", session, env={"CLP_S_BIN": None, "PATH": only_python})
         self.assertEqual(code, 1)
         self.assertIn("clp-s is not available", err)
+
+
+class Repairs(BuildTest):
+    """What real Claude Code sessions contain that the first sessions did not."""
+
+    def test_nul_bytes_from_lost_writes_are_removed_and_counted(self):
+        make_session(self.home)
+        main = f"{self.home}/projects/p/{SID}.jsonl"
+        with open(main, "ab") as fh:                                  # a lost write at the end
+            fh.write(b"\x00" * 50 + b"\n")
+        transcript = f"{self.home}/projects/p/{SID}/subagents/agent-a2.jsonl"
+        lines = open(transcript, "rb").read().split(b"\n")
+        lines.insert(1, b"\x00" * 30 + use("a2u9", T(10, 0, 35), "b9", "Grep", agentId="a2").encode())  # NULs, then a record
+        with open(transcript, "wb") as fh:
+            fh.write(b"\n".join(lines))
+        code, out, err = self.build()
+        self.assertEqual(code, 0, err)
+        self.assertIn("REPAIRED", out)
+        rows = {r["path"].split("/")[-1]: (r["nul_bytes"], r["damaged_lines"]) for r in
+                self.db().execute("SELECT * FROM sources WHERE nul_bytes > 0")}
+        self.assertEqual(rows, {f"{SID}.jsonl": (50, 1), "agent-a2.jsonl": (30, 1)})
+        self.assertEqual(self.db().execute("SELECT agent_id FROM events WHERE uuid = 'a2u9'").fetchone()[0], "a2")
+        self.assertTrue(open(main, "rb").read().endswith(b"\x00" * 50 + b"\n"))       # the source is untouched
+
+    def test_a_uuid_written_twice_is_kept_twice(self):
+        make_session(self.home)
+        with open(f"{self.home}/projects/p/{SID}.jsonl", "a") as fh:     # the rewrite a reopened session makes
+            fh.write(text("u01", T(10, 0), "user", "hello", slug="some-slug") + "\n")
+        code, _, err = self.build()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.db().execute("SELECT COUNT(*) FROM events WHERE uuid = 'u01'").fetchone()[0], 2)
+        _, out, _ = self.cli("who", "--uuid", "u01")
+        self.assertIn("COPIES 2", out)
+
+    def test_a_session_title_and_a_classifier_dump_are_kept_as_files(self):
+        make_session(self.home)
+        put(f"{self.home}/projects/p/{SID}/custom-title.json", '{"customTitle":"my session"}')
+        put(f"{self.home}/projects/p/{SID}/auto-mode-classifier-error.txt", "=== ERROR ===\n")
+        code, _, err = self.build()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.db().execute("SELECT v FROM bundle WHERE k = 'title'").fetchone()[0], "my session")
+        self.assertTrue(os.path.isfile(f"{self.out}/files/auto-mode-classifier-error.txt"))
+
+
+class Rebuild(BuildTest):
+    def test_the_catalog_rebuilds_from_the_bundle_alone(self):
+        make_session(self.home)
+        self.assertEqual(self.build()[0], 0)
+        before = self.snapshot()
+        shutil.rmtree(self.home)                                         # the session's files are gone
+        os.remove(f"{self.out}/catalog.sqlite")
+        code, out, err = self.cli("rebuild")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_catalog_of_another_layout_is_refused_with_the_fix(self):
+        make_session(self.home)
+        self.build()
+        db = sqlite3.connect(f"{self.out}/catalog.sqlite")
+        db.execute("UPDATE bundle SET v = '1' WHERE k = 'layout'")
+        db.commit()
+        db.close()
+        code, _, err = self.cli("show", "main")
+        self.assertEqual(code, 1)
+        self.assertIn("has layout 1, not layout 2; rebuild it with", err)
+        self.assertEqual(self.cli("rebuild")[0], 0)
+        self.assertEqual(self.cli("show", "main")[0], 0)
+
+    def snapshot(self):
+        db = sqlite3.connect(f"{self.out}/catalog.sqlite")
+        try:
+            return {t: sorted(map(repr, db.execute(f"SELECT * FROM {t}")))
+                    for t in ("nodes", "edges", "agents", "events", "event_tools", "sources", "archives")}
+        finally:
+            db.close()
 
 
 class SmallSession(BuildTest):
