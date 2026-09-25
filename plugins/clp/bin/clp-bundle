@@ -4,6 +4,7 @@ clp-bundle - move between a session bundle's catalog and the CLP records behind 
 
 Usage:
   clp-bundle BUNDLE_DIR build (--session-file PATH | --session-id ID) [--claude-home DIR] [--clp-s PATH] [--force]
+  clp-bundle BUNDLE_DIR rebuild [--clp-s PATH]
   clp-bundle BUNDLE_DIR show ID [--json]
   clp-bundle BUNDLE_DIR evidence ID [--tail N | --all] [--raw]
   clp-bundle BUNDLE_DIR who (--agent-id ID | --tool-use-id ID | --task-id ID | --uuid ID | --at TIME)
@@ -13,19 +14,24 @@ Usage:
   clp-bundle BUNDLE_DIR record UUID [--raw]
   clp-bundle BUNDLE_DIR sql QUERY [--json]
 
-BUNDLE_DIR holds catalog.sqlite, archives/ and files/. ID is a node id (attempt:a1b2..,
+BUNDLE_DIR holds manifest.json, archives/, files/ and catalog.sqlite. ID is a node id (attempt:a1b2..,
 agent:.., wf:.., run:.., unit:..), an agent id (or a unique prefix of six or more
 characters), a run id or a task id.
 
   build     Make BUNDLE_DIR from one Claude Code session: its main log, subagent transcripts, workflow
-            summaries and journals become CLP archives (one archive per kind of log), and the catalog
-            records the graph (agents, workflow runs and their resumed instances, retried attempts, failure
-            causes, timing), the events, and where every source file went. Tool results, file snapshots,
-            tasks and workflow scripts are copied into files/. --session-file names the main .jsonl;
+            summaries and journals become CLP archives (one archive per kind of log), and every other file
+            of the session (agent meta files, tool results, file snapshots, tasks, workflow scripts) is
+            copied into files/ at its path relative to the session. manifest.json records where each file
+            went. The catalog is then built from the bundle alone, reading each archive once in its
+            original order: the graph (agents, workflow runs and their resumed instances, retried
+            attempts, failure causes, timing) and the events. NUL bytes left by lost writes are removed
+            before compression, and each file's count is reported (REPAIRED) and kept in the catalog. --session-file names the main .jsonl;
             --session-id finds it under --claude-home (default ~/.claude). A file that belongs to the
             session and matches no rule stops the build. Refuses an existing directory; --force replaces
             an existing bundle. A session with no subagents or workflows gets a catalog with only its
             main thread. Claude Code sessions only.
+  rebuild   Make catalog.sqlite again from the bundle alone (manifest.json, archives/, files/); the
+            old catalog is replaced only once the new one is complete.
   show      The catalog's row for a node: status, cause, time, where it sits in the graph
             (parents, children, unit, phase), and which archive and query hold its records.
   evidence  Those records, read from the archive and sorted by time (the last N, 8 by
@@ -79,8 +85,17 @@ def cmd_build(args):
         if len(hits) != 1:
             raise B.BundleError(f"expected one session {args.session_id} under {home}/projects, found {len(hits)}")
         main_path = hits[0]
-    result = bundle_build.build(main_path, args.bundle, clp_s=args.clp_s, claude_home=args.claude_home,
-                                force=args.force, log=print)
+    result = bundle_build.make_bundle(main_path, args.bundle, clp_s=args.clp_s, claude_home=args.claude_home,
+                                      force=args.force, log=print)
+    return _report(result)
+
+
+def cmd_rebuild(args):
+    import bundle_build
+    return _report(bundle_build.build_catalog(args.bundle, clp_s=args.clp_s, log=print))
+
+
+def _report(result):
     for name, value in result["graph_facts"]:
         print(f"GRAPH {name}={json.dumps(value)}")
     for problem in result["graph_problems"]:
@@ -174,13 +189,21 @@ def cmd_who(args, db):
             "JOIN nodes n ON n.id = e.dst WHERE e.kind = 'launch' AND e.tool_use_id = ?", (args.tool_use_id,))]
         counts = {}
     elif args.uuid:
-        event = B.resolve_event(db, args.uuid)
-        links = B.linked_nodes(db, event)
+        events = B.resolve_events(db, args.uuid)
+        links, seen = [], set()
+        for event in events:
+            for rel, n in B.linked_nodes(db, event):
+                if (rel, n["id"]) not in seen:
+                    seen.add((rel, n["id"]))
+                    links.append((rel, n))
         if args.json:
-            print(json.dumps({"event": dict(event), "tools": B.event_tools(db, event),
+            print(json.dumps({"events": [{**dict(e), "tools": B.event_tools(db, e)} for e in events],
                               "nodes": [{"relation": rel, **dict(n)} for rel, n in links]}, indent=1, default=str))
             return 0
-        print(_event_line(db, event))
+        if len(events) > 1:
+            print(f"COPIES {len(events)} (the same uuid written more than once; Claude Code rewrites records when a session is reopened)")
+        for event in events:
+            print(_event_line(db, event))
         for rel, n in links:
             print(f"NODE {n['id']} kind={n['kind']} relation={rel} status={n['status']} {n['start']} -> {n['end']} "
                   f"label={json.dumps(n['label'])}")
@@ -223,7 +246,7 @@ def _event_line(db, event):
             parts.append(f"{key}={event[key]}")
     if flags:
         parts.append(flags)
-    parts.append(f"uuid={event['uuid']}")
+    parts.append(f"pos={event['pos']} uuid={event['uuid']}")
     return " ".join(parts)
 
 
@@ -262,9 +285,14 @@ def cmd_events(args, db):
 
 
 def cmd_record(args, db):
-    event = B.resolve_event(db, args.uuid)
-    record = B.fetch_event_record(args.bundle, db, event, args.search_wrapper)
-    print(json.dumps(record, ensure_ascii=False) if args.raw else B.brief(record, width=200))
+    events = B.resolve_events(db, args.uuid)
+    records = []
+    for kind in dict.fromkeys(e["kind"] for e in events):
+        records += B.fetch_event_records(args.bundle, db, events[0]["uuid"], kind, args.search_wrapper)
+    if len(records) > 1 and not args.raw:
+        print(f"COPIES {len(records)} (the same uuid written more than once)")
+    for record in records:
+        print(json.dumps(record, ensure_ascii=False) if args.raw else B.brief(record, width=200))
     return 0
 
 
@@ -291,6 +319,7 @@ def main():
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--session-file"); g.add_argument("--session-id")
     p.add_argument("--claude-home"); p.add_argument("--clp-s"); p.add_argument("--force", action="store_true")
+    p = sub.add_parser("rebuild"); p.add_argument("--clp-s")
     p = sub.add_parser("show"); p.add_argument("id"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("evidence"); p.add_argument("id"); p.add_argument("--tail", type=int, default=8)
     p.add_argument("--all", action="store_true"); p.add_argument("--raw", action="store_true")
@@ -309,6 +338,8 @@ def main():
     try:
         if args.command == "build":
             return cmd_build(args)
+        if args.command == "rebuild":
+            return cmd_rebuild(args)
         db = B.open_catalog(args.bundle)
         return {"show": cmd_show, "evidence": cmd_evidence, "who": cmd_who, "events": cmd_events,
                 "record": cmd_record, "sql": cmd_sql}[args.command](args, db)

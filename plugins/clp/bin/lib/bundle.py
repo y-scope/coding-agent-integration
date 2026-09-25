@@ -1,9 +1,12 @@
 """bundle - navigate between a session bundle's catalog (SQLite) and its CLP archives.
 
 A bundle is a directory:
-  catalog.sqlite   the map: archives, sources, agents, graph nodes and edges (derived)
-  archives/        one clp-s archives dir, one archive per kind of log
-  files/           the files that are not JSON logs
+  manifest.json    every source file: its kind, size, hash, and where it went (an archive and the
+                   positions of its records there, or a path under files/)
+  archives/        one clp-s archives dir, one archive per kind of log, nothing else in it
+  files/           the files that are not JSON logs, at their paths relative to the session
+  catalog.sqlite   the map: archives, sources, agents, graph nodes and edges, events (derived from
+                   the three above, and rebuilt from them)
 
 The catalog says what exists and how it connects; the archives hold the records. A node of
 the catalog names its records by an ID they carry (agentId, runId), so no offsets are stored.
@@ -12,15 +15,24 @@ Stdlib only.
 
 import json
 import os
+import re
 import sqlite3
+import struct
 import subprocess
 from datetime import datetime
+
+# The catalog's layout. A catalog of another layout is refused, and rebuilt from its bundle.
+LAYOUT = 2
 
 SCHEMA = """
 CREATE TABLE bundle(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE archives(archive_id TEXT PRIMARY KEY, kind TEXT, records INTEGER);
+-- archive_id and first_pos/records locate an archived file's records (positions first_pos to
+-- first_pos + records - 1 in that archive); file is the path under files/ of one kept as a file.
+-- nul_bytes and damaged_lines count the NUL bytes removed before compression (lost writes).
 CREATE TABLE sources(path TEXT PRIMARY KEY, kind TEXT, bytes INTEGER, sha256 TEXT,
-                     archive_id TEXT, file TEXT, agent_id TEXT, run_id TEXT);
+                     archive_id TEXT, file TEXT, agent_id TEXT, run_id TEXT,
+                     first_pos INTEGER, records INTEGER, nul_bytes INTEGER, damaged_lines INTEGER);
 CREATE TABLE agents(agent_id TEXT PRIMARY KEY, run_id TEXT, agent_type TEXT, description TEXT,
                     depth INTEGER, parent_agent_id TEXT, tool_use_id TEXT, is_fork INTEGER, model TEXT);
 CREATE TABLE nodes(id TEXT PRIMARY KEY, kind TEXT, label TEXT, agent_id TEXT, run_id TEXT, task_id TEXT,
@@ -37,13 +49,15 @@ CREATE INDEX nodes_agent ON nodes(agent_id);
 -- without a uuid (the harness's bookkeeping rows such as mode, permission-mode, ai-title), records
 -- with a uuid that carry nothing to join on (hook and reminder attachments, system rows), and journal
 -- rows. bundle.events_skipped_<kind> and events_unlisted_<kind> count them.
-CREATE TABLE events(id INTEGER PRIMARY KEY, uuid TEXT NOT NULL, kind TEXT, agent_id TEXT, ts TEXT, type TEXT,
-                    turn INTEGER, human INTEGER, interrupt INTEGER, is_error INTEGER,
+-- pos is the record's position in the archive of its kind. A uuid can repeat: Claude Code rewrites a
+-- session's first records, with the same uuid and changed fields, when the session is reopened.
+CREATE TABLE events(id INTEGER PRIMARY KEY, uuid TEXT NOT NULL, kind TEXT, pos INTEGER, agent_id TEXT, ts TEXT,
+                    type TEXT, turn INTEGER, human INTEGER, interrupt INTEGER, is_error INTEGER,
                     ref_agent_id TEXT, ref_task_id TEXT);
 -- The tool calls and results inside an event: a tool_use block (role 'use', with the tool's name) or a
 -- tool_result block (role 'result', with its error flag). Join the two on tool_use_id to pair them.
 CREATE TABLE event_tools(event INTEGER, tool_use_id TEXT, role TEXT, name TEXT, is_error INTEGER);
-CREATE UNIQUE INDEX events_uuid ON events(uuid);
+CREATE INDEX events_uuid ON events(uuid);
 CREATE INDEX events_agent ON events(agent_id, ts);
 CREATE INDEX events_turn ON events(turn) WHERE turn IS NOT NULL;
 CREATE INDEX events_ref_agent ON events(ref_agent_id) WHERE ref_agent_id IS NOT NULL;
@@ -73,6 +87,15 @@ def open_catalog(bundle_dir):
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA query_only = ON")
+    try:
+        layout = db.execute("SELECT v FROM bundle WHERE k = 'layout'").fetchone()
+    except sqlite3.DatabaseError:
+        layout = None
+    if layout is None or layout[0] != str(LAYOUT):
+        db.close()
+        found = f"layout {layout[0]}" if layout and str(layout[0]).isdigit() else "an older layout"
+        raise BundleError(f"the catalog in {bundle_dir} has {found}, not layout {LAYOUT}; rebuild it with "
+                          f"`clp-bundle {bundle_dir} rebuild` (or, for a bundle with no manifest.json, `build --force`)")
     return db
 
 
@@ -224,16 +247,18 @@ def brief(record, width=90):
     return f"{stamp} {record.get('type', '?'):<10} {detail}"
 
 
-def resolve_event(db, ident):
-    """The one event a uuid names, or a unique prefix of it of eight or more characters."""
-    row = db.execute("SELECT * FROM events WHERE uuid = ?", (ident,)).fetchone()
-    if row:
-        return row
+def resolve_events(db, ident):
+    """The events a uuid names, or a unique prefix of it of eight or more characters. A uuid can
+    name several events: Claude Code rewrites some records, with the same uuid, when a session is
+    reopened."""
+    rows = db.execute("SELECT * FROM events WHERE uuid = ? ORDER BY kind, pos", (ident,)).fetchall()
+    if rows:
+        return rows
     if len(ident) >= 8:
-        rows = db.execute("SELECT * FROM events WHERE uuid LIKE ? LIMIT 3", (ident + "%",)).fetchall()
-        if len(rows) == 1:
-            return rows[0]
-        if len(rows) > 1:
+        uuids = [r[0] for r in db.execute("SELECT DISTINCT uuid FROM events WHERE uuid LIKE ? LIMIT 3", (ident + "%",))]
+        if len(uuids) == 1:
+            return db.execute("SELECT * FROM events WHERE uuid = ? ORDER BY kind, pos", (uuids[0],)).fetchall()
+        if len(uuids) > 1:
             raise BundleError(f"{ident} is a prefix of several records")
     raise BundleError(f"no event with uuid: {ident} (records without a uuid are not events)")
 
@@ -268,20 +293,21 @@ def linked_nodes(db, event):
     return found
 
 
-def fetch_event_record(bundle_dir, db, event, wrapper):
-    """The event's full record, read from the archive of its kind by uuid."""
-    ids = archive_ids(db, event["kind"])
+def fetch_event_records(bundle_dir, db, uuid, kind, wrapper):
+    """Every record with this uuid in the archive of `kind`, in archive order."""
+    ids = archive_ids(db, kind)
     if not ids:
-        raise BundleError(f"the catalog lists no {event['kind']} archive")
+        raise BundleError(f"the catalog lists no {kind} archive")
+    records = []
     for archive_id in ids:
-        proc = subprocess.run(search_command(bundle_dir, wrapper, archive_id, f'uuid:"{event["uuid"]}"'),
+        proc = subprocess.run(search_command(bundle_dir, wrapper, archive_id, f'uuid:"{uuid}"'),
                               capture_output=True, text=True, encoding="utf-8")
         if proc.returncode != 0:
             raise BundleError(f"search failed ({proc.returncode}): {proc.stderr.strip()[-300:]}")
-        for line in proc.stdout.splitlines():
-            if line.startswith("{"):
-                return json.loads(line)
-    raise BundleError(f"the archive holds no record with uuid {event['uuid']}; the catalog and archives disagree")
+        records += [json.loads(line) for line in proc.stdout.splitlines() if line.startswith("{")]
+    if not records:
+        raise BundleError(f"the archive holds no record with uuid {uuid}; the catalog and archives disagree")
+    return records
 
 
 # ---- The engine seam: everything that runs clp-s goes through these functions (and search_command
@@ -305,20 +331,215 @@ def resolve_clp_s(explicit=None):
     raise BundleError("clp-s is not available. Run the plugin installer, set CLP_S_BIN or pass --clp-s.")
 
 
-def compress(clp_s, archives_dir, files, timestamp_key="timestamp"):
-    """Compress files into archives_dir as one compress run; returns the IDs of the archives it made."""
+class Prepared:
+    """A file as clp-s will read it: `path` is the file itself, or a copy with NUL bytes removed."""
+
+    def __init__(self, source, path, records, nul_bytes, damaged_lines):
+        self.source, self.path, self.records = source, path, records
+        self.nul_bytes, self.damaged_lines = nul_bytes, damaged_lines
+
+
+def prepare(source, workdir):
+    """Count a JSONL file's records (non-blank lines, which is what clp-s counts) and, if it contains
+    NUL bytes, write a copy without them into workdir. A raw NUL byte is never part of valid JSON
+    (JSON writes it as \\u0000), so it is damage from a lost write and removing it drops no data. A
+    line that is blank once they are gone is dropped too."""
+    records = nul_bytes = damaged = number = last_number = 0
+    last = b""
+    with open(source, "rb") as fh:                      # one line at a time: files can be large
+        for line in fh:
+            number += 1
+            nul = line.count(b"\x00")
+            if nul:
+                nul_bytes += nul
+                damaged += 1
+                line = line.replace(b"\x00", b"")
+            if line.strip():
+                records += 1
+                last, last_number = line, number
+    # clp-s drops a record cut off at the end of a file without a word, so check the last one here.
+    if last:
+        try:
+            json.loads(last)
+        except ValueError:
+            if last.endswith(b"\n"):
+                raise BundleError(f"{source}:{last_number}: not a JSON record") from None
+            raise BundleError(f"{source}:{last_number}: the last record is cut off (the file ends in the middle of "
+                              "it); if the session is still running, build it once it has stopped") from None
+    if not nul_bytes:
+        return Prepared(source, source, records, 0, 0)
+    path = os.path.join(workdir, f"{len(os.listdir(workdir)):06d}-{os.path.basename(source)}")
+    with open(source, "rb") as src, open(path, "wb") as dst:
+        for line in src:
+            line = line.replace(b"\x00", b"")
+            if line.strip():
+                dst.write(line if line.endswith(b"\n") else line + b"\n")
+    return Prepared(source, path, records, nul_bytes, damaged)
+
+
+def compress(clp_s, archives_dir, prepared, timestamp_key="timestamp"):
+    """Compress the prepared files into archives_dir as one compress run, in the order given; returns
+    the ID of the archive it made. Positions in the archive follow that order, so file k holds
+    positions sum(records of files before k) onward."""
     import tempfile
     before = set(os.listdir(archives_dir)) if os.path.isdir(archives_dir) else set()
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as listing:
-        listing.write("\n".join(files) + "\n")
+        listing.write("\n".join(p.path for p in prepared) + "\n")
     try:
         proc = subprocess.run([clp_s, "c", "--timestamp-key", timestamp_key, "--files-from", listing.name, archives_dir],
                               capture_output=True, text=True, encoding="utf-8")
     finally:
         os.remove(listing.name)
     if proc.returncode != 0:
-        raise BundleError(f"clp-s could not compress {len(files)} files: {proc.stderr.strip()[-400:]}")
-    return sorted(set(os.listdir(archives_dir)) - before)
+        raise BundleError(_compress_error(proc.stderr, prepared))
+    made = sorted(set(os.listdir(archives_dir)) - before)
+    if len(made) != 1:
+        raise BundleError(f"clp-s made {len(made)} archives from one compress run; the bundle expects one per kind")
+    return made[0]
+
+
+def _compress_error(stderr, prepared):
+    """clp-s's parse error, as the source file and line it points at."""
+    m = re.search(r"while trying to parse (.+?) after parsing (\d+) bytes", stderr)
+    if m:
+        for p in prepared:
+            if p.path == m.group(1):
+                # clp-s counts the bytes up to the end of the last record it could read, so the bad one
+                # starts at the first byte after that which is not whitespace.
+                with open(p.path, "rb") as fh:
+                    data = fh.read()
+                start = int(m.group(2))
+                while start < len(data) and data[start:start + 1].isspace():
+                    start += 1
+                line = data[:start].count(b"\n") + 1
+                where = f"{p.source}:{line}" if p.path == p.source else f"{p.source} (line {line} once NUL bytes are removed)"
+                return f"{where}: not a JSON record"
+    return f"clp-s could not compress {len(prepared)} files: {stderr.strip()[-400:]}"
+
+
+class ArchiveRecords:
+    """Every record of one archive, in its original order, without holding them in memory. A search writes
+    each record with its position through clp-s's file output handler into a temporary file; only an index
+    from position to byte range is kept, and each record is read from the file and parsed when asked for.
+    `expected` is how many records the archive holds; positions must run 0 to expected - 1 with no gap.
+    Close it to remove the temporary file."""
+
+    def __init__(self, clp_s, archive_dir, expected):
+        import array
+        import tempfile
+        fd, self._path = tempfile.mkstemp(suffix=".msgpack")
+        os.close(fd)
+        self._file = None
+        try:
+            proc = subprocess.run([clp_s, "s", archive_dir, "*", "file", "--path", self._path], capture_output=True,
+                                  text=True, encoding="utf-8")
+            if proc.returncode != 0:
+                raise BundleError(f"clp-s could not read {archive_dir}: {proc.stderr.strip()[-300:]}")
+            self._offset = array.array("Q", bytes(8 * expected))
+            self._length = array.array("Q", bytes(8 * expected))
+            seen = bytearray(expected)
+            self._file = open(self._path, "rb")
+            for position, start, size in _file_output_rows(self._file):
+                if not 0 <= position < expected or seen[position]:
+                    raise BundleError(f"{archive_dir}: position {position} is out of range or repeated")
+                seen[position] = 1
+                self._offset[position], self._length[position] = start, size
+            if seen.count(1) != expected:
+                raise BundleError(f"{archive_dir}: read {seen.count(1)} records, expected positions 0 to {expected - 1}")
+        except BaseException:
+            self.close()
+            raise
+
+    def records(self, first, count):
+        """The records at positions first to first + count - 1, parsed one at a time."""
+        fd = self._file.fileno()
+        for position in range(first, first + count):
+            yield json.loads(os.pread(fd, self._length[position], self._offset[position]))
+
+    def close(self):
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+        if os.path.exists(self._path):
+            os.remove(self._path)
+
+
+class SourceRecords:
+    """One source file's records inside an ArchiveRecords: iterable any number of times, parsed each time."""
+
+    def __init__(self, archive, first, count):
+        self._archive, self.first, self._count = archive, first, count
+
+    def __iter__(self):
+        return self._archive.records(self.first, self._count)
+
+    def __len__(self):
+        return self._count
+
+
+def _file_output_rows(fh, chunk=1 << 22):
+    """(position, byte offset, byte length) of each record in clp-s's file output: a stream of msgpack arrays
+    [timestamp, record, original path, archive id, position]. Decodes only the msgpack types that output
+    uses. Reads the file in large chunks and skips over record text without copying it."""
+    fixed = {0xcc: ">B", 0xcd: ">H", 0xce: ">I", 0xcf: ">Q", 0xd0: ">b", 0xd1: ">h", 0xd2: ">i", 0xd3: ">q"}
+    fixed = {k: (struct.Struct(v).unpack_from, struct.calcsize(v)) for k, v in fixed.items()}
+    sizes = {0xd9: fixed[0xcc], 0xda: fixed[0xcd], 0xdb: fixed[0xce]}
+    buf, base, i = b"", 0, 0            # buf holds the file from byte `base`; i indexes into buf
+
+    def need(n):
+        """Make buf hold at least n bytes from i; False at a clean end of file."""
+        nonlocal buf, base, i
+        if len(buf) - i >= n:
+            return True
+        fh.seek(base + i)
+        base, buf, i = base + i, fh.read(max(n, chunk)), 0
+        if len(buf) < n:
+            if not buf and n == 1:
+                return False
+            raise BundleError("clp-s output ends in the middle of a result")
+        return True
+
+    def value():
+        """(integer, None) for an integer, (None, (offset, length)) for a string."""
+        nonlocal i
+        need(1)
+        b = buf[i]
+        i += 1
+        if b <= 0x7f:
+            return b, None
+        if b >= 0xe0:
+            return b - 0x100, None
+        if b in fixed:
+            unpack, size = fixed[b]
+            need(size)
+            v = unpack(buf, i)[0]
+            i += size
+            return v, None
+        if 0xa0 <= b <= 0xbf:
+            length = b & 0x1f
+        elif b in sizes:
+            unpack, size = sizes[b]
+            need(size)
+            length = unpack(buf, i)[0]
+            i += size
+        else:
+            raise BundleError(f"unexpected msgpack type 0x{b:02x} in clp-s output at byte {base + i - 1}")
+        start = base + i
+        i += length                      # may pass the end of buf; need() seeks past the text
+        return None, (start, length)
+
+    while need(1):
+        if buf[i] != 0x95:
+            raise BundleError(f"clp-s output: expected a 5-element array at byte {base + i}")
+        i += 1
+        value()
+        _, text = value()
+        value()
+        value()
+        position, _ = value()
+        if text is None or position is None:
+            raise BundleError("clp-s output: a result is not [timestamp, record, path, archive, position]")
+        yield position, text[0], text[1]
 
 
 def archive_record_counts(clp_s, archives_dir):
@@ -328,12 +549,3 @@ def archive_record_counts(clp_s, archives_dir):
     if proc.returncode != 0:
         raise BundleError(f"clp-s could not count the archives: {proc.stderr.strip()[-300:]}")
     return {r["archive_id"]: r["count"] for r in (json.loads(l) for l in proc.stdout.splitlines() if l.startswith("{"))}
-
-
-def count_records_with(clp_s, archive_dir, field):
-    """How many records of one archive have `field`."""
-    proc = subprocess.run([clp_s, "s", "--count", archive_dir, f"{field}:*"], capture_output=True, text=True,
-                          encoding="utf-8")
-    if proc.returncode != 0:
-        raise BundleError(f"clp-s could not count {field} in {archive_dir}: {proc.stderr.strip()[-300:]}")
-    return sum(json.loads(l)["count"] for l in proc.stdout.splitlines() if l.startswith("{"))

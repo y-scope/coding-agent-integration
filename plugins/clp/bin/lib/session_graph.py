@@ -1,8 +1,10 @@
-"""session_graph - the directed graph of one Claude Code session, from the IDs its files carry.
+"""session_graph - the directed graph of one Claude Code session, from the IDs its records carry.
 
-Reads the main log and, when the session has them, the subagent transcripts and their meta files,
-the workflow summaries and the workflow journals. Nothing is guessed from text except the
-completion notifications' task id and status; every edge comes from an ID in the logs:
+Works on a Session: the main log's records, and when the session has them, each agent's transcript
+records and meta, the workflow summaries and the workflow journals, all in their original order. It
+reads no files, so the records can come from the session's files or from an archive of them.
+Nothing is guessed from text except the completion notifications' task id and status; every edge
+comes from an ID in the logs:
 
   launch    an Agent or Workflow tool call to what it started: an agent's meta toolUseId, or its
             parentAgentId for nesting; a Workflow result's runId and taskId
@@ -21,9 +23,7 @@ workflow JSON keeps only the last instance's. An attempt belongs to the last ins
 or before it started. Stdlib only.
 """
 
-import glob
 import json
-import os
 import re
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -46,44 +46,50 @@ def iso(ts):
     return ts.strftime("%Y-%m-%dT%H:%M:%S") if ts else None
 
 
-def read_jsonl(path):
-    """The records of a JSONL file. A line that is not JSON stops the build: a derived catalog that
-    silently skipped records would disagree with the archive built from the same file."""
-    with open(path, encoding="utf-8") as fh:
-        for number, line in enumerate(fh, 1):
-            if not line.strip():
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError as err:
-                raise GraphError(f"{path}:{number}: not JSON ({err.msg})") from None
+class Session:
+    """One session's records, in their original order.
+
+    main         records                       the main log
+    metas        {agent id: meta}              each agent's .meta.json, plus "workflow_dir": the
+                                               wf_<id> folder it sat in, or None for a direct agent
+    transcripts  {agent id: records}           each agent's transcript
+
+    "records" is anything that can be iterated more than once (a list, or bundle.SourceRecords, which
+    parses records from an archive each time), so a large session need not be held in memory.
+    workflow_runs {run id: summary}            workflows/wf_<id>.json
+    journals     {run id: [row]}               subagents/workflows/wf_<id>/journal.jsonl
+    """
+
+    def __init__(self, main, metas=None, transcripts=None, workflow_runs=None, journals=None):
+        self.main = main
+        self.metas = metas or {}
+        self.transcripts = transcripts or {}
+        self.workflow_runs = workflow_runs or {}
+        self.journals = journals or {}
+        missing = sorted(set(self.metas) - set(self.transcripts))
+        if missing:
+            raise GraphError(f"agents with a meta file but no transcript: {', '.join(missing[:5])}")
 
 
-def ending_cause(last_line):
+def ending_cause(record):
     """Why an agent stopped, when its final record says so: an API error status, a timeout."""
-    m = re.search(r"API Error: (\d{3})", last_line)
+    text = json.dumps(record, ensure_ascii=False) if record else ""
+    m = re.search(r"API Error: (\d{3})", text)
     if m:
         return "api-" + m.group(1)
-    if re.search(r"timed out", last_line, re.I):
+    if re.search(r"timed out", text, re.I):
         return "timeout"
     return None
 
 
-def transcript_span(path):
-    """(first ts, last ts, records, tool calls, errors, ending cause) of an agent transcript."""
-    first = last = None
-    records = calls = errors = 0
-    last_line = ""
-    with open(path, encoding="utf-8") as fh:
-        lines = [l for l in fh if l.strip()]
-    if lines:
-        last_line = lines[-1]
-    for number, line in enumerate(lines, 1):
-        try:
-            r = json.loads(line)
-        except json.JSONDecodeError as err:
-            raise GraphError(f"{path}: not JSON ({err.msg})") from None
-        records += 1
+def transcript_span(records):
+    """(first ts, last ts, records, tool calls, errors, ending cause) of an agent transcript. Reads the
+    records once, so they can be a stream."""
+    first = last = final = None
+    count = calls = errors = 0
+    for r in records:
+        count += 1
+        final = r
         t = parse_ts(r.get("timestamp"))
         if t:
             first = t if first is None or t < first else first
@@ -94,7 +100,7 @@ def transcript_span(path):
                 if isinstance(b, dict):
                     calls += b.get("type") == "tool_use"
                     errors += bool(b.get("is_error"))
-    return first, last, records, calls, errors, ending_cause(last_line)
+    return first, last, count, calls, errors, ending_cause(final)
 
 
 class Graph:
@@ -111,11 +117,26 @@ class Graph:
         self.edges.append({"from": src, "to": dst, "kind": kind, "at": iso(at) if at else None, **attrs})
 
 
-def _scan_main(main_path, g, launches, notified):
+def _texts(r):
+    """The plain text a record carries: a string message, its text blocks, and an attachment's prompt."""
+    m = r.get("message")
+    texts = []
+    if isinstance(m, dict):
+        if isinstance(m.get("content"), str):
+            texts.append(m["content"])
+        elif isinstance(m.get("content"), list):
+            texts += [b["text"] for b in m["content"] if isinstance(b, dict) and isinstance(b.get("text"), str)]
+    at = r.get("attachment")
+    if isinstance(at, dict) and isinstance(at.get("prompt"), str):
+        texts.append(at["prompt"])
+    return texts
+
+
+def _scan_main(records, g, launches, notified):
     """Launches, their results and the completion notifications in the main log."""
     first = last = None
     prompts = []
-    for r in read_jsonl(main_path):
+    for r in records:
         t = parse_ts(r.get("timestamp"))
         if t:
             first = first or t
@@ -132,13 +153,7 @@ def _scan_main(main_path, g, launches, notified):
                         _record_result(launches[b["tool_use_id"]], r.get("toolUseResult"), b)
             elif isinstance(m.get("content"), str) and not m["content"].lstrip().startswith("<"):
                 prompts.append(t)
-        texts = []
-        if isinstance(m, dict) and isinstance(m.get("content"), str):
-            texts.append(m["content"])
-        at = r.get("attachment")
-        if isinstance(at, dict) and isinstance(at.get("prompt"), str):
-            texts.append(at["prompt"])
-        for txt in texts:
+        for txt in _texts(r):
             _note(txt, t, notified)
     g.node("main", "main", start=iso(first), end=iso(last), prompts=[iso(p) for p in prompts if p])
 
@@ -158,54 +173,37 @@ def _note(text, t, notified):
         notified[tid.group(1)] = (t, st.group(1) if st else None)
 
 
-def _scan_agent_for_workflows(path, owner, launches, notified):
+def _scan_agent_for_workflows(records, owner, launches, notified):
     """Workflow launches made from inside an agent transcript, with their results and any completion
-    notification that lands there. Cheap: only lines that mention them are parsed."""
+    notification that lands there."""
     mine = set()
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            if '"Workflow"' in line and '"tool_use"' in line:
-                r = json.loads(line)
-                m = r.get("message")
-                for b in (m.get("content") if isinstance(m, dict) and isinstance(m.get("content"), list) else []):
-                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Workflow":
-                        launches[b["id"]] = {"at": parse_ts(r.get("timestamp")), "name": "Workflow",
-                                             "input": b.get("input") or {}, "owner": owner}
-                        mine.add(b["id"])
-            elif mine and '"tool_result"' in line and any(i in line for i in mine):
-                r = json.loads(line)
-                for b in r["message"]["content"]:
-                    if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in mine:
-                        _record_result(launches[b["tool_use_id"]], r.get("toolUseResult"), b)
-            if "<task-notification>" in line:
-                r = json.loads(line)
-                _note(json.dumps(r), parse_ts(r.get("timestamp")), notified)
+    for r in records:
+        m = r.get("message")
+        content = m.get("content") if isinstance(m, dict) else None
+        for b in content if isinstance(content, list) else []:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use" and b.get("name") == "Workflow":
+                launches[b["id"]] = {"at": parse_ts(r.get("timestamp")), "name": "Workflow",
+                                     "input": b.get("input") or {}, "owner": owner}
+                mine.add(b["id"])
+            elif b.get("type") == "tool_result" and b.get("tool_use_id") in mine:
+                _record_result(launches[b["tool_use_id"]], r.get("toolUseResult"), b)
+        for txt in _texts(r):
+            _note(txt, parse_ts(r.get("timestamp")), notified)
 
 
-def build_graph(main_path):
-    """The Graph of the session whose main log is main_path; its subagents, workflows and journals
-    are read from the directory next to it that has the same name without .jsonl, if there is one."""
-    root = main_path[:-len(".jsonl")] if main_path.endswith(".jsonl") else main_path
+def build_graph(session):
+    """The Graph of a Session."""
     g = Graph()
     launches, notified = {}, {}
-    _scan_main(main_path, g, launches, notified)
+    _scan_main(session.main, g, launches, notified)
 
-    # agents: meta and transcript spans
-    metas, spans, paths = {}, {}, {}
-    for f in (glob.glob(root + "/subagents/agent-*.meta.json")
-              + glob.glob(root + "/subagents/workflows/*/agent-*.meta.json")):
-        aid = os.path.basename(f)[len("agent-"):-len(".meta.json")]
-        with open(f, encoding="utf-8") as fh:
-            m = json.load(fh)
-        m["workflow_dir"] = f.split("/workflows/")[1].split("/")[0] if "/workflows/" in f else None
-        metas[aid] = m
-        paths[aid] = (f"{root}/subagents/workflows/{m['workflow_dir']}/agent-{aid}.jsonl" if m["workflow_dir"]
-                      else f"{root}/subagents/agent-{aid}.jsonl")
-        if not os.path.isfile(paths[aid]):
-            raise GraphError(f"{f} has no transcript next to it: {paths[aid]}")
-        spans[aid] = transcript_span(paths[aid])
-    for aid, m in metas.items():
-        _scan_agent_for_workflows(paths[aid], f"attempt:{aid}" if m["workflow_dir"] else f"agent:{aid}", launches, notified)
+    metas, spans = session.metas, {}
+    for aid, m in metas.items():            # each transcript is read once, and held only while it is used
+        records = list(session.transcripts[aid])
+        spans[aid] = transcript_span(records)
+        _scan_agent_for_workflows(records, f"attempt:{aid}" if m["workflow_dir"] else f"agent:{aid}", launches, notified)
 
     # direct and nested agents
     for aid, m in metas.items():
@@ -225,11 +223,7 @@ def build_graph(main_path):
             g.edge(f"agent:{aid}", "main", "result", notified[aid][0], status=notified[aid][1])
 
     # workflows: instances, runs, phases, logical agents, attempts
-    wf_json = {}
-    for f in glob.glob(root + "/workflows/wf_*.json"):
-        with open(f, encoding="utf-8") as fh:
-            d = json.load(fh)
-        wf_json[d["runId"]] = d
+    wf_json = session.workflow_runs
     instances_of_run = defaultdict(list)
     for tid, launch in sorted(launches.items(), key=lambda kv: kv[1]["at"] or datetime.max.replace(tzinfo=None)):
         if launch["name"] != "Workflow":
@@ -246,10 +240,7 @@ def build_graph(main_path):
 
     instance_of_attempt = {}
     for run, d in sorted(wf_json.items()):
-        journal = []
-        jp = f"{root}/subagents/workflows/{run}/journal.jsonl"
-        if os.path.exists(jp):
-            journal = list(read_jsonl(jp))
+        journal = session.journals.get(run, [])
         attempts = [a for a, m in metas.items() if m["workflow_dir"] == run]
         instances = instances_of_run.get(run, [])
         if not instances:
