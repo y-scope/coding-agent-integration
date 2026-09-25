@@ -8,6 +8,7 @@ allowed-tools:
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-session-turns:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress:*)"
+  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle:*)"
 ---
 
 # Claude Code Trajectory
@@ -41,9 +42,31 @@ Use `--agent claude` (default) or `--agent codex` if the user asks.
 
 4. Report compression stats: raw input bytes, archive bytes, compression ratio, file size reduction.
 
+   Then check whether the session launched agents or workflows:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --count ARCHIVE 'message.content.name:Agent OR message.content.name:Workflow'
+   ```
+
+   If it did (any count), the main log is not the whole session: it records only each launch, and
+   `Agent` returns `async_launched` at once. What each agent did, how long it ran, what failed and
+   what was retried is in other files. Build a **bundle** of the session (see Multi-agent sessions
+   below) and pass it to the subagent as BUNDLE alongside ARCHIVE:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle" /tmp/yscope-clp-bundles/<SESSION_ID> build --session-id <SESSION_ID>
+   ```
+
+   Write every path out in full, as here: a command with a shell variable (`$B`, `${TMPDIR}`) no longer
+   matches this skill's allowed tools, so it waits for approval.
+
+   If that directory already holds a bundle (it has `manifest.json`), reuse it; add `--force` only
+   when the session has changed since. Relay any `REPAIRED` line to the user: that log had NUL bytes
+   from a lost write, which the build removed (the source file is untouched).
+
 5. **Spawn a subagent to run all searches.** Use the Agent tool with model `haiku` (fall back to `sonnet`). The subagent runs searches, processes raw JSON, and returns only a compact report — keeping the main context clean.
 
-Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
+Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`, and `BUNDLE` for a multi-agent session; otherwise drop the multi-agent block):
 
    ```
    Analyze this Claude Code CLP session archive: ARCHIVE
@@ -79,6 +102,46 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
    - Turn time: PLUGIN_BIN/clp-s-session-turns ARCHIVE splits each turn (one human prompt to the next) into human wait, tool, model, idle and other time, and lists the longest tool waits. Do not add up subtype:turn_duration records: they nest inside each other and can be negative.
    - Compaction: subtype:compact_boundary
 
+   Multi-agent session: BUNDLE is a bundle of the whole session (main log, every agent's
+   transcript, workflow runs and journals). Answer structure in SQL first, then fetch evidence:
+   - PLUGIN_BIN/clp-bundle BUNDLE sql "SELECT ..." (read-only) over the catalog:
+     nodes(id, kind, label, agent_id, run_id, task_id, instance, phase, start, end, status, cause,
+     attempts, tool_calls, errors, tokens, attrs JSON); kind is main, agent (direct or nested),
+     run (a workflow's definition), workflow (one launch of it; a resume is another, id ending ~2),
+     phase, unit (a logical workflow agent), attempt (one try of a unit), launch_error. Attempt
+     status: ok, failed (cause api-503, api-400, timeout), stalled-retried (no outcome, later
+     retried), unresolved. Agent status: completed, failed, no-notification.
+     edges(src, dst, kind: launch, result, contains, executes, ran, resume, phase_order; tool_use_id).
+     events(uuid, kind, pos, agent_id, ts, type, turn, human, interrupt, is_error, ref_agent_id,
+     ref_task_id) with event_tools(event -> events.id, tool_use_id, role use|result, name, is_error):
+     one row per user or assistant record, no text.
+   - Starter SQL:
+     failures by cause: select kind, status, cause, count(*) n from nodes where kind in ('agent','attempt') group by 1,2,3 order by n desc
+     workflow runs by wasted attempts: select r.label, r.status, count(*) attempts, sum(a.status != 'ok') not_ok from nodes a join nodes r on r.id = 'run:' || a.run_id where a.kind = 'attempt' group by a.run_id order by not_ok desc
+     longest agents: select id, label, status, round((julianday(end) - julianday(start)) * 1440, 1) minutes from nodes where kind = 'agent' order by minutes desc limit 5
+     last tool before each stall: select coalesce((select t.name from events e join event_tools t on t.event = e.id and t.role = 'use' where e.agent_id = n.agent_id order by e.ts desc, e.id desc limit 1), '(none)') last_tool, count(*) n from nodes n where n.kind = 'attempt' and n.status = 'stalled-retried' group by 1 order by n desc
+   - Evidence: PLUGIN_BIN/clp-bundle BUNDLE show ID (catalog row, parents, children, archive and
+     query) and evidence ID (its records, time-ordered; a run's evidence is its runtime log, with
+     stall and API-error lines). ID is a node id, an agent id or prefix, a run id or a task id.
+   - Back from a record to the graph: who --uuid UUID (the agent it belongs to, what it launched or
+     reports on), who --agent-id, who --tool-use-id, who --at YYYY-MM-DDTHH:MM (UTC).
+   - Records by agent, turn, tool or flag: events --agent ID --tool Bash --errors --interrupts;
+     one full record: record UUID.
+   - KQL over one kind of log: PLUGIN_BIN/clp-s-search-kql --archive-id ID BUNDLE/archives 'KQL'
+     (IDs: sql "select kind, archive_id from archives"; kinds main, agent, workflow-agent,
+     workflow-journal, workflow-run). Turn time and fields read the main log only: pass
+     BUNDLE/archives/<main archive id> to clp-s-session-turns and clp-s-schema-tree.
+   To say why something failed, read one example of each cause before explaining it: evidence on a
+   stalled attempt shows its last tool result, the silence and the runtime's interrupt; evidence on
+   run:ID shows the runtime's stall and API-error lines. The cause column is a label, not an explanation.
+   Write paths out in full; a command with a shell variable needs approval.
+   Do not conclude:
+   - that a workflow succeeded from status "completed": the runtime reports it with agents stalled
+     or failed; count attempts by status;
+   - an order of work from phase_order edges: phases overlap (workflows are pipelined);
+   - which agent's output fed which: no log records data flow between agents;
+   - that one run is one launch: a resume reuses the run id, so compare its workflow instances.
+
    Return ONLY (no raw JSON, no header lines):
    1. Archive path
    2. Queries run (KQL string only, one per line)
@@ -112,6 +175,8 @@ For broad trajectory debugging, suggest using a subagent and ask it to return on
 | Claude time per turn | `clp-s-session-turns ARCHIVE` (not a KQL query) |
 | Claude turn_duration records | `subtype:turn_duration AND durationMs >= 30000` (these nest inside each other, so use them only to find a moment, not to add up time) |
 | Claude compaction | `subtype:compact_boundary` |
+| Multi-agent: failures and retries per agent | `clp-bundle BUNDLE sql "select kind, status, cause, count(*) from nodes where kind in ('agent','attempt') group by 1,2,3"` (not KQL; see Multi-agent sessions) |
+| Multi-agent: one agent's story | `clp-bundle BUNDLE show AGENT_ID`, then `clp-bundle BUNDLE evidence AGENT_ID` |
 | Harness runs | `"swebench.harness.run_evaluation" OR "run_evaluation"` |
 | Harness reports | `"report.json" OR "instance_results.jsonl" OR "results.json"` |
 | Test failures | `"FAILED" OR "AssertionError" OR "Traceback"` |
@@ -167,3 +232,31 @@ CLP searches the compressed archive — unmatched records are never decompressed
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'semantic("task not found errors")'
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'semantic("build failures") AND message.content.name:Bash'
 ```
+
+## Multi-agent sessions
+
+A session that launches agents or workflows is spread over many files: the main log, one transcript
+per agent (thousands for workflow-heavy sessions), workflow summaries and journals, and the agents'
+meta files. `clp-bundle` keeps them as one bundle: one CLP archive per kind of log, plus a SQLite
+catalog of how they connect (who launched whom, workflow runs and their resumed instances, retried
+attempts with a failure cause, timing, and one row per record). SQL answers structure; CLP holds the
+records; the two point at each other by the IDs the records carry.
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle" /tmp/yscope-clp-bundles/<SESSION_ID> build --session-id <SESSION_ID>   # or --session-file PATH.jsonl
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle" /tmp/yscope-clp-bundles/<SESSION_ID> sql "select kind, status, cause, count(*) from nodes where kind in ('agent','attempt') group by 1,2,3"
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle" /tmp/yscope-clp-bundles/<SESSION_ID> show <AGENT_ID>
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle" /tmp/yscope-clp-bundles/<SESSION_ID> evidence <AGENT_ID>
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle" /tmp/yscope-clp-bundles/<SESSION_ID> who --uuid <UUID>
+```
+
+- Building takes seconds (a 290 MB session with 1,426 agent transcripts: about 12 s). A session with
+  no agents gets a catalog with only its main thread, so build a bundle only when step 4 finds launches.
+- The build stops on a file it does not recognize, a line that is not JSON, or a last record cut off
+  mid-write, naming file and line. A cut-off last record usually means the session is still running:
+  tell the user and build once it has stopped. The session you are running in is still being written,
+  so a bundle of it would be incomplete even when the build succeeds.
+- A catalog from an older plugin version is refused with the command that rebuilds it
+  (`clp-bundle BUNDLE rebuild`); run it.
+- Claude Code sessions only.
+

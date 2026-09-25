@@ -133,3 +133,23 @@ class BreakdownTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RefusesSeveralArchives(unittest.TestCase):
+    """A bundle's archives/ holds the main log and the agent transcripts; reading it all as one session
+    would count every agent's prompt as a human prompt."""
+
+    def test_a_directory_of_several_archives_is_refused_with_the_way_out(self):
+        import subprocess, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            archives = os.path.join(tmp, "bundle", "archives")
+            for name in ("a1", "a2"):
+                os.makedirs(os.path.join(archives, name))
+                for f in ("header", "table_metadata"):
+                    open(os.path.join(archives, name, f), "w").close()
+            open(os.path.join(tmp, "bundle", "catalog.sqlite"), "w").close()
+            script = os.path.join(os.path.dirname(__file__), "..", "bin", "clp-s-session-turns")
+            p = subprocess.run([script, archives, "--search-wrapper", "/nonexistent"], capture_output=True, text=True)
+            self.assertEqual(p.returncode, 2)
+            self.assertIn("holds 2 archives", p.stderr)
+            self.assertIn("select archive_id from archives where kind='main'", p.stderr)
