@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+"""
+clp-bundle - move between a session bundle's catalog and the CLP records behind it.
+
+Usage:
+  clp-bundle BUNDLE_DIR build (--session-file PATH | --session-id ID) [--claude-home DIR] [--clp-s PATH] [--force]
+  clp-bundle BUNDLE_DIR show ID [--json]
+  clp-bundle BUNDLE_DIR evidence ID [--tail N | --all] [--raw]
+  clp-bundle BUNDLE_DIR who (--agent-id ID | --tool-use-id ID | --task-id ID | --uuid ID | --at TIME)
+                            [--kind LIST] [--limit N] [--json]
+  clp-bundle BUNDLE_DIR events [--agent ID] [--turn N] [--tool NAME] [--errors] [--interrupts]
+                            [--type T] [--after TIME] [--before TIME] [--limit N] [--json]
+  clp-bundle BUNDLE_DIR record UUID [--raw]
+  clp-bundle BUNDLE_DIR sql QUERY [--json]
+
+BUNDLE_DIR holds catalog.sqlite, archives/ and files/. ID is a node id (attempt:a1b2..,
+agent:.., wf:.., run:.., unit:..), an agent id (or a unique prefix of six or more
+characters), a run id or a task id.
+
+  build     Make BUNDLE_DIR from one Claude Code session: its main log, subagent transcripts, workflow
+            summaries and journals become CLP archives (one archive per kind of log), and the catalog
+            records the graph (agents, workflow runs and their resumed instances, retried attempts, failure
+            causes, timing), the events, and where every source file went. Tool results, file snapshots,
+            tasks and workflow scripts are copied into files/. --session-file names the main .jsonl;
+            --session-id finds it under --claude-home (default ~/.claude). A file that belongs to the
+            session and matches no rule stops the build. Refuses an existing directory; --force replaces
+            an existing bundle. A session with no subagents or workflows gets a catalog with only its
+            main thread. Claude Code sessions only.
+  show      The catalog's row for a node: status, cause, time, where it sits in the graph
+            (parents, children, unit, phase), and which archive and query hold its records.
+  evidence  Those records, read from the archive and sorted by time (the last N, 8 by
+            default; --all for every one; --raw for the NDJSON). A run's evidence is its
+            workflow record, with the runtime's log lines.
+  who       From a record's ID or a moment back to the node: an agent id, the tool_use id of a
+            launch, a task id, or --at a UTC time (nodes running then; --kind picks which of
+            agent, workflow, attempt are listed, default agent,workflow).
+  events    The catalog's rows for records (no text): time, agent, type, the tools called, error and
+            interrupt flags, the turn (main thread) and the uuid. Filter by agent, turn, tool name,
+            errors, interrupts, type and time. Events cover user and assistant records and any record
+            that refers to an agent or task; hook and reminder attachments, system rows and rows
+            without a uuid are counted in the bundle table (events_unlisted_*, events_skipped_*), not listed.
+  record    One event's full record, read from its archive by uuid (--raw for the JSON).
+  sql       A read-only query on the catalog.
+
+Options:
+  --search-wrapper P   Search wrapper (default: clp-s-search-kql next to this script).
+
+Times in the catalog are UTC. The catalog is derived: it names records by the IDs they
+carry (agentId, runId) and stores no offsets, so it can be rebuilt from the archives.
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+
+import bundle as B  # noqa: E402
+
+
+def minutes(node):
+    try:
+        from datetime import datetime
+        f = "%Y-%m-%dT%H:%M:%S"
+        return round((datetime.strptime(node["end"], f) - datetime.strptime(node["start"], f)).total_seconds() / 60, 1)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def cmd_build(args):
+    import glob
+    import bundle_build
+    if args.session_file:
+        main_path = args.session_file
+    else:
+        home = os.path.expanduser(args.claude_home or "~/.claude")
+        hits = glob.glob(os.path.join(home, "projects", "*", args.session_id + ".jsonl"))
+        if len(hits) != 1:
+            raise B.BundleError(f"expected one session {args.session_id} under {home}/projects, found {len(hits)}")
+        main_path = hits[0]
+    result = bundle_build.build(main_path, args.bundle, clp_s=args.clp_s, claude_home=args.claude_home,
+                                force=args.force, log=print)
+    for name, value in result["graph_facts"]:
+        print(f"GRAPH {name}={json.dumps(value)}")
+    for problem in result["graph_problems"]:
+        print(f"WARNING {problem}")
+    print(f"BUNDLE {result['out']} session={result['session_id']} files={result['files']} "
+          f"catalog_bytes={result['catalog_bytes']} seconds={result['seconds']:.1f}")
+    return 0
+
+
+def cmd_show(args, db):
+    node = B.resolve(db, args.id)
+    info = B.describe(db, node)
+    if args.json:
+        print(json.dumps(info, indent=1, default=str))
+        return 0
+    n = info
+    print(f"NODE {n['id']} kind={n['kind']} label={json.dumps(n.get('label'))}")
+    print(f"STATUS {n.get('status', '-')} cause={n.get('cause', '-')} attempts={n.get('attempts', '-')} "
+          f"tool_calls={n.get('tool_calls', '-')} errors={n.get('errors', '-')}")
+    print(f"TIME {n.get('start', '-')} -> {n.get('end', '-')} minutes={minutes(node)}")
+    ctx = " ".join(f"{k}={n[k]}" for k in ("run_id", "task_id", "instance", "phase") if n.get(k))
+    if n.get("unit"):
+        ctx += f" unit={n['unit']['id']}"
+    if ctx:
+        print("CONTEXT " + ctx)
+    for p in n["parents"]:
+        print(f"PARENT {p['edge']} {p['id']} {json.dumps(p['label'])}" + (f" via={p['via']}" if p.get("via") else ""))
+    for c in n["children"]:
+        print(f"CHILDREN {c['edge']} {c['kind']}={c['n']}")
+    for r in n["results"]:
+        print(f"RESULT at={r['at']} {r['dst']}")
+    if n.get("query"):
+        print(f"ARCHIVE {','.join(n['archives'])} query={n['query']}")
+        print(f"EVIDENCE clp-bundle {args.bundle} evidence {n['id']}")
+    else:
+        print("ARCHIVE - (no records of its own)")
+    for key, value in n["attrs"].items():
+        if key == "error":
+            print(f"ERROR {value}")
+    return 0
+
+
+def cmd_evidence(args, db):
+    node = B.resolve(db, args.id)
+    if node["kind"] == "unit":
+        attempts = [r["dst"] for r in db.execute("SELECT dst FROM edges WHERE src = ? AND kind = 'contains' ORDER BY dst", (node["id"],))]
+        rows = sorted((db.execute("SELECT * FROM nodes WHERE id = ?", (a,)).fetchone() for a in attempts), key=lambda r: r["start"] or "")
+        print(f"UNIT {node['id']} label={json.dumps(node['label'])} attempts={len(rows)}")
+        for row in rows:
+            print(f"ATTEMPT {row['id']} {row['status']} cause={row['cause']} {row['start']} -> {row['end']}")
+            args.tail = min(args.tail, 3)  # a unit can have a dozen attempts; show each one's end
+            _print_records(args, db, row, header=False)
+        return 0
+    if node["kind"] == "launch_error":
+        print(json.loads(node["attrs"] or "{}").get("error", ""))
+        return 0
+    return _print_records(args, db, node, header=True)
+
+
+def _print_records(args, db, node, header):
+    records, command = B.fetch_records(args.bundle, db, node, args.search_wrapper)
+    if args.raw:
+        for r in records:
+            print(json.dumps(r, ensure_ascii=False))
+        return 0
+    if node["kind"] in ("run", "workflow"):
+        for r in records:
+            print(f"RUN {r.get('runId')} status={r.get('status')} agents={r.get('agentCount')} "
+                  f"duration_ms={r.get('durationMs')} error={json.dumps(r.get('error'))}")
+            for line in (r.get("logs") or [])[: (None if args.all else 20)]:
+                print("  LOG " + " ".join(str(line).split())[:160])
+            if not args.all and len(r.get("logs") or []) > 20:
+                print(f"  ... {len(r['logs']) - 20} more log lines (--all)")
+        return 0
+    shown = records if args.all or not args.tail else records[-args.tail:]
+    if header:
+        print(f"EVIDENCE {node['id']} records={len(records)} shown={len(shown)} archive={command[2]}")
+    for r in shown:
+        print("  " + B.brief(r))
+    return 0
+
+
+def cmd_who(args, db):
+    if args.agent_id:
+        node = B.resolve(db, args.agent_id)
+        rows = [dict(node)]
+        counts = {}
+    elif args.tool_use_id:
+        rows = [dict(r) for r in db.execute(
+            "SELECT n.id, n.kind, n.label, n.status, n.start, n.end, e.src AS launched_by FROM edges e "
+            "JOIN nodes n ON n.id = e.dst WHERE e.kind = 'launch' AND e.tool_use_id = ?", (args.tool_use_id,))]
+        counts = {}
+    elif args.uuid:
+        event = B.resolve_event(db, args.uuid)
+        links = B.linked_nodes(db, event)
+        if args.json:
+            print(json.dumps({"event": dict(event), "tools": B.event_tools(db, event),
+                              "nodes": [{"relation": rel, **dict(n)} for rel, n in links]}, indent=1, default=str))
+            return 0
+        print(_event_line(db, event))
+        for rel, n in links:
+            print(f"NODE {n['id']} kind={n['kind']} relation={rel} status={n['status']} {n['start']} -> {n['end']} "
+                  f"label={json.dumps(n['label'])}")
+        return 0
+    elif args.task_id:
+        rows = [dict(r) for r in db.execute("SELECT id, kind, label, status, start, end FROM nodes WHERE task_id = ?", (args.task_id,))]
+        counts = {}
+    else:
+        kinds = [k for k in args.kind.split(",") if k]
+        counts, rows = B.find_at(db, args.at, kinds, args.limit)
+    if not rows and not counts:
+        print("no match", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"running": counts, "nodes": rows}, indent=1, default=str))
+        return 0
+    if counts:
+        print("RUNNING " + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    for r in rows:
+        extra = f" launched_by={r['launched_by']}" if r.get("launched_by") else ""
+        print(f"NODE {r['id']} kind={r['kind']} status={r.get('status')} {r.get('start')} -> {r.get('end')} "
+              f"label={json.dumps(r.get('label'))}{extra}")
+    return 0
+
+
+def _event_line(db, event):
+    tools = B.event_tools(db, event)
+    used = ",".join(t["name"] for t in tools if t["role"] == "use" and t["name"])
+    results = sum(1 for t in tools if t["role"] == "result")
+    flags = " ".join(f for f, on in (("human", event["human"]), ("interrupt", event["interrupt"]), ("error", event["is_error"])) if on)
+    parts = [f"EVENT {event['ts']}", event["kind"], f"agent={event['agent_id'] or '-'}", event["type"]]
+    if event["turn"] is not None:
+        parts.append(f"turn={event['turn']}")
+    if used:
+        parts.append(f"tools={used}")
+    if results:
+        parts.append(f"results={results}")
+    for key in ("ref_agent_id", "ref_task_id"):
+        if event[key]:
+            parts.append(f"{key}={event[key]}")
+    if flags:
+        parts.append(flags)
+    parts.append(f"uuid={event['uuid']}")
+    return " ".join(parts)
+
+
+def cmd_events(args, db):
+    where, params = [], []
+    if args.agent:
+        node = B.resolve(db, args.agent)
+        where.append("e.agent_id = ?")
+        params.append(node["agent_id"])
+    if args.turn is not None:
+        where.append("e.turn = ?"); params.append(args.turn)
+    if args.tool:
+        where.append("EXISTS (SELECT 1 FROM event_tools t WHERE t.event = e.id AND t.role = 'use' AND t.name = ?)")
+        params.append(args.tool)
+    if args.errors:
+        where.append("e.is_error = 1")
+    if args.interrupts:
+        where.append("e.interrupt = 1")
+    if args.type:
+        where.append("e.type = ?"); params.append(args.type)
+    if args.after:
+        where.append("e.ts >= ?"); params.append(B.normalize_time(args.after))
+    if args.before:
+        where.append("e.ts <= ?"); params.append(B.normalize_time(args.before))
+    sql = "SELECT e.* FROM events e" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY e.ts, e.id LIMIT ?"
+    rows = db.execute(sql, (*params, args.limit)).fetchall()
+    if not rows:
+        print("no match", file=sys.stderr)
+        return 1
+    for event in rows:
+        if args.json:
+            print(json.dumps({**dict(event), "tools": B.event_tools(db, event)}, default=str))
+        else:
+            print(_event_line(db, event))
+    return 0
+
+
+def cmd_record(args, db):
+    event = B.resolve_event(db, args.uuid)
+    record = B.fetch_event_record(args.bundle, db, event, args.search_wrapper)
+    print(json.dumps(record, ensure_ascii=False) if args.raw else B.brief(record, width=200))
+    return 0
+
+
+def cmd_sql(args, db):
+    cur = db.execute(args.query)
+    names = [d[0] for d in cur.description or []]
+    if args.json:
+        for row in cur:
+            print(json.dumps(dict(zip(names, row)), default=str))
+    else:
+        print("\t".join(names))
+        for row in cur:
+            print("\t".join("" if v is None else str(v) for v in row))
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("bundle")
+    parser.add_argument("--search-wrapper",
+                        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"))
+    sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("build")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--session-file"); g.add_argument("--session-id")
+    p.add_argument("--claude-home"); p.add_argument("--clp-s"); p.add_argument("--force", action="store_true")
+    p = sub.add_parser("show"); p.add_argument("id"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("evidence"); p.add_argument("id"); p.add_argument("--tail", type=int, default=8)
+    p.add_argument("--all", action="store_true"); p.add_argument("--raw", action="store_true")
+    p = sub.add_parser("who")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--agent-id"); g.add_argument("--tool-use-id"); g.add_argument("--task-id"); g.add_argument("--uuid"); g.add_argument("--at")
+    p.add_argument("--kind", default="agent,workflow"); p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("events"); p.add_argument("--agent"); p.add_argument("--turn", type=int); p.add_argument("--tool")
+    p.add_argument("--errors", action="store_true"); p.add_argument("--interrupts", action="store_true"); p.add_argument("--type")
+    p.add_argument("--after"); p.add_argument("--before"); p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("record"); p.add_argument("uuid"); p.add_argument("--raw", action="store_true")
+    p = sub.add_parser("sql"); p.add_argument("query"); p.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    try:
+        if args.command == "build":
+            return cmd_build(args)
+        db = B.open_catalog(args.bundle)
+        return {"show": cmd_show, "evidence": cmd_evidence, "who": cmd_who, "events": cmd_events,
+                "record": cmd_record, "sql": cmd_sql}[args.command](args, db)
+    except (B.BundleError, __import__("session_graph").GraphError) as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+    except Exception as err:  # a bad SQL statement, a closed pipe
+        if isinstance(err, BrokenPipeError):
+            return 0
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
