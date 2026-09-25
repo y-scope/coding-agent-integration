@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""
+clp-s-session-turns - where a Claude Code session's time went, per turn.
+
+Usage:
+  clp-s-session-turns [options] ARCHIVES_DIR
+
+ARCHIVES_DIR is an archive made from one Claude Code session
+(clp-s-compress-session), compressed with or without --structurize-arrays.
+
+Options:
+  --top N             Print the N longest turns (default: 10; 0 prints all).
+  --min-minutes M     Skip turns shorter than M minutes (default: 0).
+  --waits N           Also print the N longest tool waits (default: 8).
+  --idle-minutes M    A stretch with no event for at least M minutes counts as
+                      idle (default: 10); shorter gaps count as other.
+  --human-tools LIST  Comma-separated tools that wait on the person (default:
+                      AskUserQuestion,ExitPlanMode).
+  --json              Print one JSON object instead of the lines below.
+  --search-wrapper P  Search wrapper (default: clp-s-search-kql next to this
+                      script).
+
+A turn runs from one human prompt to the next; records the harness injects (task
+notifications, command output, compaction summaries) are not prompts. Its time is
+split into human wait, tool, model, idle and other, with no second counted twice
+(see lib/session_turns.py for the definitions).
+
+Output, one line each:
+  TURNS=N PROMPTS=N TOOL_CALLS=N WITH_TOOL_DURATION=N
+  TOTAL_MIN e2e=… human=… tool=… model=… idle=… other=…
+  TURN n start=YYYY-MM-DD HH:MM e2e=… human=… tool=… model=… idle=… other=…
+       calls=N errors=N longest=<tool> <minutes> prompt="…"     (minutes, UTC)
+  WAIT <tool> <minutes> at=YYYY-MM-DD HH:MM [human]
+
+Why: the harness's own turn_duration records nest inside each other and can be
+negative, so their durations cannot be added up or attributed. Wall-clock time here
+is measured from timestamps only; the tool's own duration (toolUseResult.durationMs)
+is used only when Claude Code recorded one, which it often does not.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+
+from session_turns import (  # noqa: E402
+    HUMAN_WAIT_TOOLS,
+    IDLE_SECONDS,
+    breakdown,
+    collect,
+    longest_waits,
+)
+
+
+def read_records(wrapper, archives_dir):
+    """The user and assistant records of the archive, one at a time. A search with no
+    projection returns whole records, arrays included, whatever way they were stored."""
+    proc = subprocess.Popen(
+        [wrapper, archives_dir, 'type:"assistant" OR type:"user"'],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+    )
+    for line in proc.stdout:
+        if line.startswith("{"):
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    stderr = proc.stderr.read()
+    if proc.wait() != 0:
+        sys.stderr.write(stderr)
+        print(f"error: the search exited {proc.returncode}", file=sys.stderr)
+        sys.exit(1)
+
+
+def minutes(seconds):
+    return f"{seconds / 60:.1f}"
+
+
+def stamp(ts):
+    return ts.strftime("%Y-%m-%d %H:%M")
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("archives_dir")
+    parser.add_argument("--top", type=int, default=10)
+    parser.add_argument("--min-minutes", type=float, default=0.0)
+    parser.add_argument("--waits", type=int, default=8)
+    parser.add_argument("--idle-minutes", type=float, default=IDLE_SECONDS / 60)
+    parser.add_argument("--human-tools", default=",".join(HUMAN_WAIT_TOOLS))
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--search-wrapper",
+        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"),
+    )
+    args = parser.parse_args()
+
+    human_tools = tuple(t.strip() for t in args.human_tools.split(",") if t.strip())
+    session = collect(read_records(args.search_wrapper, args.archives_dir))
+    if not session["prompts"]:
+        print("error: no human prompts found; is this an archive of a Claude Code session?",
+              file=sys.stderr)
+        return 1
+    turns = breakdown(session, human_tools, args.idle_minutes * 60)
+    waits = longest_waits(session, args.waits)
+
+    keys = ("e2e_s", "human_s", "tool_s", "model_s", "idle_s", "other_s")
+    total = {k: sum(t[k] for t in turns) for k in keys}
+    shown = [t for t in turns if t["e2e_s"] >= args.min_minutes * 60]
+    shown.sort(key=lambda t: -t["e2e_s"])
+    if args.top > 0:
+        shown = shown[:args.top]
+    with_duration = sum(1 for t in session["tools"] if t["duration_ms"] is not None)
+
+    if args.json:
+        def row(t):
+            out = {k: (stamp(v) if k in ("start", "end") else v) for k, v in t.items()}
+            return out
+        print(json.dumps({
+            "turns": len(turns), "prompts": len(session["prompts"]),
+            "tool_calls": len(session["tools"]), "with_tool_duration": with_duration,
+            "total_s": total, "longest_turns": [row(t) for t in shown],
+            "longest_waits": [{"tool": t["name"], "seconds": w, "at": stamp(t["emitted"]),
+                               "human": t["name"] in human_tools} for t, w in waits],
+        }, indent=1))
+        return 0
+
+    print(f"TURNS={len(turns)} PROMPTS={len(session['prompts'])} "
+          f"TOOL_CALLS={len(session['tools'])} WITH_TOOL_DURATION={with_duration}")
+    print("TOTAL_MIN " + " ".join(f"{k[:-2]}={minutes(total[k])}".replace("e2e=", "e2e=") for k in keys))
+    for t in shown:
+        longest = f"{t['longest_wait'][0]} {minutes(t['longest_wait'][1])}" if t["longest_wait"] else "-"
+        print(f"TURN {t['index']} start={stamp(t['start'])} "
+              + " ".join(f"{k[:-2]}={minutes(t[k])}" for k in keys)
+              + f" calls={t['tool_calls']} errors={t['errors']} longest={longest} "
+              + f"prompt={json.dumps(t['prompt'], ensure_ascii=False)}")
+    for tool, seconds in waits:
+        flag = " human" if tool["name"] in human_tools else ""
+        print(f"WAIT {tool['name']} {minutes(seconds)} at={stamp(tool['emitted'])}{flag}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
