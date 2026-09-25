@@ -23,6 +23,10 @@ Allowed search controls:
   --tle TS                 Find records with UNIX epoch timestamp <= TS ms.
   -i, --ignore-case        Ignore case distinctions.
   --archive-id ID          Limit search to one archive ID.
+  --with-archive           Wrap each record as {"archive_id":ID,"record":{...}} so a
+                           hit says which archive it came from (the record itself is
+                           untouched). --count, --unique and stats queries already
+                           carry archive_id and are left as they are.
   --projection COLUMNS     Project comma-separated columns, e.g. level,message.
                            May be repeated. Mutually exclusive with --count
                            and --unique.
@@ -113,6 +117,7 @@ limit=""
 count_mode=0
 unique_field=""
 ignore_case=0
+with_archive=0
 projections=()
 archives_dir=""
 kql_query=""
@@ -210,6 +215,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -i|--ignore-case)
       ignore_case=1
+      shift
+      ;;
+    --with-archive)
+      with_archive=1
       shift
       ;;
     --experimental)
@@ -428,7 +437,13 @@ search_archive() {
     printf ' %q' "${cmd[@]}"
     echo
   } >&2
-  "${cmd[@]}"
+  # A record row is wrapped by string concatenation, so the record is passed through
+  # byte for byte. Rows that already say which archive they belong to are not wrapped.
+  if [[ "$with_archive" -eq 1 && "$count_mode" -eq 0 && -z "$unique_field" && "$trimmed_query" != stats.* ]]; then
+    "${cmd[@]}" | awk -v id="$(basename -- "$dir")" '/^\{/ { print "{\"archive_id\":\"" id "\",\"record\":" $0 "}"; next } { print }'
+  else
+    "${cmd[@]}"
+  fi
 }
 
 if [[ ${#archive_dirs[@]} -eq 1 ]]; then

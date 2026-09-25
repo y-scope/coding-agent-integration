@@ -212,9 +212,25 @@ Useful commands:
 ./plugins/clp/bin/clp-s-search-kql /tmp/session-archive 'level:error'
 ```
 
-Allowed controls: `--tge`, `--tle`, `--ignore-case`, `--archive-id`, `--projection`, `--semantic-endpoint`, `--semantic-top-k`, `--semantic-threshold`, `--embedding-batch-size`.
+Allowed controls: `--tge`, `--tle`, `--ignore-case`, `--archive-id`, `--with-archive`, `--projection`, `--semantic-endpoint`, `--semantic-top-k`, `--semantic-threshold`, `--embedding-batch-size`.
+
+The path may hold several archives (for example a bundle of logs compressed into one `--output-dir`): each is searched in turn and the results are concatenated. `--count` and `--unique` rows carry `archive_id`, `--limit` caps the total, `--archive-id` picks one archive, and `--with-archive` wraps each record row as `{"archive_id":…,"record":{…}}` so a hit says which archive it came from (the record itself is untouched).
 
 Use single quotes around KQL in shell commands. Numeric comparisons use infix syntax, for example `durationMs >= 30000`.
+
+## Session Bundles
+
+A bundle is one session's logs kept as CLP archives plus a SQLite catalog: `catalog.sqlite` (what exists and how it connects: agents, workflow runs and their resumed instances, retried attempts, failure causes, timing), `archives/` (one clp-s archives dir, one archive per kind of log) and `files/` (what is not a JSON log). The catalog names records by the IDs they carry (`agentId`, `runId`) and stores no offsets, so it is derived and can be rebuilt from the archives. `bin/clp-bundle` moves between the two:
+
+```bash
+./plugins/clp/bin/clp-bundle BUNDLE show a1b2c3d4         # the catalog's row: status, cause, time, parents, unit, archive and query
+./plugins/clp/bin/clp-bundle BUNDLE evidence a1b2c3d4     # its records from the archive, sorted by time (--tail N, --all, --raw)
+./plugins/clp/bin/clp-bundle BUNDLE who --at 2026-08-25T17:15          # what was running then (UTC)
+./plugins/clp/bin/clp-bundle BUNDLE who --tool-use-id toolu_…          # the node a launch created
+./plugins/clp/bin/clp-bundle BUNDLE sql "select cause, count(*) from nodes group by 1"   # read-only
+```
+
+`show` and `evidence` take a node id, an agent id (or a unique prefix of six or more characters), a run id or a task id; `--json` gives `show`, `who` and `sql` as JSON.
 
 ## Semantic Search
 
