@@ -64,7 +64,7 @@ Use `--agent claude` (default) or `--agent codex` if the user asks.
    when the session has changed since. Relay any `REPAIRED` line to the user: that log had NUL bytes
    from a lost write, which the build removed (the source file is untouched).
 
-5. **Spawn a subagent to run all searches.** Use the Agent tool with model `haiku` (fall back to `sonnet`). The subagent runs searches, processes raw JSON, and returns only a compact report — keeping the main context clean.
+5. **Spawn a subagent to run all searches.** Use the Agent tool and leave the model unset, so the subagent uses the session's model: the subagent's job is interpretation as much as querying (parallel agent time is not wall-clock time, a status is not an outcome, the last tool before a silence is not the tool that hung), and a small model got those wrong in testing where the session's model did not. Pick a smaller model only for a subagent that just counts or fetches. The subagent runs searches, processes raw JSON, and returns only a compact report — keeping the main context clean. Catalog SQL on a bundle returns compact rows, so a few such queries can also run in the main thread without a subagent.
 
 Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`, and `BUNDLE` for a multi-agent session; otherwise drop the multi-agent block):
 
@@ -149,7 +149,7 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`, and `BUNDLE` 
    4. 2–3 follow-up queries worth running
    ```
 
-6. Present the subagent's compact report to the user. Offer to drill deeper with a follow-up subagent or decompress for raw inspection:
+6. Before presenting the subagent's report, check any finding that is surprising, or that a caveat in the prompt warns about, with one query of your own (a bundle's `sql` or `evidence`, or a `--count`), and correct it rather than relaying it. Then present the compact report to the user. Offer to drill deeper with a follow-up subagent or decompress for raw inspection:
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress" \
@@ -194,9 +194,10 @@ Combine a user-provided repo, file, command, test, or instance ID with a starter
 CLP searches the compressed archive — unmatched records are never decompressed. Push logic into KQL rather than fetching all records and post-filtering in shell or Python.
 
 **For analyses that run 3+ queries, spawn a subagent:**
-- Prefer Haiku model (`haiku`); fall back to Sonnet (`sonnet`) if unavailable.
+- Leave the model unset so the subagent uses the session's model; use a smaller one only for pure counting or fetching.
 - Brief the subagent with the archive path and the analysis goal.
 - Ask it to return only: archive path, queries run, key findings, and next useful queries.
+- Check surprising findings with a query of your own before relaying them.
 - This keeps the parent context lean and parallelizes independent query batches.
 
 **Count matches with `--count` (in-engine, no records serialized; prints `{"archive_id":...,"count":N}`, or nothing when zero records match):**

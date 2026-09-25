@@ -32,7 +32,7 @@ Use `--agent codex` (default) or `--agent claude` if the user asks.
 
 4. Report compression stats: raw input bytes, archive bytes, compression ratio, file size reduction.
 
-5. **Spawn a subagent to run all searches.** Use model `haiku` (fall back to `sonnet`). The subagent runs searches, processes raw JSON, and returns only a compact report — keeping the main context clean.
+5. **Spawn a subagent to run all searches.** Use the session's model: the subagent's job is interpretation as much as querying (parallel agent time is not wall-clock time, a status is not an outcome, the last tool before a silence is not the tool that hung), and a small model got those wrong in testing where the session's model did not. Use a smaller model only for a subagent that just counts or fetches. The subagent runs searches, processes raw JSON, and returns only a compact report — keeping the main context clean.
 
 Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
 
@@ -114,7 +114,8 @@ Combine a user-provided repo, file, command, test, or instance ID with a starter
 CLP searches the compressed archive — unmatched records are never decompressed. Push logic into KQL rather than fetching all records and post-filtering in shell or Python.
 
 **For analyses that run 3+ queries, spawn a subagent:**
-- Prefer Haiku model (`haiku`); fall back to Sonnet (`sonnet`) if unavailable.
+- Use the session's model; use a smaller one only for pure counting or fetching.
+- Check surprising findings with a query of your own before relaying them.
 - Brief the subagent with the archive path and the analysis goal.
 - Ask it to return only: archive path, queries run, key findings, and next useful queries.
 - This keeps the parent context lean and parallelizes independent query batches.
