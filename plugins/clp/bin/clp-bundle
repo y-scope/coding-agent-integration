@@ -3,6 +3,7 @@
 clp-bundle - move between a session bundle's catalog and the CLP records behind it.
 
 Usage:
+  clp-bundle BUNDLE_DIR build (--session-file PATH | --session-id ID) [--claude-home DIR] [--clp-s PATH] [--force]
   clp-bundle BUNDLE_DIR show ID [--json]
   clp-bundle BUNDLE_DIR evidence ID [--tail N | --all] [--raw]
   clp-bundle BUNDLE_DIR who (--agent-id ID | --tool-use-id ID | --task-id ID | --uuid ID | --at TIME)
@@ -16,6 +17,15 @@ BUNDLE_DIR holds catalog.sqlite, archives/ and files/. ID is a node id (attempt:
 agent:.., wf:.., run:.., unit:..), an agent id (or a unique prefix of six or more
 characters), a run id or a task id.
 
+  build     Make BUNDLE_DIR from one Claude Code session: its main log, subagent transcripts, workflow
+            summaries and journals become CLP archives (one archive per kind of log), and the catalog
+            records the graph (agents, workflow runs and their resumed instances, retried attempts, failure
+            causes, timing), the events, and where every source file went. Tool results, file snapshots,
+            tasks and workflow scripts are copied into files/. --session-file names the main .jsonl;
+            --session-id finds it under --claude-home (default ~/.claude). A file that belongs to the
+            session and matches no rule stops the build. Refuses an existing directory; --force replaces
+            an existing bundle. A session with no subagents or workflows gets a catalog with only its
+            main thread. Claude Code sessions only.
   show      The catalog's row for a node: status, cause, time, where it sits in the graph
             (parents, children, unit, phase), and which archive and query hold its records.
   evidence  Those records, read from the archive and sorted by time (the last N, 8 by
@@ -56,6 +66,28 @@ def minutes(node):
         return round((datetime.strptime(node["end"], f) - datetime.strptime(node["start"], f)).total_seconds() / 60, 1)
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def cmd_build(args):
+    import glob
+    import bundle_build
+    if args.session_file:
+        main_path = args.session_file
+    else:
+        home = os.path.expanduser(args.claude_home or "~/.claude")
+        hits = glob.glob(os.path.join(home, "projects", "*", args.session_id + ".jsonl"))
+        if len(hits) != 1:
+            raise B.BundleError(f"expected one session {args.session_id} under {home}/projects, found {len(hits)}")
+        main_path = hits[0]
+    result = bundle_build.build(main_path, args.bundle, clp_s=args.clp_s, claude_home=args.claude_home,
+                                force=args.force, log=print)
+    for name, value in result["graph_facts"]:
+        print(f"GRAPH {name}={json.dumps(value)}")
+    for problem in result["graph_problems"]:
+        print(f"WARNING {problem}")
+    print(f"BUNDLE {result['out']} session={result['session_id']} files={result['files']} "
+          f"catalog_bytes={result['catalog_bytes']} seconds={result['seconds']:.1f}")
+    return 0
 
 
 def cmd_show(args, db):
@@ -255,6 +287,10 @@ def main():
     parser.add_argument("--search-wrapper",
                         default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"))
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("build")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--session-file"); g.add_argument("--session-id")
+    p.add_argument("--claude-home"); p.add_argument("--clp-s"); p.add_argument("--force", action="store_true")
     p = sub.add_parser("show"); p.add_argument("id"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("evidence"); p.add_argument("id"); p.add_argument("--tail", type=int, default=8)
     p.add_argument("--all", action="store_true"); p.add_argument("--raw", action="store_true")
@@ -271,10 +307,12 @@ def main():
     p = sub.add_parser("sql"); p.add_argument("query"); p.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
+        if args.command == "build":
+            return cmd_build(args)
         db = B.open_catalog(args.bundle)
         return {"show": cmd_show, "evidence": cmd_evidence, "who": cmd_who, "events": cmd_events,
                 "record": cmd_record, "sql": cmd_sql}[args.command](args, db)
-    except B.BundleError as err:
+    except (B.BundleError, __import__("session_graph").GraphError) as err:
         print(f"error: {err}", file=sys.stderr)
         return 1
     except Exception as err:  # a bad SQL statement, a closed pipe
