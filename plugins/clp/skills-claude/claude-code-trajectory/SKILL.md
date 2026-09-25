@@ -185,7 +185,7 @@ run the health check below, report what stands out with numbers, then offer the 
 | --- | --- | --- |
 | What happened | Turns and their prompts (`clp-s-session-turns`); the log shape dictionary (`log-insights` skill) | One turn, its time window (`--tge/--tle`), its records |
 | Where the time went | `clp-s-session-turns` | The longest turn, its longest wait, that tool call and its output |
-| What failed, and whether it recovered | Error counts; error messages grouped by template | One template, its examples, the records just before and after |
+| What failed, and whether it recovered | Error counts; error messages grouped by CLP's template: `clp-s-search-kql --experimental --projection 'uuid,shape(toolUseResult)' ARCHIVE 'message.content.is_error:true'` (every failed tool call carries its error as the top-level string `toolUseResult`; `shape()` cannot reach the text inside `message.content`) | One template's records: keep each record's `uuid` from that projection (exact), or filter with the template's literal text and `*` for each variable, as in `shape(toolUseResult): "Error: Exit code*"` (a superset: a typed `%int%` matches nothing); then the records just before and after |
 | Whether effort was wasted | Repeated templates (the same command shape many times) | Each occurrence and what followed it |
 | What it cost | `message.usage.*_tokens` on assistant records; compactions | The heaviest turns or agents |
 | What it produced | `type:"pr-link"` records; edits (`toolUseResult.structuredPatch`, `toolUseResult.filePath`) | The turn or agent that made a PR, the edits and test runs before it |
