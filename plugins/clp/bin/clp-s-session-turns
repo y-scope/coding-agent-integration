@@ -5,8 +5,13 @@ clp-s-session-turns - where a Claude Code session's time went, per turn.
 Usage:
   clp-s-session-turns [options] ARCHIVES_DIR
 
-ARCHIVES_DIR is an archive made from one Claude Code session
-(clp-s-compress-session), compressed with or without --structurize-arrays.
+ARCHIVES_DIR is an archive made from one Claude Code session's main log
+(clp-s-compress-session), compressed with or without --structurize-arrays. It
+must hold that one archive: a directory of several (such as a bundle's
+archives/, which also holds the agents' transcripts) is refused, because agent
+prompts would be counted as human prompts. For a bundle, pass the main log's
+archive, BUNDLE/archives/<id> where <id> is
+  clp-bundle BUNDLE sql "select archive_id from archives where kind='main'".
 
 Options:
   --top N             Print the N longest turns (default: 10; 0 prints all).
@@ -75,6 +80,18 @@ def read_records(wrapper, archives_dir):
         sys.exit(1)
 
 
+def archive_count(path):
+    """How many clp-s archives `path` is or holds: itself, or its immediate children, as the search
+    wrapper resolves them (an archive directory has a header and a table_metadata file)."""
+    def is_archive(p):
+        return os.path.isfile(os.path.join(p, "header")) and os.path.isfile(os.path.join(p, "table_metadata"))
+    if is_archive(path):
+        return 1
+    if not os.path.isdir(path):
+        return 0
+    return sum(1 for name in os.listdir(path) if is_archive(os.path.join(path, name)))
+
+
 def minutes(seconds):
     return f"{seconds / 60:.1f}"
 
@@ -98,6 +115,17 @@ def main():
     )
     args = parser.parse_args()
 
+    count = archive_count(args.archives_dir)
+    if count > 1:
+        bundle = os.path.dirname(os.path.abspath(args.archives_dir.rstrip("/")))
+        hint = ""
+        if os.path.isfile(os.path.join(bundle, "catalog.sqlite")):
+            hint = (f"\nFor this bundle, pass its main log's archive: {args.archives_dir.rstrip('/')}/<id>, where <id> is\n"
+                    f"  clp-bundle {bundle} sql \"select archive_id from archives where kind='main'\"")
+        print(f"error: {args.archives_dir} holds {count} archives; clp-s-session-turns reads one session's main log, "
+              "and records from other logs (such as agent transcripts) would be counted as its turns." + hint,
+              file=sys.stderr)
+        return 2
     human_tools = tuple(t.strip() for t in args.human_tools.split(",") if t.strip())
     session = collect(read_records(args.search_wrapper, args.archives_dir))
     if not session["prompts"]:
