@@ -4,6 +4,7 @@ A stub clp-s stands in for the binary: it answers each search with one JSON row 
 matching record, so the tests exercise only what the wrapper does around it.
 """
 
+import json
 import os
 import stat
 import subprocess
@@ -85,6 +86,17 @@ class MultiArchiveSearch(unittest.TestCase):
         code, out, err = self.run_wrapper("--count", "--archive-id", "zzz")
         self.assertNotEqual(code, 0)
         self.assertIn("no archive with ID zzz", err)
+
+    def test_with_archive_wraps_each_record_and_leaves_counts_alone(self):
+        code, out, _ = self.run_wrapper("--with-archive", "--limit", "4")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(out), 4)
+        for line in out:
+            row = json.loads(line)
+            self.assertEqual(set(row), {"archive_id", "record"})
+            self.assertEqual(row["record"]["archive"], row["archive_id"])
+        code, out, _ = self.run_wrapper("--with-archive", "--count")
+        self.assertEqual(sorted(out), ['{"archive_id":"aaa","count":3}', '{"archive_id":"bbb","count":5}'])
 
     def test_one_inner_archive_still_works(self):
         code, out, _ = self.run_wrapper("--count", target=os.path.join(self.root, "aaa"))

@@ -213,9 +213,31 @@ Useful commands:
 ./plugins/clp/bin/clp-s-search-kql /tmp/session-archive 'level:error'
 ```
 
-Allowed controls: `--tge`, `--tle`, `--ignore-case`, `--archive-id`, `--projection`, `--semantic-endpoint`, `--semantic-top-k`, `--semantic-threshold`, `--embedding-batch-size`.
+Allowed controls: `--tge`, `--tle`, `--ignore-case`, `--archive-id`, `--with-archive`, `--projection`, `--semantic-endpoint`, `--semantic-top-k`, `--semantic-threshold`, `--embedding-batch-size`.
+
+The path may hold several archives (for example a bundle of logs compressed into one `--output-dir`): each is searched in turn and the results are concatenated. `--count` and `--unique` rows carry `archive_id`, `--limit` caps the total, `--archive-id` picks one archive, and `--with-archive` wraps each record row as `{"archive_id":…,"record":{…}}` so a hit says which archive it came from (the record itself is untouched).
 
 Use single quotes around KQL in shell commands. Numeric comparisons use infix syntax, for example `durationMs >= 30000`.
+
+## Session Bundles
+
+A bundle is one session's logs kept as CLP archives plus a SQLite catalog: `catalog.sqlite` (what exists and how it connects: agents, workflow runs and their resumed instances, retried attempts, failure causes, timing), `archives/` (one clp-s archives dir, one archive per kind of log) and `files/` (what is not a JSON log). The catalog names records by the IDs they carry (`agentId`, `runId`) and stores no offsets, so it is derived and can be rebuilt from the archives. `clp-bundle build` makes one from a Claude Code session: the main log, subagent transcripts, workflow summaries and journals become one archive per kind of log; the catalog records the graph (agents, workflow runs and their resumed instances, retried attempts with a failure cause, timing), the events, and where every source file went; tool results, file snapshots, tasks and workflow scripts are copied into `files/`. Every file of the session is classified by its path, and one that matches no rule stops the build. The build checks that the events plus the records it left out equal the archive's own count of records with a `uuid`, and removes what it made if that or anything else fails. It refuses an existing directory (`--force` replaces an existing bundle only). A session with no subagents or workflows gets a catalog with only its main thread. `clp-bundle` moves between the catalog and the archives:
+
+```bash
+./plugins/clp/bin/clp-bundle BUNDLE build --session-id ed54042e-…      # make BUNDLE from a session under ~/.claude (or --session-file PATH.jsonl)
+./plugins/clp/bin/clp-bundle BUNDLE show a1b2c3d4         # the catalog's row: status, cause, time, parents, unit, archive and query
+./plugins/clp/bin/clp-bundle BUNDLE evidence a1b2c3d4     # its records from the archive, sorted by time (--tail N, --all, --raw)
+./plugins/clp/bin/clp-bundle BUNDLE who --at 2026-08-25T17:15          # what was running then (UTC)
+./plugins/clp/bin/clp-bundle BUNDLE who --tool-use-id toolu_…          # the node a launch created
+./plugins/clp/bin/clp-bundle BUNDLE who --uuid 92b5ed72-…              # a record's event, and the nodes it points at (the agent it is in, what it launched or reports on)
+./plugins/clp/bin/clp-bundle BUNDLE events --agent a1b2c3d4 --tool Bash   # thin rows for records: time, tools called, error/interrupt flags, turn; filter by agent, turn, tool, errors, interrupts, type, time
+./plugins/clp/bin/clp-bundle BUNDLE record 92b5ed72-…                  # one event's full record, read from its archive by uuid
+./plugins/clp/bin/clp-bundle BUNDLE sql "select cause, count(*) from nodes group by 1"   # read-only
+```
+
+The catalog's `events` table has one row per user or assistant record and per record that refers to an agent or task (the completion notifications), with the tools called inside it in `event_tools`, and no text; a record is found by its `uuid`. Hook and reminder attachments, system rows, records without a `uuid` and journal rows are counted in the `bundle` table (`events_unlisted_*`, `events_skipped_*`), not listed. That makes main-thread records (which carry no agent) and single tool calls visible to SQL: `select … from nodes n join events e on e.agent_id = n.agent_id …`.
+
+`show` and `evidence` take a node id, an agent id (or a unique prefix of six or more characters), a run id or a task id; `--json` gives `show`, `who` and `sql` as JSON.
 
 ## Semantic Search
 
