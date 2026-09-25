@@ -21,6 +21,8 @@ RECORDS = [
     {"agentId": "a1111111", "type": "user", "timestamp": "2026-01-01T10:03:05.000Z",
      "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}},
 ]
+MAIN_RECORD = {"uuid": "11111111-0000-0000-0000-000000000001", "type": "assistant", "timestamp": "2026-01-01T10:00:00.100Z",
+               "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Workflow", "id": "toolu_9"}]}}
 RUN = {"runId": "wf_x", "status": "completed", "agentCount": 1, "durationMs": 5, "logs": ["[stall] agent slow"]}
 
 # The wrapper is called with: --archive-id ID ARCHIVES_DIR KQL. Rows go out unordered.
@@ -28,6 +30,7 @@ STUB = f"""#!/usr/bin/env bash
 id="$2"; query="$4"
 case "$query" in
   'agentId:"a1111111"') [[ "$id" == "arch-wfagent" ]] && printf '%s\\n' '{json.dumps(RECORDS[0])}' '{json.dumps(RECORDS[1])}' '{json.dumps(RECORDS[2])}';;
+  'uuid:"11111111-0000-0000-0000-000000000001"') [[ "$id" == "arch-main" ]] && printf '%s\\n' '{json.dumps(MAIN_RECORD)}';;
   'runId:"wf_x"') [[ "$id" == "arch-run" ]] && printf '%s\\n' '{json.dumps(RUN)}';;
 esac
 """
@@ -45,7 +48,7 @@ class BundleCommands(unittest.TestCase):
         os.chmod(self.wrapper, os.stat(self.wrapper).st_mode | stat.S_IXUSR)
         db = sqlite3.connect(os.path.join(self.dir, "catalog.sqlite"))
         db.executescript(bundle.SCHEMA)
-        db.executemany("INSERT INTO archives VALUES(?,?,?)", [("arch-wfagent", "workflow-agent", 3), ("arch-run", "workflow-run", 1)])
+        db.executemany("INSERT INTO archives VALUES(?,?,?)", [("arch-wfagent", "workflow-agent", 3), ("arch-run", "workflow-run", 1), ("arch-main", "main", 2)])
         cols = "id,kind,label,agent_id,run_id,task_id,instance,start,end,status,cause,attrs"
         rows = [
             ("attempt:a1111111", "attempt", None, "a1111111", "wf_x", None, "wf:wf_x", "2026-01-01T10:00:00", "2026-01-01T10:03:05", "stalled-retried", "stall", "{}"),
@@ -63,6 +66,21 @@ class BundleCommands(unittest.TestCase):
             ("wf:wf_x", "attempt:a1111111", "ran", None, None, 0, None),
             ("wf:wf_x", "run:wf_x", "executes", None, None, 0, None),
             ("main", "wf:wf_x", "launch", "2026-01-01T10:00:00", "Workflow result runId", 0, "toolu_9"),
+        ])
+        events = [  # uuid, kind, agent_id, ts, type, turn, human, interrupt, is_error, ref_agent_id, ref_task_id
+            ("11111111-0000-0000-0000-000000000001", "main", None, "2026-01-01T10:00:00.100", "assistant", 1, 0, 0, 0, None, None),
+            ("11111111-0000-0000-0000-000000000002", "main", None, "2026-01-01T10:20:00.000", "attachment", 1, 0, 0, 0, None, "tk1"),
+            ("22222222-0000-0000-0000-000000000001", "workflow-agent", "a1111111", "2026-01-01T10:00:01.000", "assistant", None, 0, 0, 0, None, None),
+            ("22222222-0000-0000-0000-000000000002", "workflow-agent", "a1111111", "2026-01-01T10:00:05.000", "user", None, 0, 0, 1, None, None),
+            ("22222222-0000-0000-0000-000000000003", "workflow-agent", "a1111111", "2026-01-01T10:03:05.000", "user", None, 0, 1, 0, None, None),
+        ]
+        db.executemany("INSERT INTO events(uuid,kind,agent_id,ts,type,turn,human,interrupt,is_error,ref_agent_id,ref_task_id) "
+                       "VALUES(?,?,?,?,?,?,?,?,?,?,?)", events)
+        ids = {u: i for u, i in db.execute("SELECT uuid, id FROM events")}
+        db.executemany("INSERT INTO event_tools VALUES(?,?,?,?,?)", [
+            (ids["11111111-0000-0000-0000-000000000001"], "toolu_9", "use", "Workflow", None),
+            (ids["22222222-0000-0000-0000-000000000001"], "t", "use", "Bash", None),
+            (ids["22222222-0000-0000-0000-000000000002"], "t", "result", None, 1),
         ])
         db.commit()
         db.close()
@@ -119,6 +137,48 @@ class BundleCommands(unittest.TestCase):
         self.assertIn("NODE wf:wf_x", out)
         code, _, err = self.run_cli("who", "--at", "2030-01-01T00:00")
         self.assertEqual(code, 1)
+
+    def test_who_uuid_goes_from_a_main_log_record_to_the_node_it_launched(self):
+        _, out, _ = self.run_cli("who", "--uuid", "11111111-0000-0000-0000-000000000001")
+        self.assertIn("EVENT 2026-01-01T10:00:00.100 main agent=- assistant turn=1 tools=Workflow", out)
+        self.assertIn("NODE wf:wf_x kind=workflow relation=launched", out)
+
+    def test_who_uuid_prefix_and_notification_reference(self):
+        _, out, _ = self.run_cli("who", "--uuid", "11111111-0000-0000-0000-000000000002")
+        self.assertIn("ref_task_id=tk1", out)
+        self.assertIn("NODE wf:wf_x kind=workflow relation=refers_to", out)
+        _, out, _ = self.run_cli("who", "--uuid", "22222222-0000-0000-0000-000000000002")
+        self.assertIn("NODE attempt:a1111111 kind=attempt relation=in", out)
+        code, _, err = self.run_cli("who", "--uuid", "22222222-0000")      # shared by three events
+        self.assertEqual(code, 1)
+        self.assertIn("prefix of several records", err)
+
+    def test_events_filters(self):
+        _, out, _ = self.run_cli("events", "--agent", "a1111111")
+        self.assertEqual(len(out.splitlines()), 3)
+        _, out, _ = self.run_cli("events", "--tool", "Bash")
+        self.assertEqual(len(out.splitlines()), 1)
+        self.assertIn("tools=Bash", out)
+        _, out, _ = self.run_cli("events", "--errors")
+        self.assertIn("results=1", out)
+        _, out, _ = self.run_cli("events", "--interrupts")
+        self.assertEqual(len(out.splitlines()), 1)
+        _, out, _ = self.run_cli("events", "--after", "2026-01-01T10:01", "--before", "2026-01-01T10:10", "--limit", "5")
+        self.assertEqual(len(out.splitlines()), 1)
+        code, _, _ = self.run_cli("events", "--tool", "Nothing")
+        self.assertEqual(code, 1)
+
+    def test_record_reads_the_full_record_by_uuid(self):
+        _, out, _ = self.run_cli("record", "11111111-0000-0000-0000-000000000001", "--raw")
+        self.assertEqual(json.loads(out)["message"]["content"][0]["name"], "Workflow")
+        code, _, err = self.run_cli("record", "99999999-0000-0000-0000-000000000000")
+        self.assertEqual(code, 1)
+        self.assertIn("no event with uuid", err)
+
+    def test_sql_joins_nodes_and_events(self):
+        _, out, _ = self.run_cli("sql", "select n.id, count(*) c from nodes n join events e on e.agent_id = n.agent_id "
+                                        "where n.kind = 'attempt' group by 1")
+        self.assertEqual(out.splitlines()[1:], ["attempt:a1111111\t3"])
 
     def test_sql_is_read_only(self):
         code, out, _ = self.run_cli("sql", "select count(*) n from nodes where kind='attempt'")

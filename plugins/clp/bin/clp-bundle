@@ -5,8 +5,11 @@ clp-bundle - move between a session bundle's catalog and the CLP records behind 
 Usage:
   clp-bundle BUNDLE_DIR show ID [--json]
   clp-bundle BUNDLE_DIR evidence ID [--tail N | --all] [--raw]
-  clp-bundle BUNDLE_DIR who (--agent-id ID | --tool-use-id ID | --task-id ID | --at TIME)
+  clp-bundle BUNDLE_DIR who (--agent-id ID | --tool-use-id ID | --task-id ID | --uuid ID | --at TIME)
                             [--kind LIST] [--limit N] [--json]
+  clp-bundle BUNDLE_DIR events [--agent ID] [--turn N] [--tool NAME] [--errors] [--interrupts]
+                            [--type T] [--after TIME] [--before TIME] [--limit N] [--json]
+  clp-bundle BUNDLE_DIR record UUID [--raw]
   clp-bundle BUNDLE_DIR sql QUERY [--json]
 
 BUNDLE_DIR holds catalog.sqlite, archives/ and files/. ID is a node id (attempt:a1b2..,
@@ -21,6 +24,12 @@ characters), a run id or a task id.
   who       From a record's ID or a moment back to the node: an agent id, the tool_use id of a
             launch, a task id, or --at a UTC time (nodes running then; --kind picks which of
             agent, workflow, attempt are listed, default agent,workflow).
+  events    The catalog's rows for records (no text): time, agent, type, the tools called, error and
+            interrupt flags, the turn (main thread) and the uuid. Filter by agent, turn, tool name,
+            errors, interrupts, type and time. Events cover user and assistant records and any record
+            that refers to an agent or task; hook and reminder attachments, system rows and rows
+            without a uuid are counted in the bundle table (events_unlisted_*, events_skipped_*), not listed.
+  record    One event's full record, read from its archive by uuid (--raw for the JSON).
   sql       A read-only query on the catalog.
 
 Options:
@@ -132,6 +141,18 @@ def cmd_who(args, db):
             "SELECT n.id, n.kind, n.label, n.status, n.start, n.end, e.src AS launched_by FROM edges e "
             "JOIN nodes n ON n.id = e.dst WHERE e.kind = 'launch' AND e.tool_use_id = ?", (args.tool_use_id,))]
         counts = {}
+    elif args.uuid:
+        event = B.resolve_event(db, args.uuid)
+        links = B.linked_nodes(db, event)
+        if args.json:
+            print(json.dumps({"event": dict(event), "tools": B.event_tools(db, event),
+                              "nodes": [{"relation": rel, **dict(n)} for rel, n in links]}, indent=1, default=str))
+            return 0
+        print(_event_line(db, event))
+        for rel, n in links:
+            print(f"NODE {n['id']} kind={n['kind']} relation={rel} status={n['status']} {n['start']} -> {n['end']} "
+                  f"label={json.dumps(n['label'])}")
+        return 0
     elif args.task_id:
         rows = [dict(r) for r in db.execute("SELECT id, kind, label, status, start, end FROM nodes WHERE task_id = ?", (args.task_id,))]
         counts = {}
@@ -150,6 +171,68 @@ def cmd_who(args, db):
         extra = f" launched_by={r['launched_by']}" if r.get("launched_by") else ""
         print(f"NODE {r['id']} kind={r['kind']} status={r.get('status')} {r.get('start')} -> {r.get('end')} "
               f"label={json.dumps(r.get('label'))}{extra}")
+    return 0
+
+
+def _event_line(db, event):
+    tools = B.event_tools(db, event)
+    used = ",".join(t["name"] for t in tools if t["role"] == "use" and t["name"])
+    results = sum(1 for t in tools if t["role"] == "result")
+    flags = " ".join(f for f, on in (("human", event["human"]), ("interrupt", event["interrupt"]), ("error", event["is_error"])) if on)
+    parts = [f"EVENT {event['ts']}", event["kind"], f"agent={event['agent_id'] or '-'}", event["type"]]
+    if event["turn"] is not None:
+        parts.append(f"turn={event['turn']}")
+    if used:
+        parts.append(f"tools={used}")
+    if results:
+        parts.append(f"results={results}")
+    for key in ("ref_agent_id", "ref_task_id"):
+        if event[key]:
+            parts.append(f"{key}={event[key]}")
+    if flags:
+        parts.append(flags)
+    parts.append(f"uuid={event['uuid']}")
+    return " ".join(parts)
+
+
+def cmd_events(args, db):
+    where, params = [], []
+    if args.agent:
+        node = B.resolve(db, args.agent)
+        where.append("e.agent_id = ?")
+        params.append(node["agent_id"])
+    if args.turn is not None:
+        where.append("e.turn = ?"); params.append(args.turn)
+    if args.tool:
+        where.append("EXISTS (SELECT 1 FROM event_tools t WHERE t.event = e.id AND t.role = 'use' AND t.name = ?)")
+        params.append(args.tool)
+    if args.errors:
+        where.append("e.is_error = 1")
+    if args.interrupts:
+        where.append("e.interrupt = 1")
+    if args.type:
+        where.append("e.type = ?"); params.append(args.type)
+    if args.after:
+        where.append("e.ts >= ?"); params.append(B.normalize_time(args.after))
+    if args.before:
+        where.append("e.ts <= ?"); params.append(B.normalize_time(args.before))
+    sql = "SELECT e.* FROM events e" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY e.ts, e.id LIMIT ?"
+    rows = db.execute(sql, (*params, args.limit)).fetchall()
+    if not rows:
+        print("no match", file=sys.stderr)
+        return 1
+    for event in rows:
+        if args.json:
+            print(json.dumps({**dict(event), "tools": B.event_tools(db, event)}, default=str))
+        else:
+            print(_event_line(db, event))
+    return 0
+
+
+def cmd_record(args, db):
+    event = B.resolve_event(db, args.uuid)
+    record = B.fetch_event_record(args.bundle, db, event, args.search_wrapper)
+    print(json.dumps(record, ensure_ascii=False) if args.raw else B.brief(record, width=200))
     return 0
 
 
@@ -177,14 +260,20 @@ def main():
     p.add_argument("--all", action="store_true"); p.add_argument("--raw", action="store_true")
     p = sub.add_parser("who")
     g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("--agent-id"); g.add_argument("--tool-use-id"); g.add_argument("--task-id"); g.add_argument("--at")
+    g.add_argument("--agent-id"); g.add_argument("--tool-use-id"); g.add_argument("--task-id"); g.add_argument("--uuid"); g.add_argument("--at")
     p.add_argument("--kind", default="agent,workflow"); p.add_argument("--limit", type=int, default=20)
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("events"); p.add_argument("--agent"); p.add_argument("--turn", type=int); p.add_argument("--tool")
+    p.add_argument("--errors", action="store_true"); p.add_argument("--interrupts", action="store_true"); p.add_argument("--type")
+    p.add_argument("--after"); p.add_argument("--before"); p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("record"); p.add_argument("uuid"); p.add_argument("--raw", action="store_true")
     p = sub.add_parser("sql"); p.add_argument("query"); p.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
         db = B.open_catalog(args.bundle)
-        return {"show": cmd_show, "evidence": cmd_evidence, "who": cmd_who, "sql": cmd_sql}[args.command](args, db)
+        return {"show": cmd_show, "evidence": cmd_evidence, "who": cmd_who, "events": cmd_events,
+                "record": cmd_record, "sql": cmd_sql}[args.command](args, db)
     except B.BundleError as err:
         print(f"error: {err}", file=sys.stderr)
         return 1

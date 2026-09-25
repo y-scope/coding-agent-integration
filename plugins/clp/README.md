@@ -227,8 +227,13 @@ A bundle is one session's logs kept as CLP archives plus a SQLite catalog: `cata
 ./plugins/clp/bin/clp-bundle BUNDLE evidence a1b2c3d4     # its records from the archive, sorted by time (--tail N, --all, --raw)
 ./plugins/clp/bin/clp-bundle BUNDLE who --at 2026-08-25T17:15          # what was running then (UTC)
 ./plugins/clp/bin/clp-bundle BUNDLE who --tool-use-id toolu_…          # the node a launch created
+./plugins/clp/bin/clp-bundle BUNDLE who --uuid 92b5ed72-…              # a record's event, and the nodes it points at (the agent it is in, what it launched or reports on)
+./plugins/clp/bin/clp-bundle BUNDLE events --agent a1b2c3d4 --tool Bash   # thin rows for records: time, tools called, error/interrupt flags, turn; filter by agent, turn, tool, errors, interrupts, type, time
+./plugins/clp/bin/clp-bundle BUNDLE record 92b5ed72-…                  # one event's full record, read from its archive by uuid
 ./plugins/clp/bin/clp-bundle BUNDLE sql "select cause, count(*) from nodes group by 1"   # read-only
 ```
+
+The catalog's `events` table has one row per user or assistant record and per record that refers to an agent or task (the completion notifications), with the tools called inside it in `event_tools`, and no text; a record is found by its `uuid`. Hook and reminder attachments, system rows, records without a `uuid` and journal rows are counted in the `bundle` table (`events_unlisted_*`, `events_skipped_*`), not listed. That makes main-thread records (which carry no agent) and single tool calls visible to SQL: `select … from nodes n join events e on e.agent_id = n.agent_id …`.
 
 `show` and `evidence` take a node id, an agent id (or a unique prefix of six or more characters), a run id or a task id; `--json` gives `show`, `who` and `sql` as JSON.
 

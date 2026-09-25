@@ -31,6 +31,26 @@ CREATE INDEX edges_src ON edges(src);
 CREATE INDEX edges_dst ON edges(dst);
 CREATE INDEX nodes_kind ON nodes(kind);
 CREATE INDEX nodes_agent ON nodes(agent_id);
+-- One row per conversation record (user or assistant, with a uuid) and per record of any other type that
+-- carries a reference to an agent or task (the completion notifications): no text, only what a join
+-- needs. The record itself is found by its uuid in the archive of its kind. Not events: records
+-- without a uuid (the harness's bookkeeping rows such as mode, permission-mode, ai-title), records
+-- with a uuid that carry nothing to join on (hook and reminder attachments, system rows), and journal
+-- rows. bundle.events_skipped_<kind> and events_unlisted_<kind> count them.
+CREATE TABLE events(id INTEGER PRIMARY KEY, uuid TEXT NOT NULL, kind TEXT, agent_id TEXT, ts TEXT, type TEXT,
+                    turn INTEGER, human INTEGER, interrupt INTEGER, is_error INTEGER,
+                    ref_agent_id TEXT, ref_task_id TEXT);
+-- The tool calls and results inside an event: a tool_use block (role 'use', with the tool's name) or a
+-- tool_result block (role 'result', with its error flag). Join the two on tool_use_id to pair them.
+CREATE TABLE event_tools(event INTEGER, tool_use_id TEXT, role TEXT, name TEXT, is_error INTEGER);
+CREATE UNIQUE INDEX events_uuid ON events(uuid);
+CREATE INDEX events_agent ON events(agent_id, ts);
+CREATE INDEX events_turn ON events(turn) WHERE turn IS NOT NULL;
+CREATE INDEX events_ref_agent ON events(ref_agent_id) WHERE ref_agent_id IS NOT NULL;
+CREATE INDEX events_ref_task ON events(ref_task_id) WHERE ref_task_id IS NOT NULL;
+CREATE INDEX event_tools_event ON event_tools(event);
+CREATE INDEX event_tools_use ON event_tools(tool_use_id);
+CREATE INDEX event_tools_name ON event_tools(name) WHERE name IS NOT NULL;
 """
 
 # The kind of archive that holds a node's records, and the field that names them.
@@ -202,3 +222,63 @@ def brief(record, width=90):
     if len(detail) > width:
         detail = detail[:width - 1] + "…"
     return f"{stamp} {record.get('type', '?'):<10} {detail}"
+
+
+def resolve_event(db, ident):
+    """The one event a uuid names, or a unique prefix of it of eight or more characters."""
+    row = db.execute("SELECT * FROM events WHERE uuid = ?", (ident,)).fetchone()
+    if row:
+        return row
+    if len(ident) >= 8:
+        rows = db.execute("SELECT * FROM events WHERE uuid LIKE ? LIMIT 3", (ident + "%",)).fetchall()
+        if len(rows) == 1:
+            return rows[0]
+        if len(rows) > 1:
+            raise BundleError(f"{ident} is a prefix of several records")
+    raise BundleError(f"no event with uuid: {ident} (records without a uuid are not events)")
+
+
+def event_tools(db, event):
+    return [dict(r) for r in db.execute(
+        "SELECT tool_use_id, role, name, is_error FROM event_tools WHERE event = ? ORDER BY rowid", (event["id"],))]
+
+
+def linked_nodes(db, event):
+    """The catalog nodes an event points at, as (relation, node row): the agent whose transcript
+    it is in, the agent or task it refers to, and the node a launch call in it created."""
+    found, seen = [], set()
+
+    def add(relation, node):
+        if node and (relation, node["id"]) not in seen:
+            seen.add((relation, node["id"]))
+            found.append((relation, node))
+
+    if event["agent_id"]:
+        add("in", db.execute("SELECT * FROM nodes WHERE agent_id = ? AND kind IN ('attempt','agent')", (event["agent_id"],)).fetchone())
+    if event["ref_agent_id"]:
+        add("refers_to", db.execute("SELECT * FROM nodes WHERE agent_id = ? AND kind = 'agent'", (event["ref_agent_id"],)).fetchone())
+    if event["ref_task_id"]:
+        add("refers_to", db.execute("SELECT * FROM nodes WHERE task_id = ? OR (agent_id = ? AND kind = 'agent')",
+                                    (event["ref_task_id"], event["ref_task_id"])).fetchone())
+    for tool in event_tools(db, event):
+        if tool["role"] == "use":
+            for r in db.execute("SELECT n.* FROM edges e JOIN nodes n ON n.id = e.dst WHERE e.kind = 'launch' AND e.tool_use_id = ?",
+                                (tool["tool_use_id"],)):
+                add("launched", r)
+    return found
+
+
+def fetch_event_record(bundle_dir, db, event, wrapper):
+    """The event's full record, read from the archive of its kind by uuid."""
+    ids = archive_ids(db, event["kind"])
+    if not ids:
+        raise BundleError(f"the catalog lists no {event['kind']} archive")
+    for archive_id in ids:
+        proc = subprocess.run(search_command(bundle_dir, wrapper, archive_id, f'uuid:"{event["uuid"]}"'),
+                              capture_output=True, text=True, encoding="utf-8")
+        if proc.returncode != 0:
+            raise BundleError(f"search failed ({proc.returncode}): {proc.stderr.strip()[-300:]}")
+        for line in proc.stdout.splitlines():
+            if line.startswith("{"):
+                return json.loads(line)
+    raise BundleError(f"the archive holds no record with uuid {event['uuid']}; the catalog and archives disagree")
