@@ -282,3 +282,58 @@ def fetch_event_record(bundle_dir, db, event, wrapper):
             if line.startswith("{"):
                 return json.loads(line)
     raise BundleError(f"the archive holds no record with uuid {event['uuid']}; the catalog and archives disagree")
+
+
+# ---- The engine seam: everything that runs clp-s goes through these functions (and search_command
+# above), so a different engine changes this block and nothing else.
+
+def resolve_clp_s(explicit=None):
+    """The clp-s binary, in the order the shell wrappers use: an explicit path, CLP_S_BIN, the plugin's
+    bin/clp-s, the plugin's .clp-core/bin/clp-s, then PATH. A path that was asked for and is not
+    executable is an error, as in the wrappers, not a reason to fall through."""
+    import shutil
+    for label, value in (("--clp-s", explicit), ("CLP_S_BIN", os.environ.get("CLP_S_BIN"))):
+        if value:
+            if os.path.isfile(value) and os.access(value, os.X_OK):
+                return value
+            raise BundleError(f"{label} is set but is not an executable file: {value}")
+    bin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for candidate in (os.path.join(bin_dir, "clp-s"), os.path.join(os.path.dirname(bin_dir), ".clp-core", "bin", "clp-s"),
+                      shutil.which("clp-s")):
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    raise BundleError("clp-s is not available. Run the plugin installer, set CLP_S_BIN or pass --clp-s.")
+
+
+def compress(clp_s, archives_dir, files, timestamp_key="timestamp"):
+    """Compress files into archives_dir as one compress run; returns the IDs of the archives it made."""
+    import tempfile
+    before = set(os.listdir(archives_dir)) if os.path.isdir(archives_dir) else set()
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as listing:
+        listing.write("\n".join(files) + "\n")
+    try:
+        proc = subprocess.run([clp_s, "c", "--timestamp-key", timestamp_key, "--files-from", listing.name, archives_dir],
+                              capture_output=True, text=True, encoding="utf-8")
+    finally:
+        os.remove(listing.name)
+    if proc.returncode != 0:
+        raise BundleError(f"clp-s could not compress {len(files)} files: {proc.stderr.strip()[-400:]}")
+    return sorted(set(os.listdir(archives_dir)) - before)
+
+
+def archive_record_counts(clp_s, archives_dir):
+    """{archive id: records} for every archive in archives_dir."""
+    proc = subprocess.run([clp_s, "s", "--count", "--experimental", archives_dir, "*"],
+                          capture_output=True, text=True, encoding="utf-8")
+    if proc.returncode != 0:
+        raise BundleError(f"clp-s could not count the archives: {proc.stderr.strip()[-300:]}")
+    return {r["archive_id"]: r["count"] for r in (json.loads(l) for l in proc.stdout.splitlines() if l.startswith("{"))}
+
+
+def count_records_with(clp_s, archive_dir, field):
+    """How many records of one archive have `field`."""
+    proc = subprocess.run([clp_s, "s", "--count", archive_dir, f"{field}:*"], capture_output=True, text=True,
+                          encoding="utf-8")
+    if proc.returncode != 0:
+        raise BundleError(f"clp-s could not count {field} in {archive_dir}: {proc.stderr.strip()[-300:]}")
+    return sum(json.loads(l)["count"] for l in proc.stdout.splitlines() if l.startswith("{"))
