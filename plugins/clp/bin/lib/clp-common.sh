@@ -371,6 +371,30 @@ resolve_clp_s_archive_dir() {
   return 1
 }
 
+# Every clp-s archive directory reachable from ARCHIVES_DIR, one per line: the path
+# itself when it is an archive, else each immediate child that is one. Fails, printing
+# nothing, when there are none.
+list_clp_s_archive_dirs() {
+  local archives_dir="$1"
+  local child found=0
+
+  if looks_like_clp_s_archive_dir "$archives_dir"; then
+    printf '%s\n' "$archives_dir"
+    return 0
+  fi
+
+  [[ -d "$archives_dir" ]] || return 1
+
+  while IFS= read -r -d '' child; do
+    if looks_like_clp_s_archive_dir "$child"; then
+      printf '%s\n' "$child"
+      found=1
+    fi
+  done < <(find_immediate_children "$archives_dir")
+
+  [[ "$found" -eq 1 ]]
+}
+
 print_archive_metadata_summary() {
   local archives_dir="$1"
   local metadata_file

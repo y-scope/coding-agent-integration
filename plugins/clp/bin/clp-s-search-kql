@@ -12,6 +12,12 @@ Usage:
 
 Run a restricted clp-s KQL search and return results on stdout.
 
+ARCHIVES_DIR may be one archive, a directory holding one archive, or a directory
+holding several (for example a bundle of logs compressed into one --output-dir).
+With several, each archive is searched in turn and the results are concatenated;
+--count and --unique rows carry "archive_id", --limit caps the total, and
+--archive-id picks one archive.
+
 Allowed search controls:
   --tge TS                 Find records with UNIX epoch timestamp >= TS ms.
   --tle TS                 Find records with UNIX epoch timestamp <= TS ms.
@@ -304,18 +310,38 @@ fi
 # Header lines go to stderr so stdout carries only clp-s JSON results.
 print_archive_metadata_summary "$archives_dir" >&2
 input_archives_dir="$archives_dir"
-# Both stable and --experimental (clpp) paths pass the inner clp-s archive directory
+# Both stable and --experimental (clpp) paths pass an inner clp-s archive directory
 # to clp-s. clpp archives require --experimental to open, and the binary recognizes a
 # self-contained inner archive dir via is_multi_file_archive, so resolving to the
 # inner dir (rather than stepping up to the parent) avoids colliding with the
 # .yscope-clp-archive.json sidecar the compress wrapper writes next to it.
-archives_dir="$(resolve_clp_s_archive_dir "$archives_dir")" || {
+# A directory holding several archives (one --output-dir shared by several compress
+# runs) is searched one archive at a time, below.
+mapfile -t archive_dirs < <(list_clp_s_archive_dirs "$archives_dir" || true)
+if [[ ${#archive_dirs[@]} -eq 0 ]]; then
   echo "error: could not find a clp-s archive directory under: $input_archives_dir" >&2
   echo "Pass either the top-level plugin archive directory or its inner clp-s archive directory." >&2
   exit 1
-}
-if [[ "$archives_dir" != "$input_archives_dir" ]]; then
-  echo "Resolved clp-s archive dir: $archives_dir" >&2
+fi
+# --archive-id picks an archive directory here: clp-s rejects the flag alongside an
+# inner archive directory, which is what gets searched.
+if [[ -n "$archive_id" ]]; then
+  selected=()
+  for dir in "${archive_dirs[@]}"; do
+    [[ "$(basename -- "$dir")" == "$archive_id" ]] && selected+=("$dir")
+  done
+  if [[ ${#selected[@]} -eq 0 ]]; then
+    echo "error: no archive with ID $archive_id under: $input_archives_dir" >&2
+    exit 1
+  fi
+  archive_dirs=("${selected[@]}")
+fi
+if [[ ${#archive_dirs[@]} -eq 1 ]]; then
+  if [[ "${archive_dirs[0]}" != "$input_archives_dir" ]]; then
+    echo "Resolved clp-s archive dir: ${archive_dirs[0]}" >&2
+  fi
+else
+  echo "Searching ${#archive_dirs[@]} archives under: $input_archives_dir" >&2
 fi
 
 if [[ "$semantic_active" -eq 1 ]]; then
@@ -339,12 +365,6 @@ fi
 if [[ "$ignore_case" -eq 1 ]]; then
   search_options+=(--ignore-case)
 fi
-if [[ -n "$archive_id" ]]; then
-  search_options+=(--archive-id "$archive_id")
-fi
-if [[ -n "$limit" ]]; then
-  search_options+=(--limit "$limit")
-fi
 if [[ "$count_mode" -eq 1 ]]; then
   search_options+=(--count)
 fi
@@ -364,31 +384,6 @@ if [[ -n "$embedding_batch_size" ]]; then
   search_options+=(--embedding-batch-size "$embedding_batch_size")
 fi
 
-# clp-s projects leaf columns only: a column inside an array, or an object,
-# projects nothing although a filter on it matches. Rewrite such columns from
-# the archive's schema tree, which clp-s reads from the archive's metadata in
-# milliseconds even on a large archive (lib/projection.py). Without a schema
-# tree the columns stay as given.
-if [[ ${#projections[@]} -gt 0 ]]; then
-  if schema_tree="$("$clp_s_bin" s --experimental "$archives_dir" stats.schema_tree 2>/dev/null)" \
-      && resolved_projections="$(python3 "${CLP_PLUGIN_BIN_DIR}/lib/projection.py" "${projections[@]}" \
-           <<<"$schema_tree")" \
-      && [[ -n "$resolved_projections" ]]; then
-    mapfile -t projections <<<"$resolved_projections"
-  fi
-fi
-
-cmd=("$clp_s_bin" s ${search_options[@]+"${search_options[@]}"} "$archives_dir" "$kql_query")
-
-if [[ ${#projections[@]} -gt 0 ]]; then
-  cmd+=(--projection "${projections[@]}")
-fi
-
-{
-  printf 'Command:'
-  printf ' %q' "${cmd[@]}"
-  echo
-} >&2
 if [[ "$semantic_active" -eq 1 ]]; then
   export CLP_SEMANTIC_ENDPOINT="$semantic_endpoint"
   if [[ -z "${CLP_SEMANTIC_BATCH_SIZE:-}" ]]; then
@@ -398,4 +393,66 @@ if [[ "$semantic_active" -eq 1 ]]; then
 else
   unset CLP_SEMANTIC_ENDPOINT CLP_SEMANTIC_BATCH_SIZE CLAUDE_PLUGIN_OPTION_SEMANTIC_ENDPOINT
 fi
-exec "${cmd[@]}"
+
+# Search one archive directory. $2, when given, is the --limit for this archive.
+search_archive() {
+  local dir="$1" dir_limit="${2:-}"
+  local dir_projections=("${projections[@]+"${projections[@]}"}")
+  local schema_tree resolved_projections
+
+  # clp-s projects leaf columns only: a column inside an array, or an object,
+  # projects nothing although a filter on it matches. Rewrite such columns from
+  # the archive's schema tree, which clp-s reads from the archive's metadata in
+  # milliseconds even on a large archive (lib/projection.py). Without a schema
+  # tree the columns stay as given.
+  if [[ ${#dir_projections[@]} -gt 0 ]]; then
+    if schema_tree="$("$clp_s_bin" s --experimental "$dir" stats.schema_tree 2>/dev/null)" \
+        && resolved_projections="$(python3 "${CLP_PLUGIN_BIN_DIR}/lib/projection.py" "${dir_projections[@]}" \
+             <<<"$schema_tree")" \
+        && [[ -n "$resolved_projections" ]]; then
+      mapfile -t dir_projections <<<"$resolved_projections"
+    fi
+  fi
+
+  local cmd=("$clp_s_bin" s ${search_options[@]+"${search_options[@]}"})
+  if [[ -n "$dir_limit" ]]; then
+    cmd+=(--limit "$dir_limit")
+  fi
+  cmd+=("$dir" "$kql_query")
+  if [[ ${#dir_projections[@]} -gt 0 ]]; then
+    cmd+=(--projection "${dir_projections[@]}")
+  fi
+
+  {
+    printf 'Command:'
+    printf ' %q' "${cmd[@]}"
+    echo
+  } >&2
+  "${cmd[@]}"
+}
+
+if [[ ${#archive_dirs[@]} -eq 1 ]]; then
+  search_archive "${archive_dirs[0]}" "$limit"
+  exit $?
+fi
+
+# Several archives. clp-s reads a directory of archives itself, but not one that also
+# holds the sidecar file, and its --count and --unique rows already carry archive_id,
+# so searching each archive and concatenating gives the same rows. --limit is a
+# global cap: each archive is asked for what is still needed, and the search stops
+# once enough records have come back.
+status=0
+remaining="$limit"
+for dir in "${archive_dirs[@]}"; do
+  if [[ -z "$limit" ]]; then
+    search_archive "$dir" || status=$?
+    continue
+  fi
+  out="$(mktemp)"
+  search_archive "$dir" "$remaining" >"$out" || status=$?
+  cat "$out"
+  remaining=$(( remaining - $(wc -l <"$out") ))
+  rm -f "$out"
+  [[ "$remaining" -gt 0 ]] || break
+done
+exit "$status"
