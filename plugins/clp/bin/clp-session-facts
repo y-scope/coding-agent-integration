@@ -473,6 +473,69 @@ class Catalog:
         return self.one("SELECT v FROM bundle WHERE k = ?", key, default=default)
 
 
+# One API response can be recorded in more than one log, so a bundle-wide token
+# total has to count it once. See bundle_totals().
+#
+# Grouping key: the message id, or the row itself when the log carried no id. A
+# row with no message id cannot be deduped against anything, so it must stay its
+# own group - grouping every null together would silently collapse a whole log
+# that lacks message ids into one response.
+DEDUP_KEY = "CASE WHEN message_id IS NULL THEN 'row#' || id ELSE 'msg:' || message_id END"
+
+# Where the copies of one response disagree, this is the copy that is kept.
+TIE_BREAK = ("the copy reporting the largest tokens_input, because a response logged with more "
+             "context is the later and more complete record of it; the whole row is taken from that "
+             "one copy, and values are never averaged across copies")
+
+
+def bundle_totals(cat):
+    """The bundle-wide token totals, counting each API response once.
+
+    The same response is written to more than one log: a subagent's transcript
+    and the main log both hold it, and a fork inherits its parent's transcript,
+    so one response can appear in several agent logs too. Each per-kind sum is
+    therefore that log's own honest accounting and is left alone - it is only the
+    cross-kind total that would double-count, and only that is deduped here.
+
+    The copies do not always agree: on the reference bundle one id carries four
+    token rows with two different input values, so this cannot assume the copies
+    are identical. It keeps one whole row per response, chosen by TIE_BREAK, and
+    never averages. Returns both the deduped and the naive figures, because the
+    facts file has to show the per-kind sums and the total side by side and say
+    why they do not add up.
+    """
+    naive = cat.rows("""SELECT COUNT(*), COALESCE(SUM(tokens_input), 0), COALESCE(SUM(tokens_output), 0),
+                               COALESCE(SUM(tokens_cache_read), 0), COALESCE(SUM(tokens_cache_write), 0)
+                          FROM events WHERE tokens_input IS NOT NULL""")
+    # SQLite takes the bare columns from the row that produced MAX(), so each
+    # group yields one coherent record rather than a mix of fields from copies.
+    dedup = cat.rows(f"""
+        SELECT COUNT(*), COALESCE(SUM(ti), 0), COALESCE(SUM(t_out), 0),
+               COALESCE(SUM(cr), 0), COALESCE(SUM(cw), 0)
+          FROM (SELECT MAX(tokens_input) AS ti, tokens_output AS t_out,
+                       tokens_cache_read AS cr, tokens_cache_write AS cw
+                  FROM events WHERE tokens_input IS NOT NULL
+                 GROUP BY {DEDUP_KEY})""")
+    if not naive or not dedup:
+        return None
+    rows, n_in, n_out, n_cr, n_cw = naive[0]
+    resp, d_in, d_out, d_cr, d_cw = dedup[0]
+    return {
+        "responses": resp, "input": d_in, "output": d_out, "cache_read": d_cr, "cache_write": d_cw,
+        "rows": rows, "naive_input": n_in, "naive_output": n_out,
+        "naive_cache_read": n_cr, "naive_cache_write": n_cw,
+        "collisions": cat.one("""SELECT COUNT(*) FROM (SELECT message_id FROM events
+                                  WHERE tokens_input IS NOT NULL AND message_id IS NOT NULL
+                                  GROUP BY message_id HAVING COUNT(*) > 1)""", default=0),
+        "disagreeing": cat.one("""SELECT COUNT(*) FROM (SELECT message_id FROM events
+                                   WHERE tokens_input IS NOT NULL AND message_id IS NOT NULL
+                                   GROUP BY message_id HAVING COUNT(DISTINCT tokens_input) > 1)""",
+                               default=0),
+        "unkeyed": cat.one("""SELECT COUNT(*) FROM events
+                               WHERE tokens_input IS NOT NULL AND message_id IS NULL""", default=0),
+    }
+
+
 def attrs_of(text):
     try:
         value = json.loads(text or "{}")
@@ -556,6 +619,7 @@ def main(argv=None) -> int:
     outcomes, outcomes_note = load_outcomes(bundle, env)
     repo, repo_note = load_repo(bundle, env)
 
+    totals = bundle_totals(cat)
     has_agents = bool(cat.one("SELECT COUNT(*) FROM nodes WHERE kind = 'agent'", default=0))
     has_workflows = bool(cat.one("SELECT COUNT(*) FROM nodes WHERE kind = 'workflow'", default=0))
     multi = has_agents or has_workflows
@@ -569,9 +633,10 @@ def main(argv=None) -> int:
 
     F = {}   # every figure section 9 needs, computed once here
 
-    section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_note, w, F, keys, alerts)
+    section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_note, w, F, keys,
+                    alerts, totals)
     section_reliability(cat, multi, single_note, w, F, keys, alerts, args.top)
-    section_cost(cat, w, F, keys, alerts, args.top, multi, single_note)
+    section_cost(cat, w, F, keys, alerts, args.top, multi, single_note, totals)
     section_time(cat, turns, turns_note, w, F, keys, alerts, args.top)
     section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, alerts, args.top)
     section_harness(cat, multi, single_note, w, F, keys, alerts, args.top)
@@ -681,7 +746,8 @@ def load_repo(bundle, env):
 # 1. Session
 # ---------------------------------------------------------------------------
 
-def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_note, w, F, keys, alerts):
+def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_note, w, F, keys,
+                    alerts, totals):
     w("## 1. Session")
     session_id = cat.meta("session_id") or "(not recorded)"
     keys["SESSION_ID"] = session_id
@@ -719,10 +785,15 @@ def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_
          WHERE e.tokens_input IS NOT NULL
          GROUP BY 1 ORDER BY 2 DESC""")
     named = [r for r in rows if not r[0].startswith("(")]
-    total_responses = sum(r[1] for r in rows)
+    logged_rows = sum(r[1] for r in rows)
+    # Bundle-wide, so each response counts once however many logs recorded it.
+    total_responses = (totals or {}).get("responses", logged_rows)
     F["responses"] = total_responses
     F["models_named"] = bool(named)
-    w(f"- Model responses (one record per API call): {num(total_responses)}")
+    w(f"- Model responses (each counted once): {num(total_responses)}"
+      + (f", from {num(logged_rows)} token-bearing records - {num(logged_rows - total_responses)} of "
+         "them are second copies of a response another log already recorded (see the Cost section)"
+         if logged_rows != total_responses else ""))
     if named:
         for model, n, tin, tout in named:
             w(f"  - `{model}`: {frac(n, total_responses, 'responses')}, {num(tin)} input / {num(tout)} output tokens")
@@ -860,33 +931,72 @@ def section_reliability(cat, multi, single_note, w, F, keys, alerts, top):
 # 3. Cost
 # ---------------------------------------------------------------------------
 
-def section_cost(cat, w, F, keys, alerts, top, multi, single_note):
+def section_cost(cat, w, F, keys, alerts, top, multi, single_note, totals):
     w("## 3. Cost")
     rows = cat.rows("""SELECT kind, COUNT(*), SUM(tokens_input), SUM(tokens_output),
                               SUM(tokens_cache_read), SUM(tokens_cache_write)
                          FROM events WHERE tokens_input IS NOT NULL
                         GROUP BY 1 ORDER BY 3 DESC""")
-    total_in = sum(r[2] or 0 for r in rows)
-    total_out = sum(r[3] or 0 for r in rows)
-    total_cr = sum(r[4] or 0 for r in rows)
-    total_cw = sum(r[5] or 0 for r in rows)
-    total_resp = sum(r[1] for r in rows)
+    # Per-kind sums are each one log's own accounting and are left as they are.
+    # The bundle-wide totals count each response once - see bundle_totals().
+    kind_in = sum(r[2] or 0 for r in rows)
+    kind_out = sum(r[3] or 0 for r in rows)
+    kind_cr = sum(r[4] or 0 for r in rows)
+    kind_cw = sum(r[5] or 0 for r in rows)
+    kind_resp = sum(r[1] for r in rows)
+    t = totals or {}
+    total_in = t.get("input", kind_in)
+    total_out = t.get("output", kind_out)
+    total_cr = t.get("cache_read", kind_cr)
+    total_cw = t.get("cache_write", kind_cw)
+    total_resp = t.get("responses", kind_resp)
     F.update(total_input=total_in, total_output=total_out, cache_read=total_cr, cache_write=total_cw)
     keys["TOTAL_INPUT_TOKENS"] = total_in
 
-    w("Token usage is counted once per model response: the catalog sets `tokens_*` on one record per "
-      "response, so summing them counts each API call once. `tokens_input` is the whole context sent "
-      "with that call, so a long conversation's input total is far larger than its context window.")
+    w("Token usage is counted once per API response. The catalog sets `tokens_*` on one record per "
+      "response *per log*, and one response can be written to more than one log, so the bundle-wide "
+      "total below is deduplicated by `message_id` while each per-kind row is left as that log's own "
+      "accounting. `tokens_input` is the whole context sent with the call, so a long conversation's "
+      "input total is far larger than its context window.")
     w("")
     w("| Archive kind | Responses | Input | Output | Cache read | Cache write |")
     w("|---|---:|---:|---:|---:|---:|")
     for kind, n, tin, tout, cr, cw in rows:
         w(f"| {kind} | {num(n)} | {num(tin)} | {num(tout)} | {num(cr)} | {num(cw)} |")
-    w(f"| **total** | {num(total_resp)} | {num(total_in)} | {num(total_out)} | {num(total_cr)} | {num(total_cw)} |")
+    w(f"| *sum of the rows above* | {num(kind_resp)} | {num(kind_in)} | {num(kind_out)} "
+      f"| {num(kind_cr)} | {num(kind_cw)} |")
+    w(f"| **bundle total, each response once** | {num(total_resp)} | {num(total_in)} | {num(total_out)} "
+      f"| {num(total_cr)} | {num(total_cw)} |")
+    w("")
+    dup_rows = t.get("rows", kind_resp) - total_resp
+    if dup_rows > 0:
+        w(f"**The two last rows differ on purpose, and the column does not add up to the bundle total.** "
+          f"{num(t.get('collisions'))} responses appear in more than one log; the bundle-wide totals "
+          f"count each once, {num(kind_in - total_in)} input tokens fewer than the per-kind sums "
+          f"({pct(kind_in - total_in, kind_in, 2)} of them). The same response is in a subagent's "
+          "transcript and in the main log, and a fork inherits its parent's transcript, so it can be in "
+          f"several agent logs too: {num(t.get('rows'))} token-bearing records hold {num(total_resp)} "
+          "distinct responses. Each per-kind row is that log's own honest accounting and is not "
+          "adjusted; only the cross-kind total would double-count, so only it is deduplicated.")
+        if t.get("disagreeing"):
+            w(f"- The copies do not always agree: for {num(t['disagreeing'])} of those responses the "
+              f"copies report different token counts. Where they differ this keeps {TIE_BREAK}.")
+        else:
+            w(f"- Every duplicated response's copies agree. Where they would not, the rule is to keep "
+              f"{TIE_BREAK}.")
+    else:
+        w(f"No response is recorded in more than one log, so the per-kind rows add up to the bundle "
+          f"total exactly.")
+    if t.get("unkeyed"):
+        w(f"- {num(t['unkeyed'])} token-bearing records carry no `message_id`, so they cannot be "
+          "matched against a copy in another log and are each counted as their own response. If that "
+          "number is large, this log records no message ids and the bundle total may still "
+          "double-count.")
     w("")
     for kind, n, tin, tout, cr, cw in rows:
-        w(f"- `{kind}` is {frac(tin or 0, total_in, 'input tokens')} and "
-          f"{frac(n, total_resp, 'responses')}")
+        w(f"- `{kind}` is {frac(tin or 0, kind_in, 'input tokens')} and "
+          f"{frac(n, kind_resp, 'records')}, as a share of the per-kind sums (not of the "
+          "deduplicated bundle total, so these add to 100%)")
 
     hit = (total_cr / total_in) if total_in else None
     F["cache_hit_rate"] = hit
@@ -898,6 +1008,12 @@ def section_cost(cat, w, F, keys, alerts, top, multi, single_note):
     w(f"- Input:output ratio: {num(total_in)} : {num(total_out)} = "
       + (f"{total_in / total_out:.1f}:1" if total_out else "n/a")
       + ". Input dominates the bill, so waste and cache both matter more than output length.")
+    w("- **Every cost figure here is in tokens, on purpose.** The session log carries a "
+      "`totalCostUSD` field and this report does not use it: it is a derived estimate computed from "
+      "some unit cost, which is not necessarily what was actually paid, and it is not always updated, "
+      "so it goes stale. Tokens are what was measured. Converting them to money needs a price list, a "
+      "plan and a provider, so it is the reader's job with their own rates - do not quote a currency "
+      "figure from this report.")
 
     # -- waste, in three distinct classes
     bad_attempt_n, bad_attempt_tok = cat.rows(
