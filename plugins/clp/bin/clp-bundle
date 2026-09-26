@@ -12,6 +12,7 @@ Usage:
   clp-bundle BUNDLE_DIR events [--agent ID] [--turn N] [--tool NAME] [--errors] [--interrupts]
                             [--type T] [--after TIME] [--before TIME] [--limit N] [--json]
   clp-bundle BUNDLE_DIR record UUID [--raw]
+  clp-bundle BUNDLE_DIR context UUID [--before N] [--after N] [--copy K] [--raw]
   clp-bundle BUNDLE_DIR sql QUERY [--json]
 
 BUNDLE_DIR holds manifest.json, archives/, files/ and catalog.sqlite. ID is a node id (attempt:a1b2..,
@@ -46,6 +47,10 @@ characters), a run id or a task id.
             that refers to an agent or task; hook and reminder attachments, system rows and rows
             without a uuid are counted in the bundle table (events_unlisted_*, events_skipped_*), not listed.
   record    One event's full record, read from its archive by uuid (--raw for the JSON).
+  context   The records around an event, in its own log (the main log or that agent's transcript)
+            and original order: N before (default 10) and N after (default 5), the event marked
+            with ">". Records without a uuid are included, and the window stops at the edges of the
+            file. When a uuid was written more than once, --copy K picks the K-th copy (default 1).
   sql       A read-only query on the catalog.
 
 Options:
@@ -300,6 +305,25 @@ def cmd_record(args, db):
     return 0
 
 
+def cmd_context(args, db):
+    events = B.resolve_events(db, args.uuid)
+    if not 1 <= args.copy <= len(events):
+        raise B.BundleError(f"{args.uuid} has {len(events)} copies; --copy must be 1 to {len(events)}")
+    event = events[args.copy - 1]
+    path, first_pos, rows = B.context(args.bundle, db, event, args.before, args.after)
+    if args.raw:
+        for pos, record in rows:
+            print(json.dumps(record, ensure_ascii=False))
+        return 0
+    copies = f" copy={args.copy}/{len(events)}" if len(events) > 1 else ""
+    print(f"CONTEXT {event['uuid']} kind={event['kind']} agent={event['agent_id'] or '-'}{copies} "
+          f"source={path} lines={rows[0][0] - first_pos + 1}-{rows[-1][0] - first_pos + 1}")
+    for pos, record in rows:
+        mark = ">" if pos == event["pos"] else " "
+        print(f"{mark} {pos - first_pos + 1:>6} " + B.brief(record, width=150))
+    return 0
+
+
 def cmd_sql(args, db):
     cur = db.execute(args.query)
     names = [d[0] for d in cur.description or []]
@@ -337,6 +361,9 @@ def main():
     p.add_argument("--after"); p.add_argument("--before"); p.add_argument("--limit", type=int, default=20)
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("record"); p.add_argument("uuid"); p.add_argument("--raw", action="store_true")
+    p = sub.add_parser("context"); p.add_argument("uuid"); p.add_argument("--before", type=int, default=10)
+    p.add_argument("--after", type=int, default=5); p.add_argument("--copy", type=int, default=1)
+    p.add_argument("--raw", action="store_true")
     p = sub.add_parser("sql"); p.add_argument("query"); p.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
@@ -346,7 +373,7 @@ def main():
             return cmd_rebuild(args)
         db = B.open_catalog(args.bundle)
         return {"show": cmd_show, "evidence": cmd_evidence, "who": cmd_who, "events": cmd_events,
-                "record": cmd_record, "sql": cmd_sql}[args.command](args, db)
+                "record": cmd_record, "context": cmd_context, "sql": cmd_sql}[args.command](args, db)
     except (B.BundleError, __import__("session_graph").GraphError) as err:
         print(f"error: {err}", file=sys.stderr)
         return 1

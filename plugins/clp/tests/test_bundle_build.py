@@ -283,6 +283,24 @@ class Full(BuildTest):
                                 "(SELECT COALESCE(SUM(e.tokens_input), 0) FROM events e WHERE e.agent_id = n.agent_id)").fetchone()[0]
         self.assertEqual(mismatched, 0)
 
+    def test_context_stays_in_the_record_s_own_file_and_order(self):
+        code, out, err = self.cli("context", "w2u3", "--before", "5", "--after", "5")
+        self.assertEqual(code, 0, err)
+        lines = out.splitlines()
+        self.assertIn("kind=workflow-agent agent=w2", lines[0])
+        self.assertIn("lines=1-3", lines[0])                             # w2's file has three records; no neighbour's
+        self.assertTrue(lines[-1].startswith(">      3"))
+        self.assertIn("[Request interrupted by user]", lines[-1])
+        self.assertEqual(len(lines), 4)
+
+    def test_context_includes_records_without_a_uuid(self):
+        _, out, _ = self.cli("context", "u01", "--before", "0", "--after", "1")
+        lines = out.splitlines()
+        self.assertTrue(lines[1].startswith(">      1"))
+        self.assertIn("mode", lines[2])                                  # line 2 is the bookkeeping record with no uuid
+        _, raw, _ = self.cli("context", "u02", "--before", "1", "--after", "0", "--raw")
+        self.assertEqual([json.loads(l).get("type") for l in raw.splitlines()], ["mode", "assistant"])
+
     def test_nested_agent_and_turns(self):
         rows = {r["id"]: r for r in self.db().execute("SELECT * FROM nodes WHERE kind='agent'")}
         self.assertEqual(rows["agent:a2"]["label"], "nested")
