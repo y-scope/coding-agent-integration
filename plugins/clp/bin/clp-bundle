@@ -14,6 +14,7 @@ Usage:
   clp-bundle BUNDLE_DIR record UUID [--raw]
   clp-bundle BUNDLE_DIR context UUID [--before N] [--after N] [--copy K] [--raw]
   clp-bundle BUNDLE_DIR outcomes [--by turn|agent] [--json]
+  clp-bundle BUNDLE_DIR repo [--repo PATH] [--no-github] [--json]
   clp-bundle BUNDLE_DIR sql QUERY [--json]
 
 BUNDLE_DIR holds manifest.json, archives/, files/ and catalog.sqlite. ID is a node id (attempt:a1b2..,
@@ -57,6 +58,13 @@ characters), a run id or a task id.
             and the commit, PR and test commands it ran. A command is shown as run; it is
             "confirmed" only when its output showed the result ([branch sha], a PR URL, test counts),
             which a chained or piped command often hides, so "run" is not "exists".
+  repo      Match the session's commit and PR commands to what the repository holds: every commit git
+            still has (all refs and reflogs) and, through gh, the PRs on GitHub, created between a
+            command being issued and its result. For each commit command: how it matched (exact: its
+            output printed the sha; time+subject; time; ambiguous; none) and the commit. For each PR
+            command: the PRs it created (one command can create many). Also the commits in the
+            session's span that no commit command made, by what made them (rebase, amend, ...).
+            --repo defaults to the git repository of the session's working directory.
   sql       A read-only query on the catalog.
 
 Options:
@@ -381,6 +389,38 @@ def cmd_outcomes(args, db):
     return 0
 
 
+def cmd_repo(args, db):
+    import bundle_repo
+    path = args.repo or db.execute("SELECT v FROM bundle WHERE k = 'cwd'").fetchone()[0]
+    if not path:
+        raise B.BundleError("the catalog records no working directory; pass --repo PATH")
+    repo = bundle_repo.find_repo(path)
+    result = bundle_repo.match(args.bundle, db, repo, github=not args.no_github)
+    if args.json:
+        print(json.dumps({"repo": repo, **result}, indent=1, default=str))
+        return 0
+    counts = {}
+    for c in result["commits"]:
+        counts[c["match"]] = counts.get(c["match"], 0) + 1
+    print(f"REPO {repo} commits_in_span={result['commits_in_span']} commit_commands={len(result['commits'])} "
+          + " ".join(f"{k}={counts.get(k, 0)}" for k in ("exact", "time+subject", "time", "ambiguous", "none")))
+    for c in result["commits"]:
+        who = c["agent_id"] or "main"
+        shas = ",".join(x["sha"][:9] for x in c["commits"][:4]) + ("…" if len(c["commits"]) > 4 else "")
+        subject = c["commits"][0]["subject"] if len(c["commits"]) == 1 else ""
+        print(f"COMMIT turn={c['turn']} {c['kind']}:{who} at={c['ts'][:19]} match={c['match']} {shas or '-'}"
+              + (f" {json.dumps(subject[:80], ensure_ascii=False)}" if subject else ""))
+    for p in result["prs"]:
+        who = p["agent_id"] or "main"
+        print(f"PR turn={p['turn']} {p['kind']}:{who} at={p['ts'][:19]} created={len(p['prs'])} "
+              + " ".join(u.rsplit("/", 1)[-1] for u in p["prs"]))
+    if result["github"]:
+        print(f"GITHUB {result['github']}")
+    other = " ".join(f"{json.dumps(k)}={v}" for k, v in sorted(result["unattributed"].items(), key=lambda x: -x[1]))
+    print(f"NOT_FROM_A_COMMIT_COMMAND {sum(result['unattributed'].values())}" + (f" {other}" if other else ""))
+    return 0
+
+
 def cmd_sql(args, db):
     cur = db.execute(args.query)
     names = [d[0] for d in cur.description or []]
@@ -423,6 +463,8 @@ def main():
     p.add_argument("--raw", action="store_true")
     p = sub.add_parser("outcomes"); p.add_argument("--by", choices=("turn", "agent"), default="turn")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("repo"); p.add_argument("--repo"); p.add_argument("--no-github", action="store_true")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("sql"); p.add_argument("query"); p.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
@@ -432,7 +474,7 @@ def main():
             return cmd_rebuild(args)
         db = B.open_catalog(args.bundle)
         return {"show": cmd_show, "evidence": cmd_evidence, "who": cmd_who, "events": cmd_events,
-                "record": cmd_record, "context": cmd_context, "outcomes": cmd_outcomes,
+                "record": cmd_record, "context": cmd_context, "outcomes": cmd_outcomes, "repo": cmd_repo,
                 "sql": cmd_sql}[args.command](args, db)
     except (B.BundleError, __import__("session_graph").GraphError) as err:
         print(f"error: {err}", file=sys.stderr)

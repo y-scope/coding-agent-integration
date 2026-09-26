@@ -434,6 +434,47 @@ class Failures(BuildTest):
         self.assertIn("clp-s is not available", err)
 
 
+class Repo(BuildTest):
+    """clp-bundle repo against a real git repository whose commits are made at the fixture's times."""
+
+    def commit(self, repo, when, subject):
+        env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when, "GIT_AUTHOR_NAME": "t",
+               "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        with open(os.path.join(repo, "f"), "a") as fh:
+            fh.write(subject)
+        subprocess.run(["git", "-C", repo, "add", "f"], check=True, env=env, capture_output=True)
+        subprocess.run(["git", "-C", repo, "commit", "-q", "-m", subject], check=True, env=env, capture_output=True)
+        return subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+    def test_commit_commands_match_the_repository_by_time_and_subject(self):
+        make_session(self.home)
+        self.assertEqual(self.build()[0], 0)
+        repo = os.path.join(self.tmp.name, "repo")
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        x = self.commit(repo, "2026-01-01T11:01:00Z", "x")              # made by the command at 11:01
+        y = self.commit(repo, "2026-01-01T11:02:00Z", "y")              # the quiet, piped command at 11:02
+        self.commit(repo, "2026-01-01T11:30:00Z", "later")              # no command made this one
+        code, out, err = self.cli("repo", "--repo", repo, "--no-github")
+        self.assertEqual(code, 0, err)
+        self.assertIn("commit_commands=2 exact=0 time+subject=2 time=0 ambiguous=0 none=0", out)
+        self.assertIn(f"match=time+subject {x[:9]}", out)
+        self.assertIn(f"match=time+subject {y[:9]}", out)                # output hid it; the repository did not
+        self.assertIn('NOT_FROM_A_COMMIT_COMMAND 1 "commit"=1', out)
+        self.assertIn("GITHUB GitHub not read (--no-github)", out)
+
+
+class CommitSubjects(unittest.TestCase):
+    def test_messages_are_read_from_git_commit_only_in_every_common_form(self):
+        sys.path.insert(0, os.path.join(BIN, "lib"))
+        import bundle_repo
+        cases = {"git commit -qm 'y' | tail -1": ["y"], 'git commit -am "fix: a"': ["fix: a"], "git commit -m'x'": ["x"],
+                 'git commit --message="m1"': ["m1"], "git commit -m \"$(cat <<'EOF'\nfeat: z\n\nbody\nEOF\n)\"": ["feat: z"],
+                 "git commit -F - <<'MSG'\nfix(x): y\n\nbody\nMSG": ["fix(x): y"], "git commit --amend --no-edit": [],
+                 "git log -m 'no'": [], "git add -A && git commit -m 'a' && git log -m 'no'": ["a"]}
+        for command, subjects in cases.items():
+            self.assertEqual(bundle_repo.commit_subjects(command), subjects, command)
+
+
 class Repairs(BuildTest):
     """What real Claude Code sessions contain that the first sessions did not."""
 
