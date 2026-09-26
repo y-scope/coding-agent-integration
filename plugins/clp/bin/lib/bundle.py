@@ -23,7 +23,7 @@ from datetime import datetime
 
 # The catalog's layout. A catalog of another layout is refused, and rebuilt from its bundle
 # (`clp-bundle BUNDLE rebuild`) when the bundle's manifest layout is current.
-LAYOUT = 5
+LAYOUT = 6
 # The layout of manifest.json, archives/ and files/. A bundle of another layout is made again (`build --force`).
 MANIFEST_LAYOUT = 2
 
@@ -87,8 +87,11 @@ CREATE INDEX event_tools_event ON event_tools(event);
 -- PR URL, test counts), and the parsed values are kept. A command that was run is not a commit that exists.
 CREATE TABLE file_versions(turn INTEGER, ts TEXT, path TEXT, file_hash TEXT, version INTEGER, backup TEXT,
                            message_uuid TEXT, prompt_uuid TEXT);
+-- ts is when the command was issued, ended when its result came back: the window a repository's own history
+-- is matched in (clp-bundle BUNDLE repo).
 CREATE TABLE actions(uuid TEXT, kind TEXT, agent_id TEXT, turn INTEGER, ts TEXT, action TEXT, failed INTEGER,
-                     confirmed INTEGER, branch TEXT, sha TEXT, pr_url TEXT, tests_passed INTEGER, tests_failed INTEGER);
+                     confirmed INTEGER, branch TEXT, sha TEXT, pr_url TEXT, tests_passed INTEGER, tests_failed INTEGER,
+                     ended TEXT);
 CREATE INDEX actions_turn ON actions(turn);
 CREATE INDEX file_versions_turn ON file_versions(turn);
 -- Successful edits and writes, per agent and turn.

@@ -237,6 +237,7 @@ A bundle is one session's logs kept as CLP archives, with a manifest and a SQLit
 ./plugins/clp/bin/clp-bundle BUNDLE record 92b5ed72-…                  # one event's full record, read from its archive by uuid
 ./plugins/clp/bin/clp-bundle BUNDLE context 92b5ed72-… --before 10 --after 5   # the records around it in its own log and order, uuid-less records included
 ./plugins/clp/bin/clp-bundle BUNDLE outcomes [--by agent]                # per turn or agent: files changed, commits, PRs and test runs (run vs confirmed by their output)
+./plugins/clp/bin/clp-bundle BUNDLE repo [--repo PATH] [--no-github]    # which commits (git, all refs and reflogs) and PRs (GitHub) each command actually made, matched by time
 ./plugins/clp/bin/clp-bundle BUNDLE sql "select cause, count(*) from nodes group by 1"   # read-only
 ```
 

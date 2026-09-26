@@ -377,6 +377,7 @@ def _write_events(db, positioned):
     actions); returns {kind: (events, unlisted, no uuid)}."""
     counts = {}
     prompts, turn_of_prompt = [], {}
+    cwd = None
     for kind in EVENT_KINDS:
         rows, unlisted, no_uuid = [], 0, 0
         deltas, pending, actions = [], {}, []
@@ -384,6 +385,8 @@ def _write_events(db, positioned):
             for pos, r in enumerate(records, records.first):
                 if r.get("type") == "file-history-delta":
                     deltas.append(r)
+                if kind == "main" and cwd is None and isinstance(r.get("cwd"), str):
+                    cwd = r["cwd"]
                 message = r.get("message") if isinstance(r.get("message"), dict) else {}
                 content = message.get("content") if isinstance(message.get("content"), list) else []
                 for blk in content:
@@ -397,6 +400,7 @@ def _write_events(db, positioned):
                         command, uuid, agent, ts = pending.pop(blk["tool_use_id"])
                         found = _action(command, _result_text(blk), bool(blk.get("is_error")))
                         if found:
+                            found[1]["ended"] = r.get("timestamp")
                             actions.append((uuid, agent, ts, found[0], int(bool(blk.get("is_error"))), found[1]))
                 if not r.get("uuid"):
                     no_uuid += 1
@@ -447,14 +451,16 @@ def _write_events(db, positioned):
                         d.get("snapshotMessageId")))
         for uuid, agent, ts, action, failed, fields in actions:
             turn = bisect.bisect_right(prompts, ts[:23]) if isinstance(ts, str) and prompts else None
-            db.execute("INSERT INTO actions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ended = fields.get("ended")
+            db.execute("INSERT INTO actions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (uuid, kind, agent, turn, ts[:23] if isinstance(ts, str) else None, action, failed,
                         fields.get("confirmed"), fields.get("branch"), fields.get("sha"), fields.get("pr_url"),
-                        fields.get("tests_passed"), fields.get("tests_failed")))
+                        fields.get("tests_passed"), fields.get("tests_failed"), ended[:23] if isinstance(ended, str) else None))
         if rows or unlisted or no_uuid:
             counts[kind] = (len(rows), unlisted, no_uuid)
         db.execute("INSERT INTO bundle VALUES(?,?)", (f"events_unlisted_{kind}", str(unlisted)))
         db.execute("INSERT INTO bundle VALUES(?,?)", (f"events_skipped_{kind}", str(no_uuid)))
+    db.execute("INSERT INTO bundle VALUES(?,?)", ("cwd", cwd))
     return counts
 
 
