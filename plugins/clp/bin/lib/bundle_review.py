@@ -411,3 +411,97 @@ def error_groups(groups, endpoint):
                     "projects": sorted(set().union(*(groups[t]["projects"] for t in members))),
                     "examples": [e for t in members for e in groups[t]["examples"]][:3]})
     return sorted(out, key=lambda g: (-len(g["projects"]), -len(g["sessions"]), -g["n"]))
+
+
+# ---- trends over time
+
+# name: (numerator SQL, denominator SQL, kind): each returns (period, count) rows for a period expression {p}
+# over the event or node time. kind "rate" is a proportion (a 95% Wilson interval), "mean" an average.
+TRENDS = {
+    "tool error rate": (
+        "SELECT {p}, COUNT(*) FROM event_tools r JOIN events e ON e.id = r.event WHERE r.role = 'result' AND r.is_error = 1 GROUP BY 1",
+        "SELECT {p}, COUNT(*) FROM event_tools r JOIN events e ON e.id = r.event WHERE r.role = 'result' GROUP BY 1", "rate", 500),
+    "StructuredOutput error rate": (
+        "SELECT {p}, COUNT(*) FROM event_tools u JOIN events e ON e.id = u.event JOIN event_tools r ON r.tool_use_id = u.tool_use_id "
+        "AND r.role = 'result' AND r.is_error = 1 WHERE u.role = 'use' AND u.name = 'StructuredOutput' GROUP BY 1",
+        "SELECT {p}, COUNT(*) FROM event_tools u JOIN events e ON e.id = u.event WHERE u.role = 'use' AND u.name = 'StructuredOutput' GROUP BY 1",
+        "rate", 50),
+    "stalled attempts / attempts": (
+        "SELECT {pn}, COUNT(*) FROM nodes n WHERE kind = 'attempt' AND status = 'stalled-retried' GROUP BY 1",
+        "SELECT {pn}, COUNT(*) FROM nodes n WHERE kind = 'attempt' GROUP BY 1", "rate", 50),
+    "failed agents / agents": (
+        "SELECT {pn}, COUNT(*) FROM nodes n WHERE kind = 'agent' AND status = 'failed' GROUP BY 1",
+        "SELECT {pn}, COUNT(*) FROM nodes n WHERE kind = 'agent' GROUP BY 1", "rate", 20),
+    "output tokens per human prompt": (
+        "SELECT {p}, SUM(tokens_output) FROM events e WHERE tokens_output IS NOT NULL GROUP BY 1",
+        "SELECT {p}, COUNT(*) FROM events e WHERE kind = 'main' AND human = 1 GROUP BY 1", "mean", 50),
+    "context tokens per call": (
+        "SELECT {p}, SUM(tokens_input + COALESCE(tokens_cache_read, 0) + COALESCE(tokens_cache_write, 0)) FROM events e "
+        "WHERE tokens_input IS NOT NULL GROUP BY 1",
+        "SELECT {p}, COUNT(*) FROM events e WHERE tokens_input IS NOT NULL GROUP BY 1", "mean", 200),
+}
+DAY = ("substr(e.ts, 1, 10)", "substr(n.start, 1, 10)")      # grouped by day in SQL, into weeks in Python
+
+
+def _period(day, by):
+    """The period a YYYY-MM-DD day falls in: the day itself, or its ISO week (2026-W35); computed here so
+    it does not depend on the SQLite build's strftime."""
+    if by == "day":
+        return day
+    from datetime import date
+    year, week, _ = date.fromisoformat(day).isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _wilson(k, n, z=1.96):
+    if n == 0:
+        return None, None
+    p = k / n
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / (1 + z * z / n)
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def trends(bundles, by="week"):
+    """Each trend signal per period, summed over all bundles by the time of each event (a session spanning
+    days counts in each), with its volume, an interval for rates, and whether it changed clearly from the
+    previous period that had enough volume (95% intervals that do not overlap; for averages, a factor of 2)."""
+    p, pn = DAY
+    sums = {name: {} for name in TRENDS}
+    for bundle_dir in bundles:
+        db = B.open_catalog(bundle_dir)
+        try:
+            for name, (num_sql, den_sql, _, _) in TRENDS.items():
+                for sql, slot in ((num_sql, 0), (den_sql, 1)):
+                    for day, value in db.execute(sql.format(p=p, pn=pn)):
+                        if not day:
+                            continue
+                        cell = sums[name].setdefault(_period(day, by), [0, 0, set()])
+                        cell[slot] += value or 0
+                        if slot == 1 and value:
+                            cell[2].add(bundle_dir)
+        finally:
+            db.close()
+    out = []
+    for name, (_, _, kind, minimum) in TRENDS.items():
+        previous = None
+        for period in sorted(sums[name]):
+            num, den, sessions = sums[name][period]
+            row = {"signal": name, "period": period, "count": num, "volume": den, "sessions": len(sessions),
+                   "enough": den >= minimum,
+                   "kind": kind, "value": (num / den) if den else None, "low": None, "high": None, "change": None}
+            if kind == "rate" and den:
+                row["low"], row["high"] = _wilson(num, den)
+            if row["enough"] and previous is not None and row["value"] is not None:
+                if kind == "rate":
+                    if row["low"] > previous["high"]:
+                        row["change"] = "up"
+                    elif row["high"] < previous["low"]:
+                        row["change"] = "down"
+                elif previous["value"]:
+                    ratio = row["value"] / previous["value"]
+                    row["change"] = "up" if ratio >= 2 else ("down" if ratio <= 0.5 else None)
+            if row["enough"]:
+                previous = row
+            out.append(row)
+    return out

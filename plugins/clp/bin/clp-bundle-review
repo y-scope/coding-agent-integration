@@ -4,7 +4,7 @@ clp-bundle-review - review a directory of session bundles: what went wrong, wher
 
 Usage:
   clp-bundle-review DIR [--build] [--claude-home DIR] [--skip ID]... [--clp-s PATH]
-                        [--semantic-endpoint URL] [--top N] [--json]
+                        [--semantic-endpoint URL] [--trend week|day] [--top N] [--json]
 
 DIR holds one bundle per session (clp-bundle BUNDLE build), named by session id. With --build,
 every Claude Code session under --claude-home (default ~/.claude) gets a current bundle in DIR
@@ -22,10 +22,19 @@ Output, one line each:
   FLAGGED <session> <project> <n>: <signal>; ...
   ERRORS templates=N groups=N recurring=N endpoint=URL
   ERROR projects=N sessions=N n=N templates=N method=… example=<session> <uuid> text="…"
+  TREND <signal> <period> value=… [low-high] n=N sessions=N [too-little] [up|down]   (with --trend)
 
 Zero-tolerance signals are findings whenever they occur; rate signals are compared with the median
 and 90th percentile of the sessions active enough to rate (at least 5), so "above" means unusual for
 this set of sessions, not for all users. Example ids open with clp-bundle DIR/<session> show|context.
+
+Trends (--trend week|day): the rate signals that the catalog has at event level (tool errors,
+StructuredOutput errors, stalled attempts, failed agents, output tokens per prompt, context per call)
+per ISO week or day, summed over all sessions by the time of each event, so a session spanning days
+counts in each. Each value has its volume and the number of sessions behind it; rates have a 95%
+interval. A period with too little volume is marked, and a change is flagged only between periods
+with enough volume whose intervals do not overlap (for averages, a factor of 2). A fleet trend can be
+one large session: read the sessions count.
 
 Error groups: failed tool calls are grouped by CLP's own template, shape(toolUseResult), then merged:
 command failures by a shared beginning and end; other messages (harness, tool and provider errors) by
@@ -54,6 +63,7 @@ def main():
     parser.add_argument("--clp-s")
     parser.add_argument("--semantic-endpoint")
     parser.add_argument("--top", type=int, default=20)
+    parser.add_argument("--trend", choices=("week", "day"))
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--search-wrapper",
                         default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"))
@@ -75,6 +85,7 @@ def main():
         templates = R.error_templates(bundles, args.search_wrapper)
         endpoint = args.semantic_endpoint or R.default_endpoint()
         groups = R.error_groups(templates, endpoint)
+        trend = R.trends(bundles, args.trend) if args.trend else None
     except (B.BundleError, OSError) as err:
         print(f"error: {err}", file=sys.stderr)
         return 1
@@ -91,7 +102,8 @@ def main():
         for s in sessions:
             s.pop("bundle", None)
         print(json.dumps({"summary": summary, "build": build, "sessions": sessions, **ranking,
-                          "errors": {"templates": len(templates), "endpoint": endpoint, "groups": groups}},
+                          "errors": {"templates": len(templates), "endpoint": endpoint, "groups": groups},
+                          **({"trends": trend} if trend is not None else {})},
                          indent=1, default=str))
         return 0
 
@@ -121,6 +133,13 @@ def main():
         print(f"ERROR projects={len(g['projects'])} sessions={len(g['sessions'])} n={g['n']} templates={g['templates']} "
               f"method={g['method']} example={g['examples'][0] if g['examples'] else '-'} "
               f"text={json.dumps(g['leader'][:140], ensure_ascii=False)}")
+    for t in trend or []:
+        if t["value"] is None:
+            continue
+        value = f"{t['value']:.1%}" if t["kind"] == "rate" else f"{t['value']:,.0f}"
+        interval = f" [{t['low']:.1%}-{t['high']:.1%}]" if t["low"] is not None else ""
+        print(f"TREND {t['signal'].replace(' ', '_')} {t['period']} value={value}{interval} n={t['volume']} sessions={t['sessions']}"
+              + ("" if t["enough"] else " too-little") + (f" {t['change']}" if t["change"] else ""))
     return 0
 
 
