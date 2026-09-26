@@ -276,7 +276,7 @@ This is the feature's core value: re-analyzing a growing log costs only the clas
 By the way — Steps 2, 5, and the cache probe are what the `log-insights` skill runs as its first command, via one helper:
 
 ```bash
-"$B/log-shape-insights-bootstrap" --cache-dir release-testing/workdir/lt-cache \
+"$B/clp-insights" bootstrap --cache-dir release-testing/workdir/lt-cache \
   --out-dir release-testing/workdir/bootstrap "$ARCHIVE"
 ```
 
@@ -285,7 +285,7 @@ Expected: an estimate line first (`[bootstrap] archive <size>; expect under a mi
 That first run also stored the archive's per-template counts in the cache database. Run it again:
 
 ```bash
-"$B/log-shape-insights-bootstrap" --cache-dir release-testing/workdir/lt-cache \
+"$B/clp-insights" bootstrap --cache-dir release-testing/workdir/lt-cache \
   --out-dir release-testing/workdir/bootstrap-2 "$ARCHIVE" \
   | grep 'analyzed before\|SHAPES_SOURCE\|CACHE_MODE\|LOG_SHAPES_FILE'
 ```
@@ -332,7 +332,7 @@ then ask:
 
 > Compress the logs in release-testing/sample-logs/vllm and give me log insights.
 
-The agent should: compress with `--structurize`, report the compression stats, run `log-shape-insights-bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above — which it announces with an expected duration and follows with its `[bootstrap]` progress lines), cluster the templates with `log-shape-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with an opus subagent (caching the expanded result) while it asks what you already know about these logs, summarize the ranked categories and ask what to focus on while the core queries run, queue the focus ahead of the rest, post the early numbers, ask where to save the report and in which formats while the writer works, save it there, and return a report that leads with the focus, with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives. Answer the first question with a problem (for example "requests seemed to fail") and check that the focus question recommends the categories it points at and that the report says whether the records support it. Pick HTML and PDF (PDF is offered only when a Chrome, Chromium or Edge is installed) and check that both files land where you chose, with a timestamped name.
+The agent should: compress with `--structurize`, report the compression stats, run `clp-insights bootstrap` (one command covering the schema sample, the 100-template dictionary dump, and the cache probe — Steps 2, 5, and 6 above — which it announces with an expected duration and follows with its `[bootstrap]` progress lines), cluster the templates with `log-shape-cluster` (which embeds them through the semantic server — it should never try to install a model or start a server), classify the cluster representatives with an opus subagent (caching the expanded result) while it asks what you already know about these logs, summarize the ranked categories and ask what to focus on while the core queries run, queue the focus ahead of the rest, post the early numbers, ask where to save the report and in which formats while the writer works, save it there, and return a report that leads with the focus, with severity counts, top templates, warnings, and follow-up queries — the same steps you just did by hand, with the expensive classification shrunk to one prompt over cluster representatives. Answer the first question with a problem (for example "requests seemed to fail") and check that the focus question recommends the categories it points at and that the report says whether the records support it. Pick HTML and PDF (PDF is offered only when a Chrome, Chromium or Edge is installed) and check that both files land where you chose, with a timestamped name.
 
 ## Cleanup
 
@@ -346,7 +346,7 @@ unset CLP_LOG_SHAPE_CACHE_DIR
 Step 9 wrote outside it:
 - **The agent's archive**, under the archives root (`/tmp/yscope-clp-archives` unless you configured another).
 - **A classification and the archive's stored counts**, in the cache that `CLP_LOG_SHAPE_CACHE_DIR` named in the shell you started `claude` from. That is `release-testing/workdir/lt-cache-growth` if you kept the Step 6 shell, which the `rm -rf` above already removed. Otherwise it is your real cache, `~/.config/yscope-clp-plugin/log-shape-cache`, and the commands below remove only this run's rows from it.
-- **The working files** `/tmp/log-shape-*`, `/tmp/log-shapes*.ndjson` and `/tmp/lt-diff.out`. They are shared by every analysis on the machine, so remove them only while no other analysis is running.
+- **The working files** `/tmp/clp-insights-*`, `/tmp/clp-report-flags.txt`, `/tmp/log-shape-*`, `/tmp/log-shapes*.ndjson` and `/tmp/lt-diff.out`. They are shared by every analysis on the machine, so remove them only while no other analysis is running.
 
 ```bash
 LC=./plugins/clp/bin/log-shape-cache
@@ -356,7 +356,7 @@ A="$(ls -dt "$ROOT"/folder-vllm-*/ | head -1)"      # the agent's archive: the n
 "$LC" list                                          # the entry classified just now; the agent's
 "$LC" forget <APP_KEY>                              #   bootstrap printed its APP_KEY too
 rm -rf "$A"
-rm -f /tmp/log-shape-* /tmp/log-shapes*.ndjson /tmp/lt-diff.out
+rm -f /tmp/clp-insights-* /tmp/clp-report-flags.txt /tmp/log-shape-* /tmp/log-shapes*.ndjson /tmp/lt-diff.out
 ```
 
 `forget` prints what it removed, and deleting nothing is not an error, so the commands are safe to repeat. Without the `forget` lines, the next agent run on these logs finds the classification (`CACHE_MODE=UPTODATE`) instead of classifying from scratch, and stored archives you no longer analyze drop out of the cache after 30 days.
@@ -368,7 +368,7 @@ rm -f /tmp/log-shape-* /tmp/log-shapes*.ndjson /tmp/lt-diff.out
 | `error: clp-s binary not found` | Install CLP or set `CLP_S_BIN=/path/to/clp-s`. |
 | `message:<word>` returns 0 | Expected (Step 4). Message content is not KQL-searchable; project + grep instead. |
 | Step 5 prints `error: no log shape entries found in input` and the count is 0 | Your `clp-s` predates the shapes API (e.g. clp-core 0.12.x) — the underlying error (`--experimental flag set but archive was not created with --experimental`) is hidden by the `2>/dev/null` in the pipeline. Your archive is fine and Steps 1–4/7–8 remain valid; only the binary is too old. Point `CLP_S_BIN` at a 0.13+ build and re-run Step 5 — no recompression needed. |
-| `log-shape-insights-bootstrap` exits 1 with `error: stats.log_shapes emitted no log shapes` | Same 0.12.x cause as above. Point `CLP_S_BIN` at a 0.13+ build and re-run. |
+| `clp-insights bootstrap` exits 1 with `error: stats.log_shapes emitted no log shapes` | Same 0.12.x cause as above. Point `CLP_S_BIN` at a 0.13+ build and re-run. |
 | The bootstrap prints no `LOG_SHAPES_FILE=` line, and `log-shapes.ndjson` is missing from its `--out-dir` | Expected when it printed `SHAPES_SOURCE=stored`: the archive was analyzed before with the same cache, so its counts came from the database and the dictionary was not dumped. Add `--dump` for the full template text. |
 | `log-shape-cache freqs` fails, or the bootstrap prints `FREQS=UNAVAILABLE` | The archive was compressed by a `clp-s` build that did not store per-template counts (`count` is `null` in `stats.log_shapes`). Recompress with the current build. |
 | `error: stats.logtypes was renamed to stats.log_shapes` | You ran the legacy query spelling; use `stats.log_shapes` as shown in Step 5. |

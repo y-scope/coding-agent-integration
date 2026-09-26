@@ -29,12 +29,9 @@ plugins/clp/.codex-plugin/plugin.json
     Codex plugin manifest.
 plugins/clp/bin/
     Restricted-passthrough bash wrappers for clp-s, plus local helpers
-    (clp-detect-logs, structurize.py, log-shape-cache, log-shape-insights-bootstrap,
-    log-shape-cluster, log-shape-insight-extract, log-shape-baseline-plan,
-    log-shape-query-plan-run, log-shape-insight-facts, log-shape-report-check,
-    log-shape-report-save,
-    clp-compress-status,
-    kql-build, kql-validate-wildcards) that are not clp-s passthroughs.
+    (clp-detect-logs, structurize.py, log-shape-cache, log-shape-cluster,
+    clp-insights, clp-report, clp-compress-status,
+    kql-build) that are not clp-s passthroughs.
 plugins/clp/skills-claude/
     Claude Code skills: compress, compress-folder, search, log-insights,
     decompress, claude-code-trajectory.

@@ -1,6 +1,6 @@
 # Log shape baseline reference (log-insights)
 
-Read this only when needed: the bootstrap misbehaves (empty dump, missing frequencies), the user drills into individual templates, or you need the retrieval/semantic patterns. The happy path never needs this file — the `log-shape-insights-bootstrap` script encapsulates the dump and the cache probe.
+Read this only when needed: the bootstrap misbehaves (empty dump, missing frequencies), the user drills into individual templates, or you need the retrieval/semantic patterns. The happy path never needs this file — the `clp-insights bootstrap` script encapsulates the dump and the cache probe.
 
 ## stats.log_shapes details
 

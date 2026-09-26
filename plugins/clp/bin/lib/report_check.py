@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-log-shape-report-check - flag figures and KQL fields in a log-insights report
+clp-report check - flag figures and KQL fields in a log-insights report
 that its own inputs do not support (log-insights skill, step 7).
 
 The report writer is told to quote figures from the facts file and to derive
@@ -21,9 +20,9 @@ Two checks:
     facts list under "Fields a KQL query may filter on".
 
 Usage:
-  log-shape-report-check REPORT [--facts F] [--also F ...]
+  clp-report check REPORT [--facts F] [--also F ...]
 
-  --facts F   The facts file (default: /tmp/log-shape-insight-facts.md)
+  --facts F   The facts file (default: /tmp/clp-insights-facts.md)
   --also F    Another file whose figures the report may use, e.g. the results
               table; repeatable.
 
@@ -85,7 +84,7 @@ def looks_like_kql(text):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Flag unsupported figures and KQL fields in a report.")
     ap.add_argument("report")
-    ap.add_argument("--facts", default="/tmp/log-shape-insight-facts.md")
+    ap.add_argument("--facts", default="/tmp/clp-insights-facts.md")
     ap.add_argument("--also", action="append", default=[])
     ap.add_argument("--schema-tree-file", default=None,
                     help="clp-s-schema-tree --json-out file; every path in it is a field")
@@ -173,6 +172,3 @@ def main(argv=None) -> int:
     print(f"CHECKED figures against {1 + len(extra)} file(s); flagged {len(flags)}")
     return 1 if flags else 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

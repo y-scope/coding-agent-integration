@@ -20,12 +20,8 @@ plugins/clp/.codex-plugin/plugin.json
 plugins/clp/bin/
     Restricted-passthrough bash wrappers (clp-s-*) and shared lib/clp-common.sh,
     plus local helpers that are not clp-s passthroughs (clp-detect-logs, structurize.py,
-    log-shape-cache, log-shape-insights-bootstrap, log-shape-cluster,
-    log-shape-insight-extract, log-shape-baseline-plan, log-shape-query-plan-run,
-    log-shape-insight-facts, log-shape-report-check, log-shape-report-save,
-    clp-compress-status,
-    kql-build,
-    kql-validate-wildcards; shared Python in lib/kql_build.py and
+    log-shape-cache, log-shape-cluster, clp-insights, clp-report,
+    clp-compress-status, kql-build; shared Python in lib/kql_build.py and
     lib/log_shapes.py).
 plugins/clp/skills-claude/
     Claude Code skills: compress, compress-folder, search, log-insights,
@@ -122,6 +118,30 @@ If your change was only made in one product's skills tree, port the equivalent c
 
 Push your branch and open a PR against `main`. The release flow is described in the [Releases](README.md#releases) section of the README — this repo follows [Semantic Versioning](https://semver.org/) for the `clp@yscope` plugin.
 
+## How the clp commands are layered
+
+Do not infer a command's role from its prefix — the prefix records where it came from, and these five tiers record what it is for. A new command belongs in exactly one of them; if it seems to belong in two, it is doing two jobs.
+
+| Tier | What it does | Commands |
+|---|---|---|
+| **Passthrough** | restricted wrappers over the `clp-s` binary, adding validation and nothing else | `clp-s-search-kql`, `clp-s-compress-session`, `clp-s-compress-folder`, `clp-s-decompress`, `clp-s-list-sessions`, `clp-detect-logs`, `clp-compress-status` |
+| **Derived reading** | computes something the records do not state, from one archive | `clp-s-schema-tree` (fields, type drift, record families), `clp-session turns` (turn boundaries and the time split) |
+| **Session model** | reconstructs a whole session from its many files, as archives plus a catalog of how they connect | `clp-bundle`, `clp-bundle-review` |
+| **Measurement** | computes every figure a report may quote, so no model does arithmetic | `clp-session facts`, `clp-insights facts` |
+| **Policy and orchestration** | applies thresholds, or drives a pipeline | `clp-session score` + `scoring-scale.json`, `clp-insights` (the rest), `clp-report`, `kql-build`, `log-shape-cache`, `log-shape-cluster` |
+
+Three things that follow from the tiers, and are easy to get wrong:
+
+**A passthrough may not compute.** If a change would have `clp-s-search-kql` derive, summarise or interpret anything, it belongs in a derived-reading command that calls it. Keeping that boundary is why the search wrapper can be trusted as the single query path.
+
+**Measurement may not judge.** `clp-session facts` publishes values and never scores them; the thresholds live in `scoring-scale.json` because what counts as acceptable is the customer's policy, not a property of the data. A penalty, a weighting or a rung in Python is a bug, not a shortcut.
+
+**`clp-insights facts` and `clp-session facts` are deliberately not merged.** They look alike and they are not: one reads a query-plan's results, the other a bundle's catalog. What they share is a *contract* — the report writer may quote no figure absent from the facts file — and that contract is worth stating in both places rather than abstracting into a base neither fits.
+
+### Naming
+
+An artefact is named after the command that produces it, including temp files: `clp-insights extract` writes `/tmp/clp-insights-query-plan.txt`. `log-shape-*` survives only where the subject genuinely is log shapes — the dictionary, the clustering, the classification cache, and the baseline *method* documented in `references/log-shape-baseline.md`. That is why `log-shape-cache` and `log-shape-cluster` keep their names while the insight pipeline lost the prefix: those two really do cache and cluster log shapes.
+
 ## What to change for each kind of edit
 
 - **New wrapper flag** — add the flag to the wrapper's explicit allowlist (and to the skill's `allowed-tools` for Claude skills), then describe the new flag in `plugins/clp/README.md` and the matching `SKILL.md`. No manifest bump unless behavior changed.
@@ -172,7 +192,7 @@ A few things to check before opening a PR, in addition to the preflight commands
 - New `SKILL.md` files have YAML frontmatter with both `name` and `description`.
 - New wrapper flags appear in the wrapper's allowlist, the corresponding `SKILL.md` in **both** product trees, and `plugins/clp/README.md`.
 - A wrapper change that exposes new behavior is reflected in the wrapper's `--help` (or equivalent) text.
-- A change to `plugins/clp/scoring-scale.json` passes `plugins/clp/bin/clp-session-facts --check-scale` (the release workflow runs it too). Every axis needs a `basis` and a `rationale`: a threshold nobody can justify is not a threshold. Moving a rung is a behavior change — bump `scale_version`, since scores from before and after are not comparable.
+- A change to `plugins/clp/scoring-scale.json` passes `plugins/clp/bin/clp-session facts --check-scale` (the release workflow runs it too). Every axis needs a `basis` and a `rationale`: a threshold nobody can justify is not a threshold. Moving a rung is a behavior change — bump `scale_version`, since scores from before and after are not comparable.
 
 ## Release process
 

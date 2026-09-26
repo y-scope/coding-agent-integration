@@ -69,7 +69,7 @@ _VALUE_ESCAPES = {
 # strings masked (see _mask_quoted), so a `:*` inside a quoted value -- as in
 # message:"*Error:*" -- is never taken for one. The value stops at a quote,
 # colon or parenthesis, so `a:* AND b:*` (two exists filters) is not read as
-# one value spanning the AND. Shared with kql-validate-wildcards.
+# one value spanning the AND. Shared with kql-build validate-wildcards.
 _UNQUOTED_WILDCARD_RE = re.compile(r'(?<!["\']):\*([^*\n":()]*)\*')
 
 

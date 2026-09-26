@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
 """
-clp-s-session-turns - where a Claude Code session's time went, per turn.
+clp-session turns - where a Claude Code session's time went, per turn.
 
 Usage:
-  clp-s-session-turns [options] ARCHIVES_DIR
+  clp-session turns [options] ARCHIVES_DIR
 
 ARCHIVES_DIR is an archive made from one Claude Code session's main log
 (clp-s-compress-session), compressed with or without --structurize-arrays. It
@@ -61,7 +60,10 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+LIB_DIR = os.path.dirname(os.path.realpath(__file__))
+# The sibling tools this module runs live one level up, in bin/.
+BIN_DIR = os.path.dirname(LIB_DIR)
+sys.path.insert(0, LIB_DIR)
 
 from session_turns import (  # noqa: E402
     HUMAN_WAIT_TOOLS,
@@ -125,7 +127,7 @@ def main():
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
         "--search-wrapper",
-        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"),
+        default=os.path.join(BIN_DIR, "clp-s-search-kql"),
     )
     args = parser.parse_args()
 
@@ -136,7 +138,7 @@ def main():
         if os.path.isfile(os.path.join(bundle, "catalog.sqlite")):
             hint = (f"\nFor this bundle, pass its main log's archive: {args.archives_dir.rstrip('/')}/<id>, where <id> is\n"
                     f"  clp-bundle {bundle} sql \"select archive_id from archives where kind='main'\"")
-        print(f"error: {args.archives_dir} holds {count} archives; clp-s-session-turns reads one session's main log, "
+        print(f"error: {args.archives_dir} holds {count} archives; clp-session turns reads one session's main log, "
               "and records from other logs (such as agent transcripts) would be counted as its turns." + hint,
               file=sys.stderr)
         return 2
@@ -200,6 +202,3 @@ def main():
               + " ".join(f"{name}={c[name]}" for name, _ in TOKEN_FIELDS))
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

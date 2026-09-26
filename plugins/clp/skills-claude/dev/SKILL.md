@@ -120,12 +120,15 @@ claude plugin validate ./plugins/clp
 
 # Wrapper syntax
 for f in plugins/clp/bin/clp-s-* \
-         plugins/clp/bin/log-shape-insights-bootstrap \
+         plugins/clp/bin/lib/insights-bootstrap.sh \
          plugins/clp/bin/log-shape-cluster; do bash -n "$f"; done
 python3 -m py_compile plugins/clp/bin/log-shape-cluster.py plugins/clp/bin/log-shape-cache \
-  plugins/clp/bin/clp-detect-logs plugins/clp/bin/kql-build plugins/clp/bin/log-shape-insight-extract \
-  plugins/clp/bin/log-shape-query-plan-run plugins/clp/bin/log-shape-insight-facts plugins/clp/bin/log-shape-focus \
-  plugins/clp/bin/lib/log_shapes.py plugins/clp/bin/lib/kql_build.py plugins/clp/bin/lib/classification.py
+  plugins/clp/bin/clp-detect-logs plugins/clp/bin/kql-build \
+  plugins/clp/bin/clp-insights plugins/clp/bin/clp-report plugins/clp/bin/clp-session \
+  plugins/clp/bin/lib/insights_extract.py plugins/clp/bin/lib/insights_run.py \
+  plugins/clp/bin/lib/insights_facts.py plugins/clp/bin/lib/insights_focus.py \
+  plugins/clp/bin/lib/log_shapes.py plugins/clp/bin/lib/kql_build.py \
+  plugins/clp/bin/lib/classification.py plugins/clp/bin/lib/subcommand.py
 
 # Static analysis (if shellcheck is installed)
 shellcheck \
@@ -133,7 +136,7 @@ shellcheck \
   plugins/clp/bin/clp-s-compress-session \
   plugins/clp/bin/clp-s-search-kql \
   plugins/clp/bin/clp-s-decompress \
-  plugins/clp/bin/log-shape-insights-bootstrap \
+  plugins/clp/bin/lib/insights-bootstrap.sh \
   plugins/clp/bin/log-shape-cluster \
   plugins/clp/bin/lib/clp-common.sh
 ```

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-kql-build - render structured JSON filters into clp-s KQL, and validate
-log-insights query plans before they are stored or run.
+kql-build - render structured JSON filters into clp-s KQL, and validate a query
+or a log-insights query plan before it is stored or run.
 
 A filter written as JSON cannot produce an unquoted wildcard value or an
 ungrouped AND/OR: every string value is quoted and escaped, and every nested
@@ -14,6 +14,12 @@ Usage:
         kql-build render '{"all":[{"field":"severity","eq":"WARNING"},
                                   {"field":"message","contains":"SQL txn"}]}'
         -> severity:"WARNING" AND message:"*SQL txn*"
+
+  kql-build validate-wildcards KQL
+      Exit 0 if the query holds no unquoted wildcard value with a space in it,
+      1 if it does. clp-s reads `field:*multi word*` as a natural language
+      query and falls back to semantic search; the correct form is
+      `field:"*multi word*"`, where the `*` still works as a wildcard.
 
   kql-build check-plan FILE [--categories-from CLASSIFICATION_FILE]
                             [--drift-file DRIFT_NDJSON]
@@ -89,6 +95,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "li
 import kql_build  # noqa: E402
 import plan_drift  # noqa: E402
 from classification import category_names, check_ranked_entry, taxonomy_errors  # noqa: E402
+from kql_build import unquoted_wildcard_terms  # noqa: E402
 
 VALUE_OPTIONS = ("--categories-from", "--drift-file", "--drift-fail-below")
 
@@ -167,6 +174,37 @@ def cmd_render(argv):
     return 0
 
 
+def cmd_validate_wildcards(argv):
+    """Report every unquoted wildcard value holding a space, in the one KQL operand.
+
+    Exactly one operand, like `render`: a second query would have been accepted
+    and never checked, and a validator that silently skips its input is worse
+    than one that refuses it.
+    """
+    if len(argv) != 1:
+        print("usage: kql-build validate-wildcards <kql-query>", file=sys.stderr)
+        return 2
+
+    bad = unquoted_wildcard_terms(argv[0])
+
+    if bad:
+        print(
+            "error: unquoted wildcard value(s) with spaces — "
+            'clp-s treats these as natural language.',
+            file=sys.stderr,
+        )
+        print(
+            '  Use field:"*multi word*" not field:*multi word* '
+            "(the * wildcard still works inside quotes).",
+            file=sys.stderr,
+        )
+        for term in bad:
+            print(f"  Offending: {term!r}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
 def cmd_check_plan(argv):
     try:
         plan_path, categories_from, drift_path, fail_below = parse_check_args(argv)
@@ -236,6 +274,8 @@ def main(argv):
     cmd, rest = argv[0], argv[1:]
     if cmd == "render":
         return cmd_render(rest)
+    if cmd == "validate-wildcards":
+        return cmd_validate_wildcards(rest)
     if cmd == "check-plan":
         return cmd_check_plan(rest)
     print(f"error: unknown command: {cmd}", file=sys.stderr)

@@ -273,7 +273,8 @@ def signals(bundle_dir, wrapper):
         db.close()
     for name, kql in KQL.items():
         s[name] = sum(r.get("count", 0) for r in _search(wrapper, bundle_dir, main, ["--count", kql]))
-    proc = subprocess.run([os.path.join(BIN_DIR, "clp-s-session-turns"), "--json", "--top", "0", "--waits", "1",
+    proc = subprocess.run([os.path.join(BIN_DIR, "clp-session"), "turns",
+                           "--json", "--top", "0", "--waits", "1",
                            "--search-wrapper", wrapper, os.path.join(bundle_dir, "archives", main)],
                           capture_output=True, text=True, encoding="utf-8")
     t = json.loads(proc.stdout)["total_s"] if proc.returncode == 0 else {}

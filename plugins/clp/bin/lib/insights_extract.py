@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-log-shape-insight-extract - build the report writer's prompt pieces from a
+clp-insights extract - build the report writer's prompt pieces from a
 classification (log-insights skill, step 7).
 
 The classification (`log-shape-cache get`, `log-shape-cache merge`, or
@@ -28,7 +27,7 @@ the bootstrap already produced, never recomputed), each truncated to
 result stays one line per template.
 
 Usage:
-  log-shape-insight-extract [options]
+  clp-insights extract [options]
 
 Options:
   --classification-file F   Classification JSON
@@ -49,17 +48,17 @@ Options:
                              (default: /tmp/log-shape-templates-by-category.txt)
   --out-query-plan F        Where to write the core plan: the "core" entries,
                              one per line as compact JSON, high priority first
-                             (default: /tmp/log-shape-query-plan.txt)
+                             (default: /tmp/clp-insights-query-plan.txt)
   --out-drill-plan F        Where to write the "drill" entries the same way,
                              grouped by category; they run only when the user
-                             focuses on their category (log-shape-focus)
-                             (default: /tmp/log-shape-drill-plan.txt)
+                             focuses on their category (clp-insights focus)
+                             (default: /tmp/clp-insights-drill-plan.txt)
   --focus-inbox F           The inbox the plan runner reads focus entries from
-                             (log-shape-query-plan-run --inbox); emptied here,
+                             (clp-insights run --inbox); emptied here,
                              with the previous run's focus file
                              (--focus-file), so a new analysis starts with no
-                             focus (defaults: /tmp/log-shape-focus-inbox.ndjson,
-                             /tmp/log-shape-focus.json)
+                             focus (defaults: /tmp/clp-insights-focus-inbox.ndjson,
+                             /tmp/clp-insights-focus.json)
   --out-top-templates F     With frequencies: the most frequent templates
                              overall (--top-templates, default 30) and per
                              category (--top-per-category, default 5), each
@@ -95,7 +94,7 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from classification import category_names, plan_errors, priority_rank  # noqa: E402
 from log_shapes import default_max_chars, prefix_hash, template_hash  # noqa: E402
 
@@ -103,12 +102,12 @@ DEFAULT_CLASSIFICATION_FILE = "/tmp/log-shape-classification.json"
 DEFAULT_FREQS_FILE = "/tmp/log-shape-freqs.ndjson"
 DEFAULT_LOG_SHAPES_FILE = "/tmp/log-shapes.ndjson"
 DEFAULT_OUT_TEMPLATES = "/tmp/log-shape-templates-by-category.txt"
-DEFAULT_OUT_QUERY_PLAN = "/tmp/log-shape-query-plan.txt"
+DEFAULT_OUT_QUERY_PLAN = "/tmp/clp-insights-query-plan.txt"
 DEFAULT_OUT_CATEGORY_TOTALS = "/tmp/log-shape-category-totals.json"
 DEFAULT_OUT_TOP_TEMPLATES = "/tmp/log-shape-top-templates.json"
-DEFAULT_OUT_DRILL_PLAN = "/tmp/log-shape-drill-plan.txt"
-DEFAULT_FOCUS_INBOX = "/tmp/log-shape-focus-inbox.ndjson"
-DEFAULT_FOCUS_FILE = "/tmp/log-shape-focus.json"
+DEFAULT_OUT_DRILL_PLAN = "/tmp/clp-insights-drill-plan.txt"
+DEFAULT_FOCUS_INBOX = "/tmp/clp-insights-focus-inbox.ndjson"
+DEFAULT_FOCUS_FILE = "/tmp/clp-insights-focus.json"
 UNCLASSIFIED = "unclassified"
 
 
@@ -325,6 +324,3 @@ def main(argv=None) -> int:
 
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""
+clp-session - measure and score one Claude Code session.
+
+The three stages run in order and each is useful alone: `turns` reads the
+session's own archive, `facts` reads a bundle's catalog (and runs `turns` for
+the per-turn split), and `score` applies a scale to what `facts` measured.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from subcommand import dispatch  # noqa: E402
+
+SUMMARY = "Measure one Claude Code session's trajectory, then score it."
+
+SUBCOMMANDS = {
+    "turns": ("session_turns_cli.py",
+              "where a session's time went, per turn"),
+    "facts": ("session_facts.py",
+              "compute every number of a session-trajectory report in code"),
+    "score": ("session_score.py",
+              "apply a scale to the facts' axis measurements and emit the scores as JSON"),
+}
+
+if __name__ == "__main__":
+    sys.exit(dispatch("clp-session", SUMMARY, SUBCOMMANDS, sys.argv[1:]))

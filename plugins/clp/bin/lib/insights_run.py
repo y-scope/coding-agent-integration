@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-log-shape-query-plan-run - execute a log-insights query plan and report each
+clp-insights run - execute a log-insights query plan and report each
 entry's result as it completes (log-insights skill, step 7).
 
 The insight pass used to execute the plan itself, out of sight: the user
@@ -16,15 +15,15 @@ construction. An entry without a valid `match` (a malformed filter, or a
 hand-written `kql` string) is recorded as an error without running.
 
 Usage:
-  log-shape-query-plan-run [options] ARCHIVES_DIR
-  log-shape-query-plan-run --print-table [--results-file F]
+  clp-insights run [options] ARCHIVES_DIR
+  clp-insights run --print-table [--results-file F]
 
 Options:
   --query-plan-file F   One query_plan entry per line as compact JSON
-                        (default: /tmp/log-shape-query-plan.txt, written by
-                        log-shape-insight-extract)
+                        (default: /tmp/clp-insights-query-plan.txt, written by
+                        clp-insights extract)
   --results-file F      Where results accumulate as NDJSON, one line per plan
-                        entry (default: /tmp/log-shape-query-results.ndjson)
+                        entry (default: /tmp/clp-insights-query-results.ndjson)
   --entries RANGES      1-based plan entries to run, e.g. 1-5, 7, or 1-3,9
                         (default: all). Results already recorded for other
                         entries of the same archive and plan are kept, so the
@@ -46,7 +45,7 @@ Options:
                         pool open until F says {"close": true}: each complete
                         line is a plan entry, queued AHEAD of every plan entry
                         not yet started, with origin "focus" unless it has its
-                        own. log-shape-focus writes it once the user picks a
+                        own. clp-insights focus writes it once the user picks a
                         focus, so one pool runs the core plan and the focus
                         without a second pool counting the same free memory.
                         Its entries get indexes after the plan's last entry.
@@ -123,11 +122,14 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+LIB_DIR = os.path.dirname(os.path.realpath(__file__))
+# The sibling tools this module runs live one level up, in bin/.
+BIN_DIR = os.path.dirname(LIB_DIR)
+sys.path.insert(0, LIB_DIR)
 from kql_build import METHODS, FilterError, entry_kql  # noqa: E402
 
-DEFAULT_QUERY_PLAN_FILE = "/tmp/log-shape-query-plan.txt"
-DEFAULT_RESULTS_FILE = "/tmp/log-shape-query-results.ndjson"
+DEFAULT_QUERY_PLAN_FILE = "/tmp/clp-insights-query-plan.txt"
+DEFAULT_RESULTS_FILE = "/tmp/clp-insights-query-results.ndjson"
 NON_SELECTIVE_PCT = 90.0
 
 
@@ -567,7 +569,7 @@ def main(argv=None) -> int:
     parser.add_argument("--sample-chars", type=int, default=200)
     parser.add_argument(
         "--search-wrapper",
-        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"),
+        default=os.path.join(BIN_DIR, "clp-s-search-kql"),
     )
     parser.add_argument("--print-table", action="store_true")
     parser.add_argument("--inbox", default=None)
@@ -799,6 +801,3 @@ def main(argv=None) -> int:
     print(f"RESULTS_FILE={args.results_file}")
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

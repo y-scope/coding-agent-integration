@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""
+clp-report - check a finished report against its inputs, and save it.
+
+Both stages are shared: the log-insights and claude-code-trajectory skills each
+write a report from a facts file, and neither the check nor the save knows or
+cares which produced it. That is why these two are not part of clp-insights.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from subcommand import dispatch  # noqa: E402
+
+SUMMARY = "Check a report against its facts file, or save it where the user asked."
+
+SUBCOMMANDS = {
+    "check": ("report_check.py",
+              "flag figures and KQL fields a report's own inputs do not support"),
+    "save": ("report_save.py",
+             "save a finished report as Markdown, HTML, PDF or a page to publish"),
+}
+
+if __name__ == "__main__":
+    sys.exit(dispatch("clp-report", SUMMARY, SUBCOMMANDS, sys.argv[1:]))

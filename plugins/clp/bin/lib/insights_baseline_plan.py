@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-log-shape-baseline-plan - write the app-agnostic baseline queries of a
+clp-insights baseline-plan - write the app-agnostic baseline queries of a
 log-insights run to their own plan file (log-insights skill, step 4).
 
 The insight subagent used to discover the severity and logger breakdowns by
@@ -28,7 +27,7 @@ schema and the sampled values.
 16.5M-record archive, against about 7 s for a count).
 
 Usage:
-  log-shape-baseline-plan --archive DIR --schema-json JSON [options]
+  clp-insights baseline-plan --archive DIR --schema-json JSON [options]
 
 Options:
   --archive DIR         Archives directory to sample.
@@ -37,8 +36,8 @@ Options:
                         "message":"msg"}'. Uses its `severity`, `logger`,
                         `timestamp` and `message` fields.
   --plan-file F         The baseline's own plan file (default:
-                        /tmp/log-shape-baseline-plan.txt), run by
-                        log-shape-query-plan-run with its own results file.
+                        /tmp/clp-insights-baseline-plan.txt), run by
+                        clp-insights run with its own results file.
                         Entries from an earlier run (origin "baseline") are
                         replaced, so it is safe to run twice.
   --sample N            Records to sample from the head of the archive
@@ -63,7 +62,10 @@ import subprocess
 import sys
 from collections import Counter
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+LIB_DIR = os.path.dirname(os.path.realpath(__file__))
+# The sibling tools this module runs live one level up, in bin/.
+BIN_DIR = os.path.dirname(LIB_DIR)
+sys.path.insert(0, LIB_DIR)
 from kql_build import FilterError, check_entry  # noqa: E402
 
 ORIGIN = "baseline"
@@ -137,7 +139,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Add baseline queries to a log-insights query plan.")
     parser.add_argument("--archive", required=True)
     parser.add_argument("--schema-json", required=True)
-    parser.add_argument("--plan-file", default="/tmp/log-shape-baseline-plan.txt")
+    parser.add_argument("--plan-file", default="/tmp/clp-insights-baseline-plan.txt")
     parser.add_argument("--sample", type=int, default=20000)
     parser.add_argument("--max-values", type=int, default=5)
     parser.add_argument("--max-cardinality", type=int, default=40)
@@ -145,7 +147,7 @@ def main(argv=None) -> int:
     parser.add_argument("--no-semantic", action="store_true")
     parser.add_argument(
         "--search-wrapper",
-        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"),
+        default=os.path.join(BIN_DIR, "clp-s-search-kql"),
     )
     args = parser.parse_args(argv)
 
@@ -208,6 +210,3 @@ def main(argv=None) -> int:
     print(f"PLAN_ENTRIES={len(plan) + len(added)}")
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

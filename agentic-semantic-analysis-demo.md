@@ -58,7 +58,7 @@ For prepared JSONL whose timestamp field is named `timestamp`:
 
 "$DEMO_BIN/clp-s-search-kql" "$DEMO_ARCHIVE" 'stats.schema_tree'
 
-"$DEMO_BIN/log-shape-insights-bootstrap" \
+"$DEMO_BIN/clp-insights" bootstrap \
   --out-dir "$DEMO_RUN/bootstrap" \
   --cache-dir "$CLP_LOG_SHAPE_CACHE_DIR" \
   "$DEMO_ARCHIVE"
@@ -142,7 +142,7 @@ For each proposed finding, ask whether the inventory added relevant evidence bey
 After the agent stores a classification, rerun bootstrap using the same archive and classification cache:
 
 ```bash
-time "$DEMO_BIN/log-shape-insights-bootstrap" \
+time "$DEMO_BIN/clp-insights" bootstrap \
   --out-dir "$DEMO_RUN/bootstrap-repeat" \
   --cache-dir "$CLP_LOG_SHAPE_CACHE_DIR" \
   "$DEMO_ARCHIVE"
