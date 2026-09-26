@@ -17,7 +17,7 @@ import tempfile
 import unittest
 
 BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "bin")
-FACTS = [os.path.join(BIN, "clp-insights"), "facts"]
+FACTS = [os.path.join(BIN, "clp"), "facts"]
 SCHEMA = '{"severity":"severity","message":"msg"}'
 TOTAL = 100
 
@@ -93,9 +93,10 @@ class FactsDuplicateInputTest(unittest.TestCase):
         text = self.facts_text()
         self.assertIn("the two results files overlap: 3 entries", text)
         self.assertIn("Pass distinct --baseline-results-file and --results-file.", text)
-        # Each entry counted once, so the split still adds up exactly.
-        self.assertIn("- check: the lines above sum to all 100 records", text)
-        self.assertIn("- INFO: 80 ", text)
+        # Each entry counted once, so the split still adds up exactly. `[D]` and
+        # `[M]` are the provenance markers every figure line now opens with.
+        self.assertIn("- [D] check: the lines above sum to all 100 records", text)
+        self.assertIn("- [M] INFO: 80 ", text)
         self.assertNotIn("sum to 200", text)
         self.assertNotIn("multi-valued", text)
 
@@ -108,7 +109,8 @@ class FactsDuplicateInputTest(unittest.TestCase):
         p = self.run_facts(baseline, plan)
         self.assertEqual(p.returncode, 0, p.stderr)
         text = self.facts_text()
-        self.assertIn("more than the 100 records, so `severity` is multi-valued", text)
+        # The finding is an inference about the data, and it is marked as one.
+        self.assertIn("more than the 100 records, so [I] `severity` is multi-valued", text)
         self.assertNotIn("results files overlap", text)
 
     def test_overlap_does_not_hide_a_real_excess(self):
@@ -123,7 +125,8 @@ class FactsDuplicateInputTest(unittest.TestCase):
         text = self.facts_text()
         self.assertIn("results files overlap: 2 entries", text)
         # 120, not 240: each entry counted once despite arriving twice.
-        self.assertIn("sum to 120, more than the 100 records, so `severity` is multi-valued", text)
+        self.assertIn("sum to 120, more than the 100 records, so [I] `severity` is multi-valued",
+                      text)
         self.assertIn("do not explain this excess", text)
 
     def test_the_correct_pair_is_unaffected(self):
@@ -132,7 +135,7 @@ class FactsDuplicateInputTest(unittest.TestCase):
         p = self.run_facts(baseline, plan)
         self.assertEqual(p.returncode, 0, p.stderr)
         text = self.facts_text()
-        self.assertIn("- check: the lines above sum to all 100 records", text)
+        self.assertIn("- [D] check: the lines above sum to all 100 records", text)
         self.assertNotIn("results files overlap", text)
         self.assertNotIn("multi-valued", text)
 

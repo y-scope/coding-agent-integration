@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-clp-bundle - move between a session bundle's catalog and the CLP records behind it.
+clp bundle - move between a session bundle's catalog and the CLP records behind it.
 
 Usage:
-  clp-bundle BUNDLE_DIR build (--session-file PATH | --session-id ID) [--claude-home DIR] [--clp-s PATH] [--force]
-  clp-bundle BUNDLE_DIR rebuild [--clp-s PATH]
-  clp-bundle BUNDLE_DIR show ID [--json]
-  clp-bundle BUNDLE_DIR evidence ID [--tail N | --all] [--raw]
-  clp-bundle BUNDLE_DIR who (--agent-id ID | --tool-use-id ID | --task-id ID | --uuid ID | --at TIME)
+  clp bundle BUNDLE_DIR build (--session-file PATH | --session-id ID) [--claude-home DIR] [--clp-s PATH] [--force]
+  clp bundle BUNDLE_DIR rebuild [--clp-s PATH]
+  clp bundle BUNDLE_DIR show ID [--json]
+  clp bundle BUNDLE_DIR evidence ID [--tail N | --all] [--raw]
+  clp bundle BUNDLE_DIR who (--agent-id ID | --tool-use-id ID | --task-id ID | --uuid ID | --at TIME)
                             [--kind LIST] [--limit N] [--json]
-  clp-bundle BUNDLE_DIR events [--agent ID] [--turn N] [--tool NAME] [--errors] [--interrupts]
+  clp bundle BUNDLE_DIR events [--agent ID] [--turn N] [--tool NAME] [--errors] [--interrupts]
                             [--type T] [--after TIME] [--before TIME] [--limit N] [--json]
-  clp-bundle BUNDLE_DIR record UUID [--raw]
-  clp-bundle BUNDLE_DIR context UUID [--before N] [--after N] [--copy K] [--raw]
-  clp-bundle BUNDLE_DIR outcomes [--by turn|agent] [--json]
-  clp-bundle BUNDLE_DIR repo [--repo PATH] [--no-github] [--json]
-  clp-bundle BUNDLE_DIR sql QUERY [--json]
+  clp bundle BUNDLE_DIR record UUID [--raw]
+  clp bundle BUNDLE_DIR context UUID [--before N] [--after N] [--copy K] [--raw]
+  clp bundle BUNDLE_DIR outcomes [--by turn|agent] [--json]
+  clp bundle BUNDLE_DIR repo [--repo PATH] [--no-github] [--json]
+  clp bundle BUNDLE_DIR sql QUERY [--json]
 
 BUNDLE_DIR holds manifest.json, archives/, files/ and catalog.sqlite. ID is a node id (attempt:a1b2..,
 agent:.., wf:.., run:.., unit:..), an agent id (or a unique prefix of six or more
@@ -31,7 +31,7 @@ characters), a run id or a task id.
             before compression, and each file's count is reported (REPAIRED) and kept in the catalog. --session-file names the main .jsonl;
             --session-id finds it under --claude-home: the directory that HOLDS projects/, tasks/ and
             file-history/ (default ~/.claude), not projects/ itself -- that level is --claude-root in
-            clp-s-list-sessions. A file that belongs to the
+            clp list-sessions. A file that belongs to the
             session and matches no rule stops the build. Refuses an existing directory; --force replaces
             an existing bundle. A session with no subagents or workflows gets a catalog with only its
             main thread. Claude Code sessions only.
@@ -70,7 +70,7 @@ characters), a run id or a task id.
   sql       A read-only query on the catalog.
 
 Options:
-  --search-wrapper P   Search wrapper (default: clp-s-search-kql next to this script).
+  --search-wrapper P   Search wrapper: one executable (default: `clp search`).
 
 Times in the catalog are UTC. The catalog is derived: it names records by the IDs they
 carry (agentId, runId) and stores no offsets, so it can be rebuilt from the archives.
@@ -81,8 +81,9 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
+import commands as C  # noqa: E402
 import bundle as B  # noqa: E402
 
 
@@ -152,7 +153,7 @@ def cmd_show(args, db):
         print(f"RESULT at={r['at']} {r['dst']}")
     if n.get("query"):
         print(f"ARCHIVE {','.join(n['archives'])} query={n['query']}")
-        print(f"EVIDENCE clp-bundle {args.bundle} evidence {n['id']}")
+        print(f"EVIDENCE clp bundle {args.bundle} evidence {n['id']}")
     else:
         print("ARCHIVE - (no records of its own)")
     for key, value in n["attrs"].items():
@@ -437,8 +438,7 @@ def cmd_sql(args, db):
 def main():
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("bundle")
-    parser.add_argument("--search-wrapper",
-                        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"))
+    parser.add_argument("--search-wrapper")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("build")
     g = p.add_mutually_exclusive_group(required=True)
@@ -468,6 +468,9 @@ def main():
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("sql"); p.add_argument("query"); p.add_argument("--json", action="store_true")
     args = parser.parse_args()
+    # One path, not an argv: a caller replacing the search with its own program gives one
+    # executable. The default is this plugin's own `clp search`, which is two words.
+    args.search_wrapper = [args.search_wrapper] if args.search_wrapper else C.search_argv()
     try:
         if args.command == "build":
             return cmd_build(args)

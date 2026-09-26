@@ -4,7 +4,7 @@ Shared by the `compress` (stable clp-s) and `clpp-compress` (clpp / `--experimen
 
 ## Rules
 
-- Use only the plugin wrappers. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
+- Use only the plugin's `clp` command. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
 - Compress exactly **one** selected session JSONL file. Do not compress full Claude/Codex trees.
 - Do not pass `--single-file-archive`; search uses regular archive directories.
 - Always use `--timestamp-key timestamp`.
@@ -17,7 +17,7 @@ Shared by the `compress` (stable clp-s) and `clpp-compress` (clpp / `--experimen
 1. List sessions, newest first:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions"
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp" list-sessions
    ```
 
 Use `--agent claude` or `--agent codex` if the user asks for one agent.
@@ -27,7 +27,7 @@ Use `--agent claude` or `--agent codex` if the user asks for one agent.
 3. After the user chooses an `IDX`, compress using the printed manifest:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" \
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp" compress session \
      --selection-file /tmp/clp-s-session-selection-...tsv \
      --session-index <IDX> \
      --timestamp-key timestamp
@@ -45,7 +45,7 @@ Or, when the user gives a path directly, use `--session-file` instead of the sel
    - `Selected session`
    - `Archive metadata`
 
-Use the printed top-level `Archives dir` for search/decompress. Wrappers resolve the inner `clp-s` archive directory automatically.
+Use the printed top-level `Archives dir` for search/decompress. `clp` resolves the inner `clp-s` archive directory automatically.
 
 ## Stable compress options
 
@@ -56,19 +56,19 @@ Use the printed top-level `Archives dir` for search/decompress. Wrappers resolve
 Show archive root:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" --show-archives-root
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress session --show-archives-root
 ```
 
 Set persistent archive root:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" --set-archives-root ~/clp-s-archives
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress session --set-archives-root ~/clp-s-archives
 ```
 
 Dry run:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress session \
   --selection-file /tmp/clp-s-session-selection.tsv \
   --session-index 1 \
   --timestamp-key timestamp \
@@ -77,4 +77,4 @@ Dry run:
 
 ## Pointing at a local build
 
-Pass `--clp-s-bin PATH` per invocation, or set `CLP_S_BIN` so every wrapper uses a locally-built `clp-s` (e.g. an in-flight clpp branch). See the `dev` skill for build/test/lint of a local CLP source tree.
+Pass `--clp-s-bin PATH` per invocation, or set `CLP_S_BIN` so every subcommand uses a locally-built `clp-s` (e.g. an in-flight clpp branch). See the `dev` skill for build/test/lint of a local CLP source tree.

@@ -148,8 +148,8 @@ class RefusesSeveralArchives(unittest.TestCase):
                 for f in ("header", "table_metadata"):
                     open(os.path.join(archives, name, f), "w").close()
             open(os.path.join(tmp, "bundle", "catalog.sqlite"), "w").close()
-            script = os.path.join(os.path.dirname(__file__), "..", "bin", "clp-session")
-            p = subprocess.run([script, "turns", archives, "--search-wrapper", "/nonexistent"],
+            script = os.path.join(os.path.dirname(__file__), "..", "bin", "clp")
+            p = subprocess.run([script, "session", "turns", archives, "--search-wrapper", "/nonexistent"],
                                capture_output=True, text=True)
             self.assertEqual(p.returncode, 2)
             self.assertIn("holds 2 archives", p.stderr)

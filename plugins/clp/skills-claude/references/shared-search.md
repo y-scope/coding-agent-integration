@@ -2,15 +2,15 @@
 
 Shared by the `search` (stable clp-s) and `clpp-search` (clpp / `--experimental`) skills. Read this for the KQL syntax and search tips; read `clpp-shared.md` for the clpp-only `shape()`/`decompose()` functions and decomposed-query projections.
 
-Use only the plugin wrapper. Do not call bare `clp-s`.
+Use only the plugin's `clp` command. Do not call bare `clp-s`.
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVES_DIR 'KQL_QUERY'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" search ARCHIVES_DIR 'KQL_QUERY'
 ```
 
 The wrapper accepts the top-level `Archives dir` printed by compression or the inner clp-s archive directory (resolved automatically). Use single quotes around KQL. A sensible default embedding endpoint is built in; pass extra clp-s flags only if the user asks for something specific.
 
-For session-log workflows (list → compress → search), use the `claude-code-trajectory` skill instead of this one.
+For session-log workflows (list → compress → search), use the `analyze-logs` skill instead of this one.
 
 ## KQL
 
@@ -42,8 +42,8 @@ A bare `INFO` (no wildcards) returns 0 even when `INFO` appears in the data — 
 Use `semantic("natural language query")` in KQL to find log events whose log shape is semantically similar to the query, even when exact keywords differ. No flags needed — the wrapper auto-selects a working endpoint. Combine with regular KQL using `AND`.
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'semantic("slow database queries")'
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVE 'semantic("errors") AND level:error'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" search ARCHIVE 'semantic("slow database queries")'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" search ARCHIVE 'semantic("errors") AND level:error'
 ```
 
 ## Tips
@@ -52,7 +52,7 @@ Use `semantic("natural language query")` in KQL to find log events whose log sha
 - When a few example records are enough, pass `--limit N`. It always caps the output; it saves time only when the limit is reached before later schema tables or archives are read, because clp-s decompresses a whole table before returning its first record. Which N come back is unspecified (not the earliest or latest), so never use it for counts.
 - Count matches with `--count`, never `--projection ... | grep -c '^{'`. It counts inside the engine without serializing any record, so its cost barely depends on how many records match (measured ~6-7s whether a filter matched 92 or 16.5M records of a 16.5M-record archive). It prints one `{"archive_id":...,"count":N}` line per archive, `"count":0` included, so a zero is an explicit row and never silence. On a zero it also says when the archive's structure explains it — a filter written at an `Object` path matches nothing however many records carry it, and it names a leaf beneath it to filter instead. Use `grep -c '^{'` only for an incidental count from a `--projection` output you are already reading for another reason.
   ```bash
-  "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --count ARCHIVE 'KQL'
+  "${CLAUDE_PLUGIN_ROOT}/bin/clp" search --count ARCHIVE 'KQL'
   ```
 - List a field's distinct values among matches with `--unique FIELD` instead of projecting and running `sort | uniq`. It still scans the matching records (measured ~84s for a low-cardinality field over 16.5M records), so get per-value totals with one `--count` query per value.
 - `--count`, `--unique`, and `--limit` are mutually exclusive, and `--count`/`--unique` cannot be combined with `--projection`.

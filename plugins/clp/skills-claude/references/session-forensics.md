@@ -1,6 +1,6 @@
 # Session forensics — queries, catalog SQL, evidence, caveats
 
-Read this when drilling into a finding from the `claude-code-trajectory` pass, or when the user asks one specific question about a session instead of running the full pass.
+Read this when drilling into a finding from the `analyze-logs` skill's specialised route, or when the user asks one specific question about a session instead of running the full pass.
 
 Write every path out in full. A command with a shell variable (`$B`, `${TMPDIR}`) no longer matches the skill's allowed tools and stops for approval.
 
@@ -15,7 +15,7 @@ IDs connect the levels: a timestamp opens a window, a `uuid` names a record, a `
 CLP searches the compressed archive — unmatched records are never decompressed. Push logic into KQL rather than fetching records and post-filtering.
 
 - **Compound KQL over multiple queries:** `field1:A AND field2:B`
-- **Count in-engine:** `clp-s-search-kql --count ARCHIVE 'KQL'` prints `{"archive_id":...,"count":N}` per archive, `"count":0` included.
+- **Count in-engine:** `clp search --count ARCHIVE 'KQL'` prints `{"archive_id":...,"count":N}` per archive, `"count":0` included.
 - **Project aggressively:** `--projection timestamp,durationMs`. Omit only when you genuinely need whole records.
 - **Zoom by time:** `--tge EPOCH_MS --tle EPOCH_MS`. Convert with
   `python3 -c "from datetime import datetime,timezone; print(int(datetime(Y,M,D,h,m,s,tzinfo=timezone.utc).timestamp()*1000))"`
@@ -52,15 +52,15 @@ CLP searches the compressed archive — unmatched records are never decompressed
 | Patch failures | `"git apply" AND ("failed" OR "reject" OR "patch does not apply")` |
 | Semantic | `semantic("slow operations")`, `semantic("authentication failures")`, `semantic("errors") AND level:error` |
 
-Turn timing comes from `clp-session turns ARCHIVE`, not KQL. Do not add up `subtype:turn_duration` records: they nest inside each other and can be negative.
+Turn timing comes from `clp session turns ARCHIVE`, not KQL. Do not add up `subtype:turn_duration` records: they nest inside each other and can be negative.
 
-**If `clp-session turns` or `clp-bundle repo` fails with `Failed to open archive … Error code: 18`**, the search wrapper resolved a `clp-s` too old to read the archive (a stale `/usr/bin/clp-s`, say). Set `CLP_S_BIN` to the build that made the bundle — the catalog records it in its `bundle.clp_s` row — and run again. `clp-session facts` already does this for its own subprocesses, so the failure only shows up when you call these two by hand.
+**If `clp session turns` or `clp bundle repo` fails with `Failed to open archive … Error code: 18`**, the search wrapper resolved a `clp-s` too old to read the archive (a stale `/usr/bin/clp-s`, say). Set `CLP_S_BIN` to the build that made the bundle — the catalog records it in its `bundle.clp_s` row — and run again. `clp session facts` already does this for its own subprocesses, so the failure only shows up when you call these two by hand.
 
-Field discovery: `clp-s-schema-tree ARCHIVE` lists every field with its type and record count.
+Field discovery: `clp schema ARCHIVE` lists every field with its type and record count.
 
 ## Bundle catalog SQL
 
-`clp-bundle BUNDLE sql "SELECT ..."` is read-only and returns compact rows, so it can run in the main thread without a subagent.
+`clp bundle BUNDLE sql "SELECT ..."` is read-only and returns compact rows, so it can run in the main thread without a subagent.
 
 **nodes**(id, kind, label, agent_id, run_id, task_id, instance, phase, start, end, status, cause, attempts, tool_calls, errors, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write, attrs JSON)
 
@@ -124,19 +124,19 @@ on x.run_id = w.run_id where w.kind = 'workflow' group by 1
 ## Evidence commands
 
 ```bash
-clp-bundle BUNDLE show ID          # catalog row, parents, children, archive and query
-clp-bundle BUNDLE evidence ID      # its records, time-ordered; a run's evidence is its runtime log
-clp-bundle BUNDLE record UUID      # one full record
-clp-bundle BUNDLE context UUID --before N --after N   # the records around it, in its own log and order
-clp-bundle BUNDLE events --agent ID --tool Bash --errors --interrupts
-clp-bundle BUNDLE who --uuid UUID  # also --agent-id, --tool-use-id, --at YYYY-MM-DDTHH:MM (UTC)
-clp-bundle BUNDLE outcomes         # per turn; --by agent for per-agent
-clp-bundle BUNDLE repo             # asks git and gh which commits and PRs each command actually made
+clp bundle BUNDLE show ID          # catalog row, parents, children, archive and query
+clp bundle BUNDLE evidence ID      # its records, time-ordered; a run's evidence is its runtime log
+clp bundle BUNDLE record UUID      # one full record
+clp bundle BUNDLE context UUID --before N --after N   # the records around it, in its own log and order
+clp bundle BUNDLE events --agent ID --tool Bash --errors --interrupts
+clp bundle BUNDLE who --uuid UUID  # also --agent-id, --tool-use-id, --at YYYY-MM-DDTHH:MM (UTC)
+clp bundle BUNDLE outcomes         # per turn; --by agent for per-agent
+clp bundle BUNDLE repo             # asks git and gh which commits and PRs each command actually made
 ```
 
 `ID` is a node id, an agent id or prefix, a run id or a task id.
 
-KQL over one kind of log: `clp-s-search-kql --archive-id ID BUNDLE/archives 'KQL'`. Turn time and field discovery read the main log only — pass `BUNDLE/archives/<main archive id>`.
+KQL over one kind of log: `clp search --archive-id ID BUNDLE/archives 'KQL'`. Turn time and field discovery read the main log only — pass `BUNDLE/archives/<main archive id>`.
 
 **To say why something failed, read one example of each cause before explaining it.** Evidence on a stalled attempt shows its last tool result, the silence and the runtime's interrupt; evidence on `run:ID` shows the runtime's stall and API-error lines. The `cause` column is a label, not an explanation.
 
@@ -145,10 +145,10 @@ KQL over one kind of log: `clp-s-search-kql --archive-id ID BUNDLE/archives 'KQL
 Every failed tool call carries its error as the top-level string `toolUseResult`; `shape()` cannot reach the text inside `message.content`.
 
 ```bash
-clp-s-search-kql --experimental --projection 'uuid,shape(toolUseResult)' ARCHIVE 'message.content.is_error:true'
+clp search --experimental --projection 'uuid,shape(toolUseResult)' ARCHIVE 'message.content.is_error:true'
 ```
 
-Then open one template's records: keep each record's `uuid` from that projection (exact), or filter with the template's literal text and `*` for each variable — `shape(toolUseResult): "Error: Exit code*"` (a superset; a typed `%int%` matches nothing). Then `clp-bundle BUNDLE context UUID`.
+Then open one template's records: keep each record's `uuid` from that projection (exact), or filter with the template's literal text and `*` for each variable — `shape(toolUseResult): "Error: Exit code*"` (a superset; a typed `%int%` matches nothing). Then `clp bundle BUNDLE context UUID`.
 
 ## Conclusions the logs do not support
 
@@ -158,15 +158,15 @@ Then open one template's records: keep each record's `uuid` from that projection
 - **One run is not one launch.** A resume reuses the run id, so compare its workflow instances.
 - **The last tool before a silence is not the tool that hung.** Check the timestamps: the tool result often returns normally and the silence falls in the model turn after it.
 - **Parallel agent time is not wall-clock time.** Summed attempt minutes routinely exceed the session's span.
-- **Command output understates outcomes.** Report a commit or PR as existing only from `clp-bundle repo`, and say how it matched (exact, time+subject, time) — never from a command having run.
+- **Command output understates outcomes.** Report a commit or PR as existing only from `clp bundle repo`, and say how it matched (exact, time+subject, time) — never from a command having run.
 - **The logs record activity, not value.** They cannot say whether the work was any good.
 
 ## Reviewing many sessions for harness issues
 
-When the goal is the harness itself rather than one task, look for problems recurring across sessions and projects. `clp-bundle-review` does the whole pass: it bundles every Claude Code session under a Claude home, computes the signals below for each, ranks them, and groups failed tool calls across sessions.
+When the goal is the harness itself rather than one task, look for problems recurring across sessions and projects. `clp bundle-review` does the whole pass: it bundles every Claude Code session under a Claude home, computes the signals below for each, ranks them, and groups failed tool calls across sessions.
 
 ```bash
-clp-bundle-review /tmp/yscope-clp-bundles --build --skip <THIS_SESSION_ID>
+clp bundle-review /tmp/yscope-clp-bundles --build --skip <THIS_SESSION_ID>
 ```
 
 Pass `--skip` with the id of the session you are running in — it is still being written. Add `--trend week` (or `day`) for signals per period with volume, session count and a 95% interval; a change is flagged only between periods with enough volume. **A period resting on one or two sessions is about those sessions, not a trend — say so.** `--json` makes it a metrics feed.

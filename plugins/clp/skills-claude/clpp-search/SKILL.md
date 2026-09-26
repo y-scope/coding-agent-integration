@@ -1,7 +1,7 @@
 ---
 name: clpp-search
 description: Search a CLP archive with clpp (clp+ / clp-s --experimental) KQL — the shape() and decompose() functions and decomposed-query projections. Use this when the user mentions clp+, clpp, or clp-s experimental, or asks for log shapes / decomposed queries. For plain (non-experimental) KQL search, use the search skill instead.
-allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql:*)"]
+allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp:*)"]
 ---
 
 # clpp search
@@ -22,16 +22,16 @@ Use only the plugin wrapper. Do not call bare `clp-s`.
 Pass `--experimental` to activate the clpp KQL layer. Without it, `shape()` and `decompose()` are treated as plain text rather than functions.
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" search --experimental \
   /tmp/archive 'shape(message): "*error*"'
 ```
 
 Project the shape string or the decomposed view of a column:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" search --experimental \
   --projection 'shape(message)' /tmp/archive '*'
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" search --experimental \
   --projection 'decompose(message)' /tmp/archive '*'
 ```
 

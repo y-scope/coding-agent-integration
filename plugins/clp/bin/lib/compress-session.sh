@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CLP_PLUGIN_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# The engine shim and the sibling helpers are resolved from bin/, one level up.
+# Read by clp-common.sh's clp-s resolution rather than by this script itself.
+# shellcheck disable=SC2034
+CLP_PLUGIN_BIN_DIR="$(cd -- "${CLP_PLUGIN_LIB_DIR}/.." && pwd -P)"
 # shellcheck disable=SC1091
-source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
+source "${CLP_PLUGIN_LIB_DIR}/clp-common.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
-  clp-s-compress-session (--session-file PATH | --selection-file PATH --session-index IDX) [options]
+  clp compress session (--session-file PATH | --selection-file PATH --session-index IDX) [options]
 
 Compress one selected Claude Code or Codex session JSONL file with clp-s
 regular archive directory mode:
@@ -27,7 +31,7 @@ Options:
   --codex-root DIR          Codex session root.
                             Default: ${CODEX_HOME:-~/.codex}/sessions
   --session-file PATH       Compress exactly one selected session JSONL file.
-  --selection-file PATH     TSV manifest from clp-s-list-sessions.
+  --selection-file PATH     TSV manifest from clp list-sessions.
   --session-index IDX       Row index from --selection-file to compress.
   --output-dir DIR          clp-s archives directory to create/use.
                             Overrides --archives-root and saved settings.
@@ -59,10 +63,10 @@ Options:
   -h, --help                Show this help.
 
 Examples:
-  clp-s-compress-session --selection-file /tmp/clp-s-session-selection.tsv --session-index 1
-  clp-s-compress-session --agent codex --session-file ~/.codex/sessions/.../rollout.jsonl
-  clp-s-compress-session --agent claude --session-file ~/.claude/projects/.../session.jsonl
-  clp-s-compress-session --session-file ~/.claude/projects/.../session.jsonl \
+  clp compress session --selection-file /tmp/clp-s-session-selection.tsv --session-index 1
+  clp compress session --agent codex --session-file ~/.codex/sessions/.../rollout.jsonl
+  clp compress session --agent claude --session-file ~/.claude/projects/.../session.jsonl
+  clp compress session --session-file ~/.claude/projects/.../session.jsonl \
     --experimental --parsing-specification /path/to/spec.txt \
     --clp-s-bin ./build/core/clp-s
 EOF

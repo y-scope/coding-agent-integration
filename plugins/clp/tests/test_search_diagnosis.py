@@ -1,4 +1,4 @@
-"""What clp-s-search-kql says when a query fails, matches nothing, or hits a bad binary.
+"""What clp search says when a query fails, matches nothing, or hits a bad binary.
 
 Three defects are covered, each of which used to leave the reader with no signal:
 
@@ -22,7 +22,7 @@ import textwrap
 import unittest
 
 BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "bin")
-WRAPPER = os.path.join(BIN, "clp-s-search-kql")
+WRAPPER = [os.path.join(BIN, "clp"), "search"]
 sys.path.insert(0, os.path.join(BIN, "lib"))
 
 from explain_zero import explain, query_fields  # noqa: E402
@@ -82,7 +82,7 @@ class ArchiveCase(unittest.TestCase):
 
     def run_wrapper(self, clp_s, *args):
         env = dict(os.environ, CLP_S_BIN=clp_s)
-        return subprocess.run([WRAPPER, *args], capture_output=True, text=True, env=env)
+        return subprocess.run([*WRAPPER, *args], capture_output=True, text=True, env=env)
 
 
 class InadequateBinaryIsNamed(ArchiveCase):

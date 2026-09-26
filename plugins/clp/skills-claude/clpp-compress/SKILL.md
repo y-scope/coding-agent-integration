@@ -2,15 +2,14 @@
 name: clpp-compress
 description: Compress a session JSONL into a CLP archive with clpp (clp+ / clp-s --experimental) — decomposed queries and log shapes via a log-surgeon parsing specification. Use this when the user mentions clp+, clpp, or clp-s experimental, or asks for log shapes / decomposed queries. For plain (non-experimental) compression, use the compress skill instead.
 allowed-tools:
-  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session:*)"
-  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions:*)"
+  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp:*)"
 ---
 
 # clpp compress
 
 Compress with CLP's **experimental** (clpp / clp+) layer — the `--experimental` flag, which decomposes each `message` into structured tokens using a log-surgeon **parsing specification**, enabling log-shape queries and `shape()`/`decompose()` search.
 
-Use only the plugin wrappers. Do not call bare `clp-s`.
+Use only the plugin's `clp` command. Do not call bare `clp-s`.
 
 **When to use this skill:** the user says "clp+", "clpp", "clp-s experimental", "experimental compression", "log shapes", or "decomposed queries", or asks to compress with a parsing spec. Otherwise use the stable `compress` skill.
 
@@ -24,7 +23,7 @@ Use only the plugin wrappers. Do not call bare `clp-s`.
 `--experimental` and `--parsing-specification` **must both be passed** (the clp-s binary rejects either alone). The wrapper enforces the same contract.
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress session \
   --session-file ~/.claude/projects/<…>/session.jsonl \
   --experimental --parsing-specification /path/to/parsing-spec.txt \
   --timestamp-key timestamp

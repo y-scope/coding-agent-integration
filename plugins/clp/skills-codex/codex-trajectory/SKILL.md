@@ -14,7 +14,7 @@ For general-purpose KQL search (no session involved), use the `search` skill ins
 1. List sessions, newest first:
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-list-sessions
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp list-sessions
    ```
 
 Use `--agent codex` (default) or `--agent claude` if the user asks.
@@ -24,7 +24,7 @@ Use `--agent codex` (default) or `--agent claude` if the user asks.
 3. Compress the selected `IDX`:
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-session \
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress session \
      --selection-file /tmp/clp-s-session-selection-...tsv \
      --session-index <IDX> \
      --timestamp-key timestamp
@@ -39,12 +39,12 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
    ```
    Analyze this Codex CLP session archive: ARCHIVE
 
-   Search wrapper: PLUGIN_BIN/clp-s-search-kql
+   Search wrapper: PLUGIN_BIN/clp search
    Goal: GOAL
 
    Efficiency rules (follow strictly):
    - Use compound KQL instead of multiple queries: field1:A AND field2:B
-   - Count with: clp-s-search-kql --count ARCHIVE 'KQL' (in-engine; prints an explicit "count":0 when nothing matches)
+   - Count with: clp search --count ARCHIVE 'KQL' (in-engine; prints an explicit "count":0 when nothing matches)
    - Project aggressively — fetch only the fields you need, not full records: pass
      `--projection COLUMNS` (comma-separated) for the required columns (e.g.
      `--projection timestamp,payload.name`).
@@ -76,7 +76,7 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`):
 6. Present the subagent's compact report to the user. Offer to drill deeper with a follow-up subagent or decompress for raw inspection:
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-decompress \
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp decompress \
      /tmp/session-archive \
      /tmp/session-archive-decompressed
    ```
@@ -122,22 +122,22 @@ CLP searches the compressed archive — unmatched records are never decompressed
 
 **Count matches with `--count` (in-engine, no records serialized; prints `{"archive_id":...,"count":N}` per archive, `"count":0` included):**
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql --count ARCHIVE 'payload.type:function_call'
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp search --count ARCHIVE 'payload.type:function_call'
 ```
 
 **Compound KQL — one query instead of multiple + joins:**
 ```bash
 # Failed tool calls only
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'payload.type:function_call_output AND payload.success:false'
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp search ARCHIVE 'payload.type:function_call_output AND payload.success:false'
 # Shell calls matching a keyword
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'payload.name:exec_command AND payload.cmd:"*cargo*"'
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp search ARCHIVE 'payload.name:exec_command AND payload.cmd:"*cargo*"'
 # Failures with stderr
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'payload.success:false AND payload.stderr:*'
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp search ARCHIVE 'payload.success:false AND payload.stderr:*'
 ```
 
 **Reduce payload — project only the fields you need, by default:** full records are large; fetch only the columns your analysis uses.
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql \
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp search \
   --projection timestamp,payload.name \
   ARCHIVE 'payload.type:function_call'
 ```
@@ -145,11 +145,11 @@ CLP searches the compressed archive — unmatched records are never decompressed
 **Zoom into a time window with `--tge`/`--tle` (epoch milliseconds):**
 ```bash
 # Convert: python3 -c "from datetime import datetime; print(int(datetime(2026,6,17,8,23,57).timestamp()*1000))"
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql --tge T1 --tle T2 ARCHIVE '*'
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp search --tge T1 --tle T2 ARCHIVE '*'
 ```
 
 **Use semantic search when field names are uncertain or queries are exploratory:**
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'semantic("task not found errors")'
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql ARCHIVE 'semantic("build failures") AND payload.name:exec_command'
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp search ARCHIVE 'semantic("task not found errors")'
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp search ARCHIVE 'semantic("build failures") AND payload.name:exec_command'
 ```

@@ -1,11 +1,11 @@
 """
-clp-insights run - execute a log-insights query plan and report each
+clp run - execute a log-insights query plan and report each
 entry's result as it completes (log-insights skill, step 7).
 
 The insight pass used to execute the plan itself, out of sight: the user
 saw a spinner for minutes, and nobody could tell afterwards which KQL had run,
 what it returned, how long it took, or whether it failed. This tool runs each
-entry through clp-s-search-kql, prints one block per entry as soon as it
+entry through clp search, prints one block per entry as soon as it
 finishes, and records every entry in a results file that the report writer
 reads instead of re-running the plan.
 
@@ -15,13 +15,13 @@ construction. An entry without a valid `match` (a malformed filter, or a
 hand-written `kql` string) is recorded as an error without running.
 
 Usage:
-  clp-insights run [options] ARCHIVES_DIR
-  clp-insights run --print-table [--results-file F]
+  clp run [options] ARCHIVES_DIR
+  clp run --print-table [--results-file F]
 
 Options:
   --query-plan-file F   One query_plan entry per line as compact JSON
                         (default: /tmp/clp-insights-query-plan.txt, written by
-                        clp-insights extract)
+                        clp extract)
   --results-file F      Where results accumulate as NDJSON, one line per plan
                         entry (default: /tmp/clp-insights-query-results.ndjson)
   --entries RANGES      1-based plan entries to run, e.g. 1-5, 7, or 1-3,9
@@ -45,7 +45,7 @@ Options:
                         pool open until F says {"close": true}: each complete
                         line is a plan entry, queued AHEAD of every plan entry
                         not yet started, with origin "focus" unless it has its
-                        own. clp-insights focus writes it once the user picks a
+                        own. clp focus writes it once the user picks a
                         focus, so one pool runs the core plan and the focus
                         without a second pool counting the same free memory.
                         Its entries get indexes after the plan's last entry.
@@ -64,8 +64,8 @@ A plan entry may also carry:
   --samples N           Example output lines kept per projecting entry
                         (default: 3)
   --sample-chars N      Truncate each example to N characters (default: 200)
-  --search-wrapper P    Search wrapper to run (default: clp-s-search-kql next
-                        to this script)
+  --search-wrapper P    Search wrapper to run: one executable
+                        (default: `clp search`)
   --print-table         Print the recorded results as a Markdown table and
                         run nothing.
 
@@ -126,6 +126,7 @@ LIB_DIR = os.path.dirname(os.path.realpath(__file__))
 # The sibling tools this module runs live one level up, in bin/.
 BIN_DIR = os.path.dirname(LIB_DIR)
 sys.path.insert(0, LIB_DIR)
+import commands as C  # noqa: E402
 from kql_build import METHODS, FilterError, entry_kql  # noqa: E402
 
 DEFAULT_QUERY_PLAN_FILE = "/tmp/clp-insights-query-plan.txt"
@@ -255,8 +256,8 @@ def count_lines_into(acc):
 def build_stages(entry, kql, wrapper, archive):
     method = entry.get("method", "")
     if method == "count":
-        return [[wrapper, "--count", archive, kql]]
-    search = [wrapper]
+        return [[*wrapper, "--count", archive, kql]]
+    search = [*wrapper]
     if entry.get("project"):
         search += ["--projection", entry["project"]]
     search += [archive, kql]
@@ -567,14 +568,14 @@ def main(argv=None) -> int:
     parser.add_argument("--max-followups", type=int, default=20)
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--sample-chars", type=int, default=200)
-    parser.add_argument(
-        "--search-wrapper",
-        default=os.path.join(BIN_DIR, "clp-s-search-kql"),
-    )
+    parser.add_argument("--search-wrapper")
     parser.add_argument("--print-table", action="store_true")
     parser.add_argument("--inbox", default=None)
     parser.add_argument("--inbox-timeout", type=int, default=900)
     args = parser.parse_args(argv)
+    # One path, not an argv: a caller replacing the search with its own program gives one
+    # executable. The default is this plugin's own `clp search`, which is two words.
+    args.search_wrapper = [args.search_wrapper] if args.search_wrapper else C.search_argv()
 
     if args.print_table:
         print_table(load_results(args.results_file))
@@ -624,7 +625,7 @@ def main(argv=None) -> int:
         monitor.add(run)
         start = time.monotonic()
         codes, stderr, timed_out = run_pipeline(
-            [[args.search_wrapper, "--count", args.archive, "*"]], args.timeout, count_lines_into(acc), run
+            [[*args.search_wrapper, "--count", args.archive, "*"]], args.timeout, count_lines_into(acc), run
         )
         monitor.remove(run)
         elapsed = round(time.monotonic() - start, 1)

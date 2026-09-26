@@ -1,4 +1,4 @@
-"""clp-bundle-review: ranking and error grouping on hand-made inputs, and the command end to end on a
+"""clp bundle-review: ranking and error grouping on hand-made inputs, and the command end to end on a
 synthetic session with a stub clp-s (see test_bundle_build)."""
 
 import os
@@ -136,17 +136,17 @@ class ErrorGroups(unittest.TestCase):
 class Command(BuildTest):
     def test_builds_then_reviews_a_directory(self):
         make_session(self.home)
-        wrapper = os.path.join(os.path.dirname(__file__), "..", "bin", "clp-s-search-kql")
         env = {**os.environ, "CLP_S_BIN": self.stub}
-        p = subprocess.run([os.path.join(os.path.dirname(__file__), "..", "bin", "clp-bundle-review"), self.out, "--build",
-                            "--claude-home", self.home, "--search-wrapper", wrapper], capture_output=True, text=True, env=env)
+        # No --search-wrapper: the default is `clp search`, which is what this exercises.
+        p = subprocess.run([os.path.join(os.path.dirname(__file__), "..", "bin", "clp"), "bundle-review", self.out, "--build",
+                            "--claude-home", self.home], capture_output=True, text=True, env=env)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("REVIEW sessions=1", p.stdout)
         self.assertIn("BUILD built=1", p.stdout)
         self.assertIn("ZERO calls_without_result sessions=0", p.stdout)
         self.assertTrue(os.path.isfile(os.path.join(self.out, SID, "catalog.sqlite")))
-        again = subprocess.run([os.path.join(os.path.dirname(__file__), "..", "bin", "clp-bundle-review"), self.out, "--build",
-                                "--claude-home", self.home, "--search-wrapper", wrapper], capture_output=True, text=True, env=env)
+        again = subprocess.run([os.path.join(os.path.dirname(__file__), "..", "bin", "clp"), "bundle-review", self.out, "--build",
+                                "--claude-home", self.home], capture_output=True, text=True, env=env)
         self.assertIn("BUILD kept=1", again.stdout)                 # unchanged session: not built again
 
 

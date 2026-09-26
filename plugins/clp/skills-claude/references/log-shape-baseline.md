@@ -1,10 +1,10 @@
-# Log shape baseline reference (log-insights)
+# Log shape baseline reference (`analyze-logs`, general route)
 
-Read this only when needed: the bootstrap misbehaves (empty dump, missing frequencies), the user drills into individual templates, or you need the retrieval/semantic patterns. The happy path never needs this file — the `clp-insights bootstrap` script encapsulates the dump and the cache probe.
+Read this only when needed: the bootstrap misbehaves (empty dump, missing frequencies), the user drills into individual templates, or you need the retrieval/semantic patterns. The happy path never needs this file — the `clp bootstrap` script encapsulates the dump and the cache probe.
 
 ## stats.log_shapes details
 
-- `stats.log_shapes` dumps the log shape dictionary: one raw JSON object per line, `{"archive_id":"...","count":N,"id":N,"shape":"..."}`. `count` is how many values in that archive carried the template, stored by clp-s at compression time; it is `null` only for archives compressed before clp-s stored these counts. `id` numbers the templates within one archive, so aggregate across archives by template, never by `id`. Shapes mark variables as `%int%`/`%str%`/`%float%` on regular archives and `%rule.name%` on clpp/`--experimental` archives (older clp-s builds emitted raw placeholder bytes instead). `log-shape-cache normalize` detects the encoding per line and renders all of them to the canonical `{"log_shape":"...<*>..."}` NDJSON used by this skill and the cache, and `log-shape-cache freqs` sums the counts per template. Works on structurized text archives and native-JSON archives alike (log shapes come from the message field).
+- `stats.log_shapes` dumps the log shape dictionary: one raw JSON object per line, `{"archive_id":"...","count":N,"id":N,"shape":"..."}`. `count` is how many values in that archive carried the template, stored by clp-s at compression time; it is `null` only for archives compressed before clp-s stored these counts. `id` numbers the templates within one archive, so aggregate across archives by template, never by `id`. Shapes mark variables as `%int%`/`%str%`/`%float%` on regular archives and `%rule.name%` on clpp/`--experimental` archives (older clp-s builds emitted raw placeholder bytes instead). `clp shape-cache normalize` detects the encoding per line and renders all of them to the canonical `{"log_shape":"...<*>..."}` NDJSON used by this skill and the cache, and `clp shape-cache freqs` sums the counts per template. Works on structurized text archives and native-JSON archives alike (log shapes come from the message field).
 - The search wrapper adds the required `--experimental` flag automatically and rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently return nothing for it).
 - You **cannot** filter a stats query by substring (`stats.log_shapes:foo` is not valid); it always dumps the whole dictionary. Filter downstream:
   ```bash
@@ -12,7 +12,8 @@ Read this only when needed: the bootstrap misbehaves (empty dump, missing freque
   ```
 - Per-template frequencies come from those stored counts, with no scan of the records. The bootstrap writes them to `/tmp/log-shape-freqs.ndjson` (`{"count":N,"hash":"...","length":N,"log_shape":"..."}`, most frequent first). Its `log_shape` is the template's first `MAX_CHARS` characters, all of it when `length` is no longer: the bootstrap stores that much per template in the cache database, so a later analysis of the same archive reads the counts back instead of dumping the dictionary. The full text is in `/tmp/log-shapes.ndjson` when the bootstrap dumped the dictionary (`SHAPES_SOURCE=dump`; `--dump` forces it). By hand, from a dump:
   ```bash
-  clp-s-search-kql ARCHIVE 'stats.log_shapes' | log-shape-cache freqs
+  CLP="${CLAUDE_PLUGIN_ROOT}/bin/clp"
+  "$CLP" search ARCHIVE 'stats.log_shapes' | "$CLP" shape-cache freqs
   ```
   `freqs` exits 1 when any archive has `null` counts. Report frequencies as unavailable for such an archive and suggest recompressing it; do not approximate them by projecting and counting messages.
 - An empty `stats.log_shapes` dump means the clp-s binary predates the shapes API. The bootstrap then exits 1; reinstalling the plugin fixes it.
@@ -27,12 +28,12 @@ Prefer a direct KQL wildcard search on the message field for the template's dist
 
 ```bash
 ARCHIVE=<archive-dir>
-SEARCH="${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql"
+CLP="${CLAUDE_PLUGIN_ROOT}/bin/clp"
 MSG=<message-field>
 # example records of one template, with timestamp + severity (--limit stops the scan early):
-"$SEARCH" --limit 20 --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '<message>:"*Distinctive Static Text*"'
+"$CLP" search --limit 20 --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '<message>:"*Distinctive Static Text*"'
 # count of that template — native --count, not --projection | grep -c:
-"$SEARCH" --count "$ARCHIVE" '<message>:"*Distinctive Static Text*"'
+"$CLP" search --count "$ARCHIVE" '<message>:"*Distinctive Static Text*"'
 ```
 
 Always quote the wildcard value — `field:"*value*"` not `field:*value*`. The `*` wildcard works inside quotes; without them, any space in the value causes clp-s to treat the term as natural language and trigger the semantic fallback (which errors when no endpoint is active). Single-word values work either way, but quoting unconditionally is the safe habit.
@@ -42,21 +43,21 @@ Always quote the wildcard value — `field:"*value*"` not `field:*value*`. The `
 Avoid `grep`/`jq` over a full record scan: it is O(records), and messages can be large, while KQL search runs inside the engine. A keyword alternation is not a reason to grep; OR the wildcards in one query:
 
 ```bash
-"$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
+"$CLP" search --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
   '<message>:"*foo*" OR <message>:"*bar*" OR <message>:"*baz*"'
 ```
 
 Fall back to project + grep/jq only when the distinctive text needs real regex features KQL wildcards can't express (anchors, character classes, backreferences):
 
 ```bash
-"$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '*' \
+"$CLP" search --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '*' \
   | jq -rc --arg f "$MSG" 'select(.[$f]|test("DistinctiveStaticText";"i"))'
 ```
 
 Narrow with a working scalar field first when you can — `<severity>:` and `<logger>:` are also searchable, and combine with the message wildcard in one compound query:
 
 ```bash
-"$SEARCH" --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
+"$CLP" search --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
   '<severity>:WARNING AND <message>:"*Static Text*"'
 ```
 
@@ -70,7 +71,7 @@ Rules of thumb: pick the rarest distinctive static text (never a variable or a s
   jq -s '[.[] | select(.log_shape | test("compact|flush|memtable|ingest";"i")) | .count] | add' /tmp/log-shape-freqs.ndjson
   ```
 - **Time span:** `timeRange` in the archive's `.yscope-clp-archive.json` (`begin`/`end`, the earliest and latest timestamp across every record, recorded at compression). When it is absent or null, the span is unavailable; never estimate it from fetched records.
-- **Scoped semantic:** `clp-s-search-kql ARCHIVE 'semantic("...") AND <severity>:<value>'`
+- **Scoped semantic:** `"${CLAUDE_PLUGIN_ROOT}/bin/clp" search ARCHIVE 'semantic("...") AND <severity>:<value>'`
 - **Filter the baseline with jq:**
   ```bash
   jq -r 'select(.log_shape|test("error|fail|exception";"i")).log_shape' /tmp/log-shape-freqs.ndjson

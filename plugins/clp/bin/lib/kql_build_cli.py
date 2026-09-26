@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-kql-build - render structured JSON filters into clp-s KQL, and validate a query
+clp kql - render structured JSON filters into clp-s KQL, and validate a query
 or a log-insights query plan before it is stored or run.
 
 A filter written as JSON cannot produce an unquoted wildcard value or an
@@ -8,20 +8,20 @@ ungrouped AND/OR: every string value is quoted and escaped, and every nested
 group is parenthesized. The grammar is documented in lib/kql_build.py.
 
 Usage:
-  kql-build render [FILTER_JSON]
+  clp kql render [FILTER_JSON]
       Print the KQL for one filter (the argument, or stdin when omitted).
       Example:
-        kql-build render '{"all":[{"field":"severity","eq":"WARNING"},
+        clp kql render '{"all":[{"field":"severity","eq":"WARNING"},
                                   {"field":"message","contains":"SQL txn"}]}'
         -> severity:"WARNING" AND message:"*SQL txn*"
 
-  kql-build validate-wildcards KQL
+  clp kql validate-wildcards KQL
       Exit 0 if the query holds no unquoted wildcard value with a space in it,
       1 if it does. clp-s reads `field:*multi word*` as a natural language
       query and falls back to semantic search; the correct form is
       `field:"*multi word*"`, where the `*` still works as a wildcard.
 
-  kql-build check-plan FILE [--categories-from CLASSIFICATION_FILE]
+  clp kql check-plan FILE [--categories-from CLASSIFICATION_FILE]
                             [--drift-file DRIFT_NDJSON]
                             [--drift-fail-below SHARE]
       Validate every query_plan entry in FILE: a classification JSON object
@@ -40,7 +40,7 @@ Usage:
         TAXONOMY ERROR <why>      a taxonomy entry lacks its ranking
 
       --drift-file also checks every entry's filter fields against the archive's
-      type drift, the NDJSON that `clp-s-schema-tree --drift --drift-file`
+      type drift, the NDJSON that `clp schema --drift --drift-file`
       writes (the insights bootstrap prints its path as TYPE_DRIFT_FILE=).
       clp-s stores one schema-tree node per type, so a field can hold several
       types across records, and a filter reaches the union of a path's scalar
@@ -91,7 +91,7 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import kql_build  # noqa: E402
 import plan_drift  # noqa: E402
 from classification import category_names, check_ranked_entry, taxonomy_errors  # noqa: E402
@@ -182,7 +182,7 @@ def cmd_validate_wildcards(argv):
     than one that refuses it.
     """
     if len(argv) != 1:
-        print("usage: kql-build validate-wildcards <kql-query>", file=sys.stderr)
+        print("usage: clp kql validate-wildcards <kql-query>", file=sys.stderr)
         return 2
 
     bad = unquoted_wildcard_terms(argv[0])
@@ -267,7 +267,8 @@ def cmd_check_plan(argv):
     return 0 if plan and not invalid and not tax_errors and not fails else 1
 
 
-def main(argv):
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] in ("-h", "--help"):
         usage(sys.stdout if argv else sys.stderr)
         return 0 if argv else 2

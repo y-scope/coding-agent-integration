@@ -1,4 +1,4 @@
-"""clp-s-search-kql over a directory that holds several archives.
+"""clp search over a directory that holds several archives.
 
 A stub clp-s stands in for the binary: it answers each search with one JSON row per
 matching record, so the tests exercise only what the wrapper does around it.
@@ -12,7 +12,7 @@ import tempfile
 import textwrap
 import unittest
 
-WRAPPER = os.path.join(os.path.dirname(__file__), "..", "bin", "clp-s-search-kql")
+WRAPPER = [os.path.join(os.path.dirname(__file__), "..", "bin", "clp"), "search"]
 
 STUB = textwrap.dedent("""\\
     #!/usr/bin/env bash
@@ -59,7 +59,7 @@ class MultiArchiveSearch(unittest.TestCase):
 
     def run_wrapper(self, *args, target=None):
         env = dict(os.environ, CLP_S_BIN=self.stub)
-        proc = subprocess.run([WRAPPER, *args, target or self.root, "*"],
+        proc = subprocess.run([*WRAPPER, *args, target or self.root, "*"],
                               capture_output=True, text=True, env=env)
         return proc.returncode, proc.stdout.splitlines(), proc.stderr
 

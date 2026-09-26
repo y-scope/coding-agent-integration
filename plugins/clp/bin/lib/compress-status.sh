@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# clp-compress-status - report the state of a clp-s-compress-folder run.
+# clp compress status - report the state of a clp compress folder run.
 #
-# Usage: clp-compress-status ARCHIVES_DIR
+# Usage: clp compress status ARCHIVES_DIR
 #
 # Reads ARCHIVES_DIR.compress-status.json, which the compress wrapper keeps up
 # to date. A run whose process is gone without a final state is reported as

@@ -1,5 +1,5 @@
 """
-clp-insights baseline-plan - write the app-agnostic baseline queries of a
+clp baseline-plan - write the app-agnostic baseline queries of a
 log-insights run to their own plan file (log-insights skill, step 4).
 
 The insight subagent used to discover the severity and logger breakdowns by
@@ -27,7 +27,7 @@ schema and the sampled values.
 16.5M-record archive, against about 7 s for a count).
 
 Usage:
-  clp-insights baseline-plan --archive DIR --schema-json JSON [options]
+  clp baseline-plan --archive DIR --schema-json JSON [options]
 
 Options:
   --archive DIR         Archives directory to sample.
@@ -37,7 +37,7 @@ Options:
                         `timestamp` and `message` fields.
   --plan-file F         The baseline's own plan file (default:
                         /tmp/clp-insights-baseline-plan.txt), run by
-                        clp-insights run with its own results file.
+                        clp run with its own results file.
                         Entries from an earlier run (origin "baseline") are
                         replaced, so it is safe to run twice.
   --sample N            Records to sample from the head of the archive
@@ -48,8 +48,8 @@ Options:
   --max-residual N      Fetch the severity residual's records when there are N
                         or fewer (default: 300).
   --no-semantic         Do not add the semantic entry.
-  --search-wrapper P    Search wrapper (default: clp-s-search-kql next to this
-                        script).
+  --search-wrapper P    Search wrapper: one executable (default: `clp
+                        search`).
 
 Prints BASELINE_ENTRIES= and one line per field with the sampled vocabulary.
 Exit codes: 0 ok, 1 input problem.
@@ -66,6 +66,7 @@ LIB_DIR = os.path.dirname(os.path.realpath(__file__))
 # The sibling tools this module runs live one level up, in bin/.
 BIN_DIR = os.path.dirname(LIB_DIR)
 sys.path.insert(0, LIB_DIR)
+import commands as C  # noqa: E402
 from kql_build import FilterError, check_entry  # noqa: E402
 
 ORIGIN = "baseline"
@@ -86,7 +87,7 @@ def dig(record, path):
 
 def sample_values(wrapper, archive, fields, limit):
     proc = subprocess.run(
-        [wrapper, "--projection", ",".join(fields), "--limit", str(limit), archive, "*"],
+        [*wrapper, "--projection", ",".join(fields), "--limit", str(limit), archive, "*"],
         capture_output=True, text=True, check=False,
     )
     if proc.returncode != 0:
@@ -145,11 +146,11 @@ def main(argv=None) -> int:
     parser.add_argument("--max-cardinality", type=int, default=40)
     parser.add_argument("--max-residual", type=int, default=300)
     parser.add_argument("--no-semantic", action="store_true")
-    parser.add_argument(
-        "--search-wrapper",
-        default=os.path.join(BIN_DIR, "clp-s-search-kql"),
-    )
+    parser.add_argument("--search-wrapper")
     args = parser.parse_args(argv)
+    # One path, not an argv: a caller replacing the search with its own program gives one
+    # executable. The default is this plugin's own `clp search`, which is two words.
+    args.search_wrapper = [args.search_wrapper] if args.search_wrapper else C.search_argv()
 
     try:
         schema = json.loads(args.schema_json)

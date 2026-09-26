@@ -1,6 +1,6 @@
-# Log shape insight reference (log-insights steps 6–9)
+# Log shape insight reference (`analyze-logs`, general route steps 6–9)
 
-Read this when a classification exists (`/tmp/log-shape-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE); the context question below is asked at step 6, before it does. It covers the three questions to the user, the summary, building the insight inputs, the core plan's pool and the focus queued into it, the facts, the report writer's prompt, saving the report, and the report format.
+Read this when a classification exists (`/tmp/log-shape-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE); the context question below is asked at step 6, before it does. It covers the three questions to the user, the summary, building the insight inputs, the core plan's pool and the focus queued into it, the facts, the report writer's prompt, saving the report, and the report format. It is the general route's command reference: the route's stages are top-level subcommands of `clp` (`clp bootstrap`, `clp baseline-plan`, `clp extract`, `clp run`, `clp focus`, `clp facts`).
 
 ## Ask what the user already knows (step 6)
 
@@ -11,15 +11,15 @@ Ask right after spawning the classifier, so the user answers while it runs (on U
 - "Checking something specific" — a question they want answered.
 - "Just exploring" — no background; the whole picture is what they want.
 
-Keep the answer, verbatim, for the focus question and `clp-insights focus --context`. When the user picks "Chasing a problem" or "Checking something specific" without saying what, ask what in the focus question's "Other" field; do not ask a third question. Never pass it to the classifier: the classification is cached per app and reused for every later capture, while the answer is about this one. When no one can answer (a headless run, or AskUserQuestion unavailable), skip both questions.
+Keep the answer, verbatim, for the focus question and `clp focus --context`. When the user picks "Chasing a problem" or "Checking something specific" without saying what, ask what in the focus question's "Other" field; do not ask a third question. Never pass it to the classifier: the classification is cached per app and reused for every later capture, while the answer is about this one. When no one can answer (a headless run, or AskUserQuestion unavailable), skip both questions.
 
 ## Build the insight inputs (step 7)
 
-Extract the pieces with `clp-insights extract` (stdlib-only Python; do not use a raw `jq` pipeline here — see below):
+Extract the pieces with `clp extract` (stdlib-only Python; do not use a raw `jq` pipeline here — see below):
 
 ```bash
 jq -r '.taxonomy[] | "- \(.category) [\(.priority)]: \(.description) -- \(.why)"' /tmp/log-shape-classification.json
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-insights" extract \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" extract \
   --classification-file /tmp/log-shape-classification.json \
   --freqs-file FREQS_FILE
 ```
@@ -31,16 +31,16 @@ jq -r '.taxonomy[] | "- \(.category) [\(.priority)]: \(.description) -- \(.why)"
 - `/tmp/clp-insights-query-plan.txt`, the core plan: the `core` entries, one per line, high priority first — the input to the pool below;
 - `/tmp/clp-insights-drill-plan.txt`, the `drill` entries, which run only when the user focuses on their category;
 
-and it empties the focus inbox, `/tmp/clp-insights-focus-inbox.ndjson`, and removes the previous run's `/tmp/clp-insights-focus.json`. It prints `SCHEMA=`/`TEMPLATES=`/`CATEGORIES=`/`QUERY_PLAN=`/`DRILL_PLAN=`/`QUERY_PLAN_INVALID=`, `UNCLASSIFIED=` when a template matched no classified one, and a `CATEGORY <name> <templates> records=<n> priority=<p> drill=<k>` line per category, largest first — the summary below is built from them. `QUERY_PLAN_INVALID` is 0 for any classification `log-shape-cache` produced, since it stores no entry without a valid `match` and ranking; if it is not, report it and stop. Per category it keeps only the top `--max-per-category` templates (default 25) ranked by the frequencies file, each truncated to `--trunc-chars` (default 180). That bound matters for apps that log large near-duplicate blobs as "distinct" templates (observed: CockroachDB serializing multi-line Pebble stats tables as single messages, one category alone holding 9810 of 11558 total templates, mean template length ~184KB); for the overwhelming majority of apps, whose templates are short and few, it changes nothing observable.
+and it empties the focus inbox, `/tmp/clp-insights-focus-inbox.ndjson`, and removes the previous run's `/tmp/clp-insights-focus.json`. It prints `SCHEMA=`/`TEMPLATES=`/`CATEGORIES=`/`QUERY_PLAN=`/`DRILL_PLAN=`/`QUERY_PLAN_INVALID=`, `UNCLASSIFIED=` when a template matched no classified one, and a `CATEGORY <name> <templates> records=<n> priority=<p> drill=<k>` line per category, largest first — the summary below is built from them. `QUERY_PLAN_INVALID` is 0 for any classification `clp shape-cache` produced, since it stores no entry without a valid `match` and ranking; if it is not, report it and stop. Per category it keeps only the top `--max-per-category` templates (default 25) ranked by the frequencies file, each truncated to `--trunc-chars` (default 180). That bound matters for apps that log large near-duplicate blobs as "distinct" templates (observed: CockroachDB serializing multi-line Pebble stats tables as single messages, one category alone holding 9810 of 11558 total templates, mean template length ~184KB); for the overwhelming majority of apps, whose templates are short and few, it changes nothing observable.
 
 ## The baseline queries
 
 The severity and logger breakdown, the records behind any rare severity, and one scoped semantic scan need nothing but the schema, so step 4 of the skill already wrote them to their own plan, `/tmp/clp-insights-baseline-plan.txt`, and started their pool in the background, with results in `/tmp/clp-insights-baseline-results.ndjson`:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-insights" baseline-plan --archive <archive-dir> \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" baseline-plan --archive <archive-dir> \
   --schema-json '{"timestamp":"<TS>","severity":"<SEV>","logger":"<LOGGER>","message":"<MSG>"}'
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-insights" run --retry-failed \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" run --retry-failed \
   --query-plan-file /tmp/clp-insights-baseline-plan.txt \
   --results-file /tmp/clp-insights-baseline-results.ndjson <archive-dir>
 ```
@@ -49,16 +49,16 @@ Per low-cardinality field (the schema's severity and logger) the planner adds a 
 
 ## Start the core plan, and summarize (step 7)
 
-Run the plan yourself, before spawning the report writer, with `clp-insights run`, a query pool: it holds the plan's entries and runs as many at once as memory allows. It renders each entry's `match` with `kql-build` — every value quoted and escaped, every group parenthesized — sends the KQL through `clp-s-search-kql`, prints each entry's result as soon as it finishes, and records it in `/tmp/clp-insights-query-results.ndjson`, one JSON line per entry: `label`, `method`, the rendered `kql`, the exact `command`, `status`, `count`, `pct`, `elapsed_s`, a few `samples` for projecting methods, and `error` for failures. An entry without a valid `match` is recorded as an error without running.
+Run the plan yourself, before spawning the report writer, with `clp run`, a query pool: it holds the plan's entries and runs as many at once as memory allows. It renders each entry's `match` with `clp kql` — every value quoted and escaped, every group parenthesized — sends the KQL through `clp search`, prints each entry's result as soon as it finishes, and records it in `/tmp/clp-insights-query-results.ndjson`, one JSON line per entry: `label`, `method`, the rendered `kql`, the exact `command`, `status`, `count`, `pct`, `elapsed_s`, a few `samples` for projecting methods, and `error` for failures. An entry without a valid `match` is recorded as an error without running.
 
 Run it once over the core plan, as a background Bash call (`run_in_background: true`, no trailing `&`, or the harness reports it finished at once), with the focus inbox, and follow its output file with the Monitor tool until `PLAN_STATUS` appears: `tail -n +1 -F <output-file> | grep --line-buffered -E '^\[[0-9]+/[0-9]+\]|^INBOX|PLAN_STATUS|Traceback|rror'`, `timeout_ms` at its maximum (re-arm it if it expires first), stopped with TaskStop when the harness reports the call exited. Never wait with `sleep` between reads; the harness blocks a foreground `sleep N; <command>`:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-insights" run --retry-failed \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" run --retry-failed \
   --inbox /tmp/clp-insights-focus-inbox.ndjson <archive-dir>
 ```
 
-With `--inbox` the pool also takes entries from the inbox while it runs: each goes ahead of every core entry not yet started, so the user's focus runs next even on an archive where each search takes minutes. The pool does not exit until the inbox is closed — `clp-insights focus` closes it — and after its core plan it prints `INBOX waiting ...` until then. With no close line it gives up after `--inbox-timeout` seconds (default 900; `INBOX=timed-out`), so a question left unanswered does not hold it forever.
+With `--inbox` the pool also takes entries from the inbox while it runs: each goes ahead of every core entry not yet started, so the user's focus runs next even on an archive where each search takes minutes. The pool does not exit until the inbox is closed — `clp focus` closes it — and after its core plan it prints `INBOX waiting ...` until then. With no close line it gives up after `--inbox-timeout` seconds (default 900; `INBOX=timed-out`), so a question left unanswered does not hold it forever.
 
 Then post the **summary**, while the pool runs. Keep it to about ten lines, every figure from the bootstrap, the baseline results and the extract's `CATEGORY` lines. It is the one place the total record count and the category table appear; later messages refer back to them:
 
@@ -76,20 +76,20 @@ Ask in one AskUserQuestion, header "Focus", not multi-select (on UPTODATE, the c
 - one option per remaining high-priority category, largest first, its description the classifier's `why`, its record count, and how many deeper checks choosing it queues (the extract's `drill=` count; for 0, "I'll write one to three checks from its templates") — up to the four options AskUserQuestion allows;
 - "Everything", if the first option is not already it, described truthfully: "The standard checks already cover every category; no extra queries."
 
-The automatic "Other" takes the user's own question. Then run `clp-insights focus` ONCE — even for "Everything", since it is what closes the inbox:
+The automatic "Other" takes the user's own question. Then run `clp focus` ONCE — even for "Everything", since it is what closes the inbox:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-insights" focus --category <C> [--category <C2>] \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" focus --category <C> [--category <C2>] \
   [--entries-file /tmp/clp-insights-focus-entries.ndjson] \
   --context '<the context answer, verbatim, or empty>' --question '<the user\'s own question, or empty>'
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-insights" focus --everything --context '<...>'            # the whole picture
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" focus --everything --context '<...>'            # the whole picture
 ```
 
 - A **category** queues its drill entries from `/tmp/clp-insights-drill-plan.txt`. `NO_DRILL=<C>` means it has none: write entries for it as below.
-- The user's **own question**, or **context** that names something specific (a component, a symptom, an error text), gets 1–3 entries you write to `/tmp/clp-insights-focus-entries.ndjson`, one JSON entry per line, in the same shape as a plan entry: `label`, `match` (the grammar in `log-shape-classify.md`), `method`, `project` for a projecting method, and `category` when one fits. Derive each from templates in `/tmp/log-shape-templates-by-category.txt` that exist, as the classifier does; for a concept rather than a phrase, use a `semantic` node inside an `all` beside a concrete filter. `clp-insights focus` checks every entry and queues nothing if one is invalid (exit 1, inbox left open): fix it and run it again.
+- The user's **own question**, or **context** that names something specific (a component, a symptom, an error text), gets 1–3 entries you write to `/tmp/clp-insights-focus-entries.ndjson`, one JSON entry per line, in the same shape as a plan entry: `label`, `match` (the grammar in `log-shape-classify.md`), `method`, `project` for a projecting method, and `category` when one fits. Derive each from templates in `/tmp/log-shape-templates-by-category.txt` that exist, as the classifier does; for a concept rather than a phrase, use a `semantic` node inside an `all` beside a concrete filter. `clp focus` checks every entry and queues nothing if one is invalid (exit 1, inbox left open): fix it and run it again.
 - A **time** the user mentions ("around 10:12") cannot be a filter — `match` has no time range — so keep it for the writer: it is in the context, and the fetched records carry timestamps.
 
-`clp-insights focus` prints each queued entry with its KQL, then `FOCUS=` and `FOCUS_ENTRIES=`; tell the user in one plain line what was queued ("Queued 2 deeper checks on slow SQL transactions; they run next"), or, for `FOCUS_ENTRIES=0`, that the standard checks already cover it. Then follow the pool.
+`clp focus` prints each queued entry with its KQL, then `FOCUS=` and `FOCUS_ENTRIES=`; tell the user in one plain line what was queued ("Queued 2 deeper checks on slow SQL transactions; they run next"), or, for `FOCUS_ENTRIES=0`, that the standard checks already cover it. Then follow the pool.
 
 ## Follow the pool (step 8)
 
@@ -107,25 +107,25 @@ A `non_selective` flag marks an entry matching at least 90% of the records: eith
 The focus entries (`origin: "focus"`, marked "(focus)" in the table) are numbered after the core plan's last entry. When the pool is done, print both tables and save them: the report check reads them, and the report's Query Log reproduces them. Do not paste them into the chat. Each is numbered from 1; cite an entry as "baseline #N" or "plan #N" in the report only:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-insights" run --print-table \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" run --print-table \
   --results-file /tmp/clp-insights-baseline-results.ndjson | tee /tmp/clp-insights-baseline-table.md
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-insights" run --print-table | tee /tmp/clp-insights-plan-table.md
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" run --print-table | tee /tmp/clp-insights-plan-table.md
 ```
 
 Then close phase 4 in one or two lines: how many checks ran, and each `error`, `timeout` or `zero` entry with what it costs the report. Mention a `non_selective` entry only when a value that dominates the log does not explain it. Do not fix and re-run them yourself: `--retry-failed` already retried each `error` or `timeout` entry once (marked `retried`), and the subagent may run one corrected query for a loose entry and log it.
 
 ## Compute the facts, and post the early numbers (step 9)
 
-Every number of the report is computed in code, because a small model asked to add up a table or pick the right count gets them wrong (in a trial: 49 warnings for 92, 5,370 templates for 11,558, and a 9.5-minute span for a 74-hour log). Once the pool is done:
+Every number of the report is computed in code, because a small model asked to add up a table or pick the right count gets them wrong (in a trial: 49 warnings for 92, 5,370 templates for 11,558, and a 9.5-minute span for a 74-hour log). Once the pool is done, run `clp facts` (this route's numbers; one Claude Code session's are `clp session facts`, a different subcommand):
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-insights" facts --schema-json '<the SCHEMA= line from the extract>' \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" facts --schema-json '<the SCHEMA= line from the extract>' \
   --archive-dir <archive-dir> \
   --schema-tree-file /tmp/clp-insights-schema-tree.json \
   --freqs-file <FREQS_FILE>   # --freqs-file none and --category-totals none when frequencies were unavailable
 ```
 
-It reads both results files (`--baseline-results-file`, `--results-file`; the defaults are the paths above) and `clp-insights focus`'s `/tmp/clp-insights-focus.json`, and writes `/tmp/clp-insights-facts.md` in well under a second: first the user's focus — its categories with their records and the classifier's `why`, the user's question and context verbatim, and the focus queries' results with samples — then total records and templates; the severity and logger breakdowns, each with a check line showing whether it sums to the total; the category table with its sum and the records no template accounts for; the top templates overall (each with its category) and within each category, from `/tmp/log-shape-top-templates.json`, which the extract writes; the fetched records grouped by message shape with counts and first/last timestamps; the semantic entries; and the flagged queries. The archive's time span comes from `timeRange` in its `.yscope-clp-archive.json`: the earliest and latest timestamp across every record, which `clp-s-compress-folder` and `clp-s-compress-session` record when they compress with a timestamp key. Without one the span is given as unavailable, with the reason. A sample or example shows what its record says: the strings at the schema's message field, stepping through arrays (a list of content blocks), else at the nearest ancestor of that field the record has, preferring text over ids and enum values; a record with no message (a duration or status record) is shown by its other fields as `key=value`. The report writer may quote these figures and no others.
+It reads both results files (`--baseline-results-file`, `--results-file`; the defaults are the paths above) and `clp focus`'s `/tmp/clp-insights-focus.json`, and writes `/tmp/clp-insights-facts.md` in well under a second: first the user's focus — its categories with their records and the classifier's `why`, the user's question and context verbatim, and the focus queries' results with samples — then total records and templates; the severity and logger breakdowns, each with a check line showing whether it sums to the total; the category table with its sum and the records no template accounts for; the top templates overall (each with its category) and within each category, from `/tmp/log-shape-top-templates.json`, which the extract writes; the fetched records grouped by message shape with counts and first/last timestamps; the semantic entries; and the flagged queries. The archive's time span comes from `timeRange` in its `.yscope-clp-archive.json`: the earliest and latest timestamp across every record, which `clp compress folder` and `clp compress session` record when they compress with a timestamp key. Without one the span is given as unavailable, with the reason. A sample or example shows what its record says: the strings at the schema's message field, stepping through arrays (a list of content blocks), else at the nearest ancestor of that field the record has, preferring text over ids and enum values; a record with no message (a duration or status record) is shown by its other fields as `key=value`. The report writer may quote these figures and no others.
 
 Then post the **early numbers**: 3 to 5 lines quoted from the facts file, the focus first — the focus queries' counts, what their samples show, then the one or two figures that matter most elsewhere. The writer takes about two minutes; this way the user has the headline while it works. Quote figures as the facts file gives them, and draw no conclusions the writer has not been asked to check.
 
@@ -138,7 +138,7 @@ Every query has run and every number is in the facts file, so the last step only
 Ask right after spawning the writer, so the user answers while it works. First list what this machine can produce (instant; it only looks for a browser to print PDF with):
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-report" save --list-formats
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" report save --list-formats
 ```
 
 It prints `FORMATS=` and `PDF_ENGINE=` (a browser's path, or `none`). Then one AskUserQuestion with two questions. Fill in the real paths: `<name>` is the source log file or folder's name when this run compressed it, else the archive directory's name, and `<stamp>` is `YYYYmmdd-HHMM`.
@@ -159,12 +159,12 @@ When the user picks only "claude.ai page", the location answer is not used. When
 
 ## Check the report
 
-`clp-report check` reads the saved report and flags figures mechanically; it never edits the report. There is no verifier subagent: the writer rules on the flags itself in one fix round.
+`clp report check` reads the saved report and flags figures mechanically; it never edits the report. There is no verifier subagent: the writer rules on the flags itself in one fix round.
 
 1. Run the script (under a second):
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-report" check /tmp/clp-insights-report.md \
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp" report check /tmp/clp-insights-report.md \
      --also /tmp/clp-insights-baseline-table.md --also /tmp/clp-insights-plan-table.md \
      --schema-tree-file /tmp/clp-insights-schema-tree.json > /tmp/clp-report-flags.txt
    ```
@@ -180,7 +180,7 @@ When the user picks only "claude.ai page", the location answer is not used. When
 After the check, save every chosen file format in one run. `--dest` is the chosen folder or file name (a folder gets the default name inside it), and `--name` is the `<name>` from the question:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-report" save --format html,pdf --dest <folder-or-file> --name <name>
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" report save --format html,pdf --dest <folder-or-file> --name <name>
 ```
 
 It prints `SAVED_<FORMAT>=<path>` per file. It never overwrites a file (it adds `-2`, `-3`, ... instead) and creates missing folders. PDF is printed by a headless Chrome, Chromium or Edge without web fonts, so it needs no network. `PDF_ERROR=` means that one format failed (exit 1): tell the user the reason in one line and keep the other files. Never install a browser to get PDF.
@@ -227,6 +227,8 @@ FILES
     over a probe's count, and say so when a probe is flagged non-selective.
     Entries marked "(focus)" ran for the user's focus.
 
+APPLICATION: what these logs appear to be and the evidence for it, from phase 1 -- or "unidentified" when the fingerprint was too generic to name.
+
 Rules:
 1. Every number, percentage, count and timestamp in the report must appear
    verbatim in FACTS_FILE (or in RESULTS_TABLE for a query's own count). If a
@@ -237,6 +239,28 @@ Rules:
    among the fetched records", never present them as the archive's span.
 3. Do not state a rate, a duration, or a cause as fact. A cause or a
    recommendation is inference: label it "inference".
+2a. Label every claim with its evidence tier: measured, derived, inference or
+   domain knowledge. The definition, the rules, and the two cases that look
+   measured but are not -- a category is classification output while its
+   counts are measured; a score is a policy mapping -- are in
+   references/evidence-tiers.md. Read it and follow it; do not paraphrase it.
+3a. APPLICATION is what these logs appear to be, with the evidence that
+   identified it. Use what you know about that system to say why a finding
+   matters -- what a gossip failure means for a distributed database, what a
+   growing queue means for an inference server, what the blast radius of each
+   is. Lead with it where the user asked for significance or impact.
+   Three limits, and they are strict. Label it "domain knowledge", separately
+   from "inference", so a reader can tell a claim about this system from a
+   claim about these records. It may never supply a number, a rate or a
+   duration: those come from FACTS_FILE or they do not appear. And it may
+   never overrule a measurement -- where what you know about the system
+   disagrees with what the records show, report the records and say the
+   expectation did not hold.
+3b. Where APPLICATION says the identification is uncertain, say so once and
+   keep the domain knowledge to what holds for the family of systems it could
+   be, or leave it out. A confident explanation built on a misidentified
+   application is the worst output here: it reads as insight and points the
+   reader away from what the logs actually say.
 4. Name the top warning and error templates from the grouped records, with
    their counts, exactly as the facts list them.
 5. Report semantic findings only when they add something to the templates,
@@ -287,7 +311,7 @@ The report has these sections:
 
 ## Report format (present in this order)
 
-1. **Summary** — total records, severity counts, archive span, top logger/component.
+1. **Summary** — total records, severity counts, archive span, top logger/component. Open with what these logs are, one clause, from APPLICATION: naming the system tells a reader what the rest of the report is about. Say "appears to be" where the identification is an inference, and "unidentified" where it could not be named.
 2. **Focus** — what the user asked for, answered first: the focus categories and queries, and whether the records bear out the user's context.
 3. **Log Shape Baseline** — distinct template count, top templates by frequency with counts, the discovered category breakdown. The spine of the report. Flag a category whose true count dwarfs the templates shown for it as a likely large-near-duplicate-blob artifact, not genuine behavioral diversity.
 4. **Issues & Warnings** — errors, warnings, top 3 warning *templates* (grounded, not guessed), actionable problems; semantic-only findings if any.
@@ -295,5 +319,7 @@ The report has these sections:
 6. **Performance Signals** — timing/throughput/slow-operation templates and counts (if the app produces any); semantic-only findings if any.
 7. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
 8. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that template-classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
-9. **Follow-up queries** — 2–3 concrete queries derived from templates.
-10. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.
+9. **What this means for the system** — only where APPLICATION named one, and only where it adds something: what the findings above imply for a system of that kind, and the blast radius of each. Every claim here is labelled "domain knowledge", carries no number that is not already above, and gives way to the records wherever the two disagree. Nothing worth saying — leave the section out rather than filling it.
+10. **Follow-up queries** — 2–3 concrete queries derived from templates.
+11. **Checks** — each headline figure with the one command that reproduces it, from the facts file's verification section: measured figures name their query, derived ones their inputs and formula. This is what makes the report arguable instead of trusted.
+12. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.

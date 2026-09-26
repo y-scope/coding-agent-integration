@@ -1,5 +1,5 @@
 """
-clp-report check - flag figures and KQL fields in a log-insights report
+clp report check - flag figures and KQL fields in a log-insights report
 that its own inputs do not support (log-insights skill, step 7).
 
 The report writer is told to quote figures from the facts file and to derive
@@ -20,7 +20,7 @@ Two checks:
     facts list under "Fields a KQL query may filter on".
 
 Usage:
-  clp-report check REPORT [--facts F] [--also F ...]
+  clp report check REPORT [--facts F] [--also F ...]
 
   --facts F   The facts file (default: /tmp/clp-insights-facts.md)
   --also F    Another file whose figures the report may use, e.g. the results
@@ -87,7 +87,7 @@ def main(argv=None) -> int:
     ap.add_argument("--facts", default="/tmp/clp-insights-facts.md")
     ap.add_argument("--also", action="append", default=[])
     ap.add_argument("--schema-tree-file", default=None,
-                    help="clp-s-schema-tree --json-out file; every path in it is a field")
+                    help="clp schema --json-out file; every path in it is a field")
     args = ap.parse_args(argv)
 
     try:

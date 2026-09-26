@@ -4,7 +4,7 @@
 
 Read the [capabilities overview](agentic-semantic-analysis-capabilities.md) first for the proposed observability pilot. Use the [tooling companion](agentic-semantic-analysis-tooling.md) for tool behavior and composition.
 
-**Status: preparation guide, with no measured results yet.** The earlier demo's data was on the Uber laptop and was not backed up here. This repository does not currently bundle a replacement dataset, pinned demo environment, or saved run outputs. The procedure below is based on the repository's wrapper interfaces; it has not been executed against a replacement dataset for this document.
+**Status: preparation guide, with no measured results yet.** The earlier demo's data was on the Uber laptop and was not backed up here. This repository does not currently bundle a replacement dataset, pinned demo environment, or saved run outputs. The procedure below is based on the repository's `clp` subcommands; it has not been executed against a replacement dataset for this document.
 
 ## 1. Choose the question and data
 
@@ -29,10 +29,12 @@ Record the following before the run:
 
 Run commands from the repository root in Bash. The [plugin README](plugins/clp/README.md) describes installation and binary resolution; [local testing](LOCAL_TESTING.md) covers smoke checks. The walkthrough requires Bash, Python 3, `jq`, `rg` (ripgrep), and a `clp-s` build supporting semantic search and the shapes API (`clp-core` 0.13+ for the dictionary path). Record the exact build used rather than relying only on that minimum version.
 
-Configure a running embedding endpoint explicitly. The example below uses localhost and assumes a compatible service is already running there; these commands do not start it. Without an explicit endpoint, the wrapper can try remote services. Account separately for content sent to the agent model during classification and investigation.
+Configure a running embedding endpoint explicitly. The example below uses localhost and assumes a compatible service is already running there; these commands do not start it. Without an explicit endpoint, `clp search` can try remote services. Account separately for content sent to the agent model during classification and investigation.
+
+Every step below runs the plugin's one command, `plugins/clp/bin/clp`, with the subcommand for that step; `clp` on its own lists them all.
 
 ```bash
-DEMO_BIN="$PWD/plugins/clp/bin"
+DEMO_CLP="$PWD/plugins/clp/bin/clp"
 DEMO_RUN="$(mktemp -d /tmp/clp-semantic-demo.XXXXXX)"
 DEMO_LOGS=/absolute/path/to/prepared-jsonl-logs
 DEMO_ARCHIVE="$DEMO_RUN/archive"
@@ -43,39 +45,39 @@ git rev-parse HEAD
 
 Replace `DEMO_LOGS` with the prepared dataset directory. If needed, set `CLP_S_BIN` to the exact binary. Keep this shell open for the subsequent commands. The run directory is temporary; copy the finished evidence package to a durable location before sharing it.
 
-For optional clustering, no model install is needed: `log-shape-cluster` embeds templates through the same already-running embedding server that powers semantic search (`setup` has been removed). Configure the endpoint once — `CLP_SEMANTIC_ENDPOINT`, `--semantic-endpoint`, or the `semantic-endpoint` config file — or rely on the built-in default. There is no local dependency (clustering is pure Python standard library). Templates are capped at `--max-chars` (default 500 characters) and de-duplicated before embedding; record the endpoint and the character limit for reproduction.
+For optional clustering, no model install is needed: `clp shape-cluster` embeds templates through the same already-running embedding server that powers semantic search (`setup` has been removed). Configure the endpoint once — `CLP_SEMANTIC_ENDPOINT`, `--semantic-endpoint`, or the `semantic-endpoint` config file — or rely on the built-in default. There is no local dependency (clustering is pure Python standard library). Templates are capped at `--max-chars` (default 500 characters) and de-duplicated before embedding; record the endpoint and the character limit for reproduction.
 
 ## 3. Ingest and inspect the capture
 
 For prepared JSONL whose timestamp field is named `timestamp`:
 
 ```bash
-"$DEMO_BIN/clp-s-compress-folder" \
+"$DEMO_CLP" compress folder \
   --path "$DEMO_LOGS" \
   --extensions jsonl,ndjson \
   --timestamp-key timestamp \
   --output-dir "$DEMO_ARCHIVE"
 
-"$DEMO_BIN/clp-s-search-kql" "$DEMO_ARCHIVE" 'stats.schema_tree'
+"$DEMO_CLP" search "$DEMO_ARCHIVE" 'stats.schema_tree'
 
-"$DEMO_BIN/clp-insights" bootstrap \
+"$DEMO_CLP" bootstrap \
   --out-dir "$DEMO_RUN/bootstrap" \
   --cache-dir "$CLP_LOG_SHAPE_CACHE_DIR" \
   "$DEMO_ARCHIVE"
 ```
 
-Use the actual timestamp field for your data; `clp-detect-logs "$DEMO_LOGS"` reports it from the first 128 KiB of each file. Text logs can instead be ingested with `--structurize` (with `--parser FILE` for a format other than vLLM); inspect parsing warnings and account for skipped files. JSONL is never structurized.
+Use the actual timestamp field for your data; `clp detect "$DEMO_LOGS"` reports it from the first 128 KiB of each file. Text logs can instead be ingested with `--structurize` (with `--parser FILE` for a format other than vLLM); inspect parsing warnings and account for skipped files. JSONL is never structurized.
 
 Save the compression summary and bootstrap output. Confirm that records were ingested, inspect the schema, and require `FREQS=OK` for the dictionary-based demo. If it reports `FREQS=UNAVAILABLE`, recompress the logs with the current binary. Bootstrap field distributions are sampled and must not be reported as complete frequencies.
 
 Preserve the dictionary before normalization as well:
 
 ```bash
-"$DEMO_BIN/clp-s-search-kql" "$DEMO_ARCHIVE" 'stats.log_shapes' \
+"$DEMO_CLP" search "$DEMO_ARCHIVE" 'stats.log_shapes' \
   > "$DEMO_RUN/shapes.stdout"
 ```
 
-The wrapper writes metadata headers alongside JSON lines. Extract JSON lines before processing results as NDJSON. Keep raw shape identifiers for traceability; normalized templates render variable types as `<*>` and may merge display-equivalent shapes.
+`clp search` writes metadata headers alongside JSON lines. Extract JSON lines before processing results as NDJSON. Keep raw shape identifiers for traceability; normalized templates render variable types as `<*>` and may merge display-equivalent shapes.
 
 These schema and dictionary outputs cover the capture archive, which in this example includes both windows. They are candidate metadata for the incident selection. The current stats commands and bootstrap do not take an arbitrary record filter. Establish field and template occurrence with the scoped queries before describing the incident data's structure or inventory. Alternatively, prepare separate archives containing exactly each declared selection and run discovery on each. Record which approach was used.
 
@@ -87,12 +89,12 @@ Choose the actual incident window and replace the field names below with those d
 DEMO_TGE=REPLACE_WITH_INCIDENT_START_EPOCH_MS
 DEMO_TLE=REPLACE_WITH_INCIDENT_END_EPOCH_MS
 
-time "$DEMO_BIN/clp-s-search-kql" \
+time "$DEMO_CLP" search \
   --tge "$DEMO_TGE" --tle "$DEMO_TLE" \
   --projection timestamp,level,logger,message \
   "$DEMO_ARCHIVE" '*' > "$DEMO_RUN/scoped-records.stdout"
 
-time "$DEMO_BIN/clp-s-search-kql" \
+time "$DEMO_CLP" search \
   --tge "$DEMO_TGE" --tle "$DEMO_TLE" \
   --semantic-endpoint "$CLP_SEMANTIC_ENDPOINT" \
   --semantic-top-k 5 --semantic-threshold 0.3 \
@@ -123,13 +125,13 @@ This local keyword scan is useful for comparing retrieval coverage. It is not a 
 Optional clustering of the capture inventory makes representatives available for reusable classification. Templates are capped at `--max-chars` characters and de-duplicated before embedding, but representatives and members are the full templates, and the result still covers the capture; select and validate its applicable members for the investigation scope:
 
 ```bash
-"$DEMO_BIN/log-shape-cluster" cluster \
+"$DEMO_CLP" shape-cluster cluster \
   --max-chars 500 \
   --input "$DEMO_RUN/bootstrap/log-shapes.ndjson" \
   --output "$DEMO_RUN/clusters.json"
 ```
 
-Use the installed `log-insights` skill in an agent session with the actual archive path, run directory, endpoint, and windows substituted into this prompt:
+Use the installed `analyze-logs` skill (general route) in an agent session with the actual archive path, run directory, endpoint, and windows substituted into this prompt:
 
 > Analyze ARCHIVE_PATH for QUESTION under INCIDENT_FILTERS, compared with REFERENCE_FILTERS. Use the existing bootstrap artifacts in RUN_DIRECTORY and the classification cache in RUN_DIRECTORY/classification-cache. Use EMBEDDING_ENDPOINT for semantic queries. Treat capture-wide metadata as candidates: establish the fields and patterns present under each selection's filters. Reuse applicable template labels and adapt the categories and query plan to the selected data and question. Cross-check semantic results against the scoped inventory. Execute queries for counts and localization. Keep bulk results in local files. Return the filters, exact queries, selected records supporting each finding, uncategorized templates, and uncertainty. Record any changes of scope. Distinguish observed changes from possible causes. Do not treat sampled field distributions or null dictionary counts as measured frequencies, and label any sampled discovery as incomplete.
 
@@ -142,7 +144,7 @@ For each proposed finding, ask whether the inventory added relevant evidence bey
 After the agent stores a classification, rerun bootstrap using the same archive and classification cache:
 
 ```bash
-time "$DEMO_BIN/clp-insights" bootstrap \
+time "$DEMO_CLP" bootstrap \
   --out-dir "$DEMO_RUN/bootstrap-repeat" \
   --cache-dir "$CLP_LOG_SHAPE_CACHE_DIR" \
   "$DEMO_ARCHIVE"

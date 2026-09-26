@@ -28,7 +28,7 @@ If installed elsewhere, resolve the same `bin/` wrappers from that plugin root. 
 1. List sessions, newest first:
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-list-sessions
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp list-sessions
    ```
 
 Use `--agent claude` or `--agent codex` if the user asks for one agent.
@@ -38,7 +38,7 @@ Use `--agent claude` or `--agent codex` if the user asks for one agent.
 3. After the user chooses an `IDX`, compress using the printed manifest:
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-session \
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress session \
      --selection-file /tmp/clp-s-session-selection-...tsv \
      --session-index <IDX> \
      --timestamp-key timestamp
@@ -62,19 +62,19 @@ Use the printed top-level archive directory for search/decompress. Wrappers reso
 Show archive root:
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-session --show-archives-root
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress session --show-archives-root
 ```
 
 Set persistent archive root:
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-session --set-archives-root ~/clp-s-archives
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress session --set-archives-root ~/clp-s-archives
 ```
 
 Dry run:
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-session \
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress session \
   --selection-file /tmp/clp-s-session-selection.tsv \
   --session-index 1 \
   --timestamp-key timestamp \

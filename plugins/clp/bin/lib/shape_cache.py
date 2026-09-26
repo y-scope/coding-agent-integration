@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-log-shape-cache - persistent cache for the log-insights skill's template
+clp shape-cache - persistent cache for the log-insights skill's template
 classification.
 
 The classification step (grouping the archive's log shapes into
@@ -14,10 +14,10 @@ instead of reclassifying the whole archive.
 
 Cache key (the "app fingerprint") is sha256 of the applied field rules' digest
 and the sorted set of distinct log shape strings from the archive's dictionary
-dump (`clp-s-search-kql ARCHIVE 'stats.log_shapes'`, rendered by `normalize`),
+dump (`clp search ARCHIVE 'stats.log_shapes'`, rendered by `normalize`),
 each TRUNCATED to a character limit first (default 500, `--max-chars` /
 `$CLP_LOG_SHAPE_MAX_CHARS`) and de-duplicated. Truncation mirrors what
-log-shape-cluster sends to the embedding server, so the key identifies the
+clp shape-cluster sends to the embedding server, so the key identifies the
 *embedded* vocabulary. Same embedded vocabulary and same rules -> same key ->
 cache hit -> classification reused. When it grows, the key changes; `diff` finds
 the previous entry whose truncated template set is a subset of the new one (the
@@ -27,7 +27,7 @@ The FIELD RULES are in the key because they are part of the classification: a
 template whose values sit in a ruled field takes the rule's category and is
 never shown to the classifier, so the same templates under a different rule set
 are a different classification. `diff` and `key` take them with `--field-rules`,
-the file log-shape-cluster is given; the digest is canonical over them (sorted
+the file clp shape-cluster is given; the digest is canonical over them (sorted
 by field path, only `field` and `category`, so re-ordering the file or dropping
 the annotations `--propose-rules` adds changes nothing), and having no rules is
 itself a rule set with a digest of its own. Both tools digest rules through
@@ -82,7 +82,7 @@ A classification, as read from stdin and printed by `get`, is:
       "classified_at": "2026-08-07T...",   # printed by get
       "grown_from": "<previous app_key>"   # present only when incrementally grown
     }
-`log-shape-cluster expand` writes this shape. The ranking (taxonomy `priority`
+`clp shape-cluster expand` writes this shape. The ranking (taxonomy `priority`
 and `why`; each plan entry's `category`, `priority` and `stage`) is described
 in lib/classification.py.
 
@@ -127,7 +127,7 @@ Subcommands:
     rules-digest [--field-rules R] Print the canonical digest of a field rules
                                   file -- of no rules at all without one, which
                                   is its own digest. It is what the key folds
-                                  in, and what log-shape-cluster prints as
+                                  in, and what clp shape-cluster prints as
                                   RULES_DIGEST; both compute it here.
     count --log-shapes-file F        Print the number of distinct log shapes in the
                                   log shapes file (the archive's log shape
@@ -216,7 +216,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from classification import classification_errors, plan_errors, taxonomy_errors  # noqa: E402
 from log_shapes import (  # noqa: E402
     DEFAULT_MAX_CHARS, NO_FIELD_RULES_DIGEST, app_key, default_max_chars, field_rules_digest,
@@ -243,7 +243,7 @@ def app_key_for_log_shapes(log_shapes, max_chars, rules_digest):
 def load_field_rules(path):
     """[{"field", "category"}] from a --field-rules file, or None after
     reporting why it cannot be used. The parse and the digest are
-    lib/log_shapes.py's, which is where log-shape-cluster reads the same file,
+    lib/log_shapes.py's, which is where clp shape-cluster reads the same file,
     so the two always key on the same rules."""
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -596,7 +596,7 @@ def read_classification(stream):
             print(f"error: '{field}' must be a JSON array", file=sys.stderr)
             return None, 2
     # The applied field rules are part of the key (see field_rules_digest), so
-    # they are read with the same parse log-shape-cluster wrote them with, and
+    # they are read with the same parse clp shape-cluster wrote them with, and
     # kept canonical: only the field and the category, which is all the digest
     # and the categories rest on.
     if "field_rules" in obj:
@@ -613,7 +613,7 @@ def read_classification(stream):
             return None, 2
         if "log_shape" in t:
             print(f"error: templates[{i}] carries template text ('log_shape'); the cache stores "
-                  f"templates by hash -- produce the classification with `log-shape-cluster expand`",
+                  f"templates by hash -- produce the classification with `clp shape-cluster expand`",
                   file=sys.stderr)
             return None, 2
         if not (isinstance(t.get("hash"), str) and _KEY_RE.match(t["hash"])
@@ -913,7 +913,7 @@ def freqs_from_store(args):
     db = connect(args.cache_dir)
     if not stored_archives(db, ids, 1):
         print(f"error: not every archive in --archive-ids is stored with counts; {NO_COUNTS_HINT} "
-              f"Or run `log-shape-cache ingest` on its stats.log_shapes dump first.", file=sys.stderr)
+              f"Or run `clp shape-cache ingest` on its stats.log_shapes dump first.", file=sys.stderr)
         return 1
     rows = stored_shapes(db, ids)
     for h, (prefix, length, count) in sorted(rows.items(), key=lambda kv: (-kv[1][2], kv[1][0])):
@@ -943,7 +943,7 @@ def cmd_key(args):
 
 def cmd_rules_digest(args):
     """Print the digest the fingerprint folds in for these rules (no rules
-    without --field-rules). Callers -- the bootstrap, log-shape-cluster -- report
+    without --field-rules). Callers -- the bootstrap, clp shape-cluster -- report
     it, so a changed key can be traced to the rules that changed it."""
     digest = rules_digest_for(args)
     if digest is None:
@@ -965,7 +965,7 @@ def refuse(errors):
         print(f"error: {line}", file=sys.stderr)
     if errors:
         print("error: nothing written; fix the classification above "
-              "(check with kql-build check-plan)", file=sys.stderr)
+              "(check with clp kql check-plan)", file=sys.stderr)
     return bool(errors)
 
 
@@ -1040,7 +1040,7 @@ def cmd_diff(args):
         ids = parse_ids(args.archive_ids)
         if not stored_archives(db, ids, max_chars):
             print("error: not every archive in --archive-ids is stored at this --max-chars; "
-                  "run `log-shape-cache ingest` first", file=sys.stderr)
+                  "run `clp shape-cache ingest` first", file=sys.stderr)
             return 1
         text_limit = db.execute(
             f"SELECT MIN(max_chars) FROM archives WHERE archive_id IN ({','.join('?' * len(ids))})",
@@ -1232,7 +1232,7 @@ def cmd_show(args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(
-        prog="log-shape-cache",
+        prog="clp shape-cache",
         description="Persistent classification cache for the log-insights skill, "
                     "with incremental update on archive growth.",
     )
@@ -1286,7 +1286,7 @@ def main(argv=None):
             "--field-rules",
             default=None,
             help='{"field_rules": [{"field", "category"}]} JSON, the rules this run applies (the '
-                 "file log-shape-cluster is given). Their canonical digest is part of the key, so "
+                 "file clp shape-cluster is given). Their canonical digest is part of the key, so "
                  "a changed rule set cannot reuse a classification built under the old one.",
         )
 

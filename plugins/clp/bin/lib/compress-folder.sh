@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CLP_PLUGIN_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# The engine shim and the sibling helpers are resolved from bin/, one level up.
+# Read by clp-common.sh's clp-s resolution rather than by this script itself.
+# shellcheck disable=SC2034
+CLP_PLUGIN_BIN_DIR="$(cd -- "${CLP_PLUGIN_LIB_DIR}/.." && pwd -P)"
 # shellcheck disable=SC1091
-source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
+source "${CLP_PLUGIN_LIB_DIR}/clp-common.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
-  clp-s-compress-folder --path PATH [--path PATH ...] [options]
+  clp compress folder --path PATH [--path PATH ...] [options]
 
 Compress log files into a searchable CLP archive directory. Each --path is a
 log file or a folder of log files; folders are searched for files with the
@@ -16,7 +20,7 @@ log file or a folder of log files; folders are searched for files with the
 
   clp-s c --remove-path-prefix COMMON_DIR -f FILE_LIST OUTPUT_DIR
 
-Run clp-detect-logs on the same files first: it reads their first lines and
+Run clp detect on the same files first: it reads their first lines and
 reports the format, the timestamp field, and the flags to pass here.
 
 Options:
@@ -56,7 +60,7 @@ Options:
                              input read so far, archive size so far, and an
                              estimated time left. The same numbers are kept in
                              <archive dir>.compress-status.json, which
-                             clp-compress-status reads.
+                             clp compress status reads.
   --dry-run                  Print the planned compression operation only.
                              Read-only: nothing is structurized, staged, or
                              compressed.
@@ -67,13 +71,13 @@ is not .json/.jsonl/.ndjson is handed to clp-s as a staged *.jsonl copy: clp-s
 picks its parser by file name and would otherwise compress it as text.
 
 Examples:
-  clp-s-compress-folder --path /var/log/myapp
-  clp-s-compress-folder --path ./vllm_worker_3.log --structurize
-  clp-s-compress-folder --path ./a.log --path ./b.log --timestamp-key ts
-  clp-s-compress-folder --path ./logs --extensions log,txt
-  clp-s-compress-folder --path ./logs --extensions '*' --dry-run
-  clp-s-compress-folder --show-archives-root
-  clp-s-compress-folder --set-archives-root ~/clp-archives
+  clp compress folder --path /var/log/myapp
+  clp compress folder --path ./vllm_worker_3.log --structurize
+  clp compress folder --path ./a.log --path ./b.log --timestamp-key ts
+  clp compress folder --path ./logs --extensions log,txt
+  clp compress folder --path ./logs --extensions '*' --dry-run
+  clp compress folder --show-archives-root
+  clp compress folder --set-archives-root ~/clp-archives
 EOF
 }
 
@@ -534,7 +538,7 @@ if [[ "$structurize" -eq 1 && "$dry_run" -eq 1 ]]; then
   done < "$file_list"
   [[ -n "$timestamp_key" ]] || timestamp_key="timestamp"
 elif [[ "$structurize" -eq 1 ]]; then
-  structurize_script="${CLP_PLUGIN_BIN_DIR}/structurize.py"
+  structurize_script="${CLP_PLUGIN_LIB_DIR}/structurize.py"
   if [[ ! -f "$structurize_script" ]]; then
     echo "error: --structurize requires structurize.py but it was not found: $structurize_script" >&2
     exit 1

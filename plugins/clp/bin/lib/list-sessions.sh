@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CLP_PLUGIN_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# The engine shim and the sibling helpers are resolved from bin/, one level up.
+# Read by clp-common.sh's clp-s resolution rather than by this script itself.
+# shellcheck disable=SC2034
+CLP_PLUGIN_BIN_DIR="$(cd -- "${CLP_PLUGIN_LIB_DIR}/.." && pwd -P)"
 # shellcheck disable=SC1091
-source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
+source "${CLP_PLUGIN_LIB_DIR}/clp-common.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
-  clp-s-list-sessions [options]
+  clp list-sessions [options]
 
 List Claude Code and/or Codex session JSONL files and write a stable
 selection manifest for later compression.
@@ -35,7 +39,7 @@ Output:
   The table's IDX column is stable for the printed Selection manifest. Compress
   one selected row with:
 
-    clp-s-compress-session --selection-file <manifest> --session-index <IDX>
+    clp compress session --selection-file <manifest> --session-index <IDX>
 EOF
 }
 

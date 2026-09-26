@@ -1,14 +1,14 @@
 ---
 name: compress-folder
 description: Compress log files or folders of log files into a searchable CLP archive directory. Detects each file's format first.
-allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-detect-logs:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder:*)"]
+allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp:*)"]
 ---
 
 # Compress Folder
 
-Use only the plugin wrappers. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
+Use only the plugin's `clp` command. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
 
-Compression is two steps with a decision between them: `clp-detect-logs` reads the first 128 KiB of each file and shows you what is there, you decide from that report, and `clp-s-compress-folder` does the work with exactly the flags you chose. Don't read the log files yourself; the report has what you need, already cut to size.
+Compression is two steps with a decision between them: `clp detect` reads the first 128 KiB of each file and shows you what is there, you decide from that report, and `clp compress folder` does the work with exactly the flags you chose. Don't read the log files yourself; the report has what you need, already cut to size.
 
 ## Rules
 
@@ -27,7 +27,7 @@ Compression is two steps with a decision between them: `clp-detect-logs` reads t
 2. **Detect.** Run the detector on the same paths (read-only; it reads the first 128 KiB of each file, so it takes well under a second even on many-GB logs):
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-detect-logs" /path/to/logs /path/to/other.log
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp" detect /path/to/logs /path/to/other.log
    ```
 
    It first says whether each path is a file or a folder (and how many files a folder matched). Per file it then prints one of:
@@ -49,8 +49,8 @@ Compression is two steps with a decision between them: `clp-detect-logs` reads t
 4. **Compress** with the flags you chose:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" --path /path/to/logs --timestamp-key ts
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" --path /path/to/vllm_worker_3.log --structurize
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp" compress folder --path /path/to/logs --timestamp-key ts
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp" compress folder --path /path/to/vllm_worker_3.log --structurize
    ```
 
    `--path` takes a file or a folder and can be repeated; the files found in all of them go into one archive. With `--structurize`, each converted file prints `[structurize] <file>: N records`, a JSON file prints `already JSON, compressed as it is`, and a file that can't be converted is skipped with a warning that gives the reason.
@@ -58,7 +58,7 @@ Compression is two steps with a decision between them: `clp-detect-logs` reads t
    A compression of a multi-GB log takes a minute or more. Run the wrapper as a background Bash call (`run_in_background: true`) in the FOREGROUND of that call: no trailing `&` (that detaches it, and the harness reports the call finished at once), and no `pgrep`/`ps` wait loop (`pgrep -f` can match the checking command itself and never end). The harness notifies you when the wrapper exits. Meanwhile the wrapper prints a `[compress] ...` heartbeat every 30 seconds (`--heartbeat SECONDS`, 0 to silence) with elapsed time, input read, an estimated time left and the archive size so far. To relay them, start the Monitor tool on the call's output file with `tail -n +1 -F <output-file> | grep --line-buffered -E '^\[compress\]|Compression ratio|rror|FAIL'` and `timeout_ms` at its maximum, relay one line to the user per event, and stop the monitor (TaskStop) when the harness reports the wrapper exited. Never wait with `sleep` between reads: the harness blocks a foreground `sleep N; <command>`. For a state check at any moment:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-compress-status" <archives-dir>
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp" compress status <archives-dir>
    ```
 
    It prints `STATE=` (`running`, `done`, `failed`, or `died` when the process vanished without finishing), `PROGRESS_PCT=` and the byte counts, and exits 0 for done, 3 for running, 1 for failed or died.
@@ -74,7 +74,7 @@ Compression is two steps with a decision between them: `clp-detect-logs` reads t
    - `Archives dir`
    - `Archive metadata`
 
-6. Use the printed top-level `Archives dir` for search and decompression. The wrappers resolve the inner `clp-s` archive directory automatically.
+6. Use the printed top-level `Archives dir` for search and decompression. `clp` resolves the inner `clp-s` archive directory automatically.
 
 ## Writing a parser for an unknown text format
 
@@ -98,7 +98,7 @@ def parse_line(line):
 - Save it outside the log folder (e.g. under `/tmp`), then test it. The detector runs it on every whole line of the 128 KiB it reads from each text file and shows the records it returns, still without writing anything:
 
   ```bash
-  "${CLAUDE_PLUGIN_ROOT}/bin/clp-detect-logs" --parser /tmp/myapp_parser.py /path/to/app.log
+  "${CLAUDE_PLUGIN_ROOT}/bin/clp" detect --parser /tmp/myapp_parser.py /path/to/app.log
   ```
 
   Fix the parser until `parser:` shows the lines you expect starting a record (continuation lines, such as stack traces, are the rest) and `timestamp:` shows an ISO 8601 or epoch value, then compress with the `SUGGEST` line, which adds `--structurize --parser FILE`.
@@ -108,19 +108,19 @@ def parse_line(line):
 Show archive root:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" --show-archives-root
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress folder --show-archives-root
 ```
 
 Set persistent archive root:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" --set-archives-root ~/clp-archives
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress folder --set-archives-root ~/clp-archives
 ```
 
 Dry run (read-only: prints the plan, converts and compresses nothing):
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress folder \
   --path /path/to/logs \
   --dry-run
 ```
@@ -128,7 +128,7 @@ Dry run (read-only: prints the plan, converts and compresses nothing):
 Compress only top-level `.log` files with a timestamp field:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress folder \
   --path /var/log/myapp \
   --extensions log \
   --no-recursive \
@@ -138,7 +138,7 @@ Compress only top-level `.log` files with a timestamp field:
 Compress vLLM text logs:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder" \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress folder \
   --path /var/log/vllm \
   --extensions log,txt \
   --structurize

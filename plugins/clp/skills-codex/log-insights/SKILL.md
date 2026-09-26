@@ -16,7 +16,7 @@ For a single ad-hoc KQL query, use the `search` skill. To compress raw logs firs
 ## Supported inputs
 
 - A CLP archive directory (any kind). Primary input.
-- Raw log files or folders — compress first (compression is the one app-specific step), as the `compress-folder` skill describes: `clp-detect-logs` shows what the first 128 KiB of each file holds (JSON structure and timestamp field, or text lines), you pick the flags from that report (`--timestamp-key <field>` for JSON, `--structurize` for vLLM text, a parser you write for other text), and `clp-s-compress-folder --path ...` compresses. Then point this skill at the archive.
+- Raw log files or folders — compress first (compression is the one app-specific step), as the `compress-folder` skill describes: `clp detect` shows what the first 128 KiB of each file holds (JSON structure and timestamp field, or text lines), you pick the flags from that report (`--timestamp-key <field>` for JSON, `--structurize` for vLLM text, a parser you write for other text), and `clp compress folder --path ...` compresses. Then point this skill at the archive.
 - If nothing was provided, ask for an archive or folder path.
 
 ## Talking to the user
@@ -45,7 +45,7 @@ Run anything that can take over a minute (the bootstrap on a large archive, the 
 3. **Bootstrap.** Open phase 2 with one line: what the bootstrap does, in plain words, and its estimate. It reads the field names and value distributions from a sample of up to 20,000 records, gets the per-template counts stored in the archive, then checks the classification cache. It classifies nothing (that is step 6), and it doesn't sample the dictionary: every template is counted. The first time it sees an archive, it dumps the full log shape dictionary and stores each template's counts in the cache database, which takes about 1 minute per 300 MiB of archive (`Archive bytes` from step 2, or `du -sh <archive-dir>`): 1 s for a 1.6 MB vLLM archive, about 1 minute for a 357 MiB CockroachDB archive (9.8 GiB of raw logs). A later run on the same archive reads the stored counts instead, and takes about as long as the sample (15 s for that CockroachDB archive). Then run it:
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-insights bootstrap <archive-dir>
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp bootstrap <archive-dir>
    ```
 
    Its first line is its own estimate (`[bootstrap] archive 357.1 MB; expect about 2 min`, or `archive 357.1 MB, analyzed before; expect under a minute`). After that it prints a `[bootstrap]` line as each of its three stages starts and ends, and a heartbeat every 30 s while one runs. Post only when a minute passes with no news, as one plain line (`still reading the vocabulary: 40 s of about 1 min`); never relay the raw `[bootstrap]` lines. It ends with `BOOTSTRAP_TIMINGS`; when the total is far from the estimate, say so in a line.
@@ -62,7 +62,7 @@ From its `KEY=VALUE` output record:
    - `RECORD_FAMILY_COUNT=` / `RECORD_FAMILY_RESIDUAL=` / `RECORD_FAMILIES_FILE=` / `RECORD_FAMILY_METHOD=` → the records split into kinds, each with an exact count and a KQL predicate. **This is a partition**: the families plus the residual account for every record, so these shares may be read as shares of the whole. `METHOD=value field=<f> coverage=<pct>` split on that field's values and is exact; `METHOD=existence` found no field universal enough and split on field presence, which is approximate — say which you got whenever the residual is big enough to matter. The residual is records the partition does not name; report it rather than rounding it away.
    - `FIELD_COUNT_GROUPS=` / `FIELD_COUNTS_FILE=` → per-field record counts, where fields sharing a count are carried by the same records. **These overlap and must never be summed**: on one real archive the 43 lines total 725%. They tell you which fields travel together, nothing about shares of the whole. Use `RECORD_FAMILY_*` for that.
    - `TYPE_DRIFT_COUNT=` / `TYPE_DRIFT_FILE=` → field paths holding more than one type across records, most records first, each type named and counted. Treat drift on a field you are about to query as a hazard: a filter or projection written for one type silently misses the records carrying the other. On one archive `toolUseResult` is a `ClpString` on a failed tool call and an `Object` on a success, 116 against 4,525, so a query for either shape quietly answers about a subset. Mention drift to the user only where it changes a query or a finding.
-   - `CACHE_MODE=` / `CACHE_REASON=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` / `MAX_CHARS=` → step 4. Pass `MAX_CHARS` through to `log-shape-cluster` and `log-shape-cache` so their fingerprints match. `CACHE_REASON` says why the mode is what it is — `first-run`, `templates-grown`, `up-to-date`, or `rules-changed`. **Never report `rules-changed` as a first run**: the app *is* classified, but under different field rules, so its ruled templates would come back with categories no current rule would give them. Tell the user "the field rules changed, so this is being classified again", which is a different fact from "first time seeing this app" and explains a cost they would otherwise find puzzling.
+   - `CACHE_MODE=` / `CACHE_REASON=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` / `MAX_CHARS=` → step 4. Pass `MAX_CHARS` through to `clp shape-cluster` and `clp shape-cache` so their fingerprints match. `CACHE_REASON` says why the mode is what it is — `first-run`, `templates-grown`, `up-to-date`, or `rules-changed`. **Never report `rules-changed` as a first run**: the app *is* classified, but under different field rules, so its ruled templates would come back with categories no current rule would give them. Tell the user "the field rules changed, so this is being classified again", which is a different fact from "first time seeing this app" and explains a cost they would otherwise find puzzling.
 
 Close phase 2 in one or two lines: the template count and what it means ("16.5M records reduce to 11,558 message templates"), the record kinds ("the records are 14 kinds; the two biggest are attachments at 34.9% and assistant turns at 26.2%"), and the cache outcome in plain words (reused from an earlier run, N new templates to classify, or a first run for this app). Mention the schema only when the choice was not obvious, frequencies only when they are unavailable, the residual only when it is large enough to matter, and drift only where it will change a query; field names are for your queries, not for the user.
 
@@ -74,7 +74,7 @@ Close phase 2 in one or two lines: the template count and what it means ("16.5M 
 5. **Cluster the templates to classify** — truncates each template to a character limit (`MAX_CHARS` from the bootstrap, 500 by default), de-duplicates the results, and merges semantically similar templates so you classify one representative per cluster, not every template (in step 4's schema-mismatch case, pass `--input /tmp/log-shapes.ndjson` instead):
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/log-shape-cluster cluster \
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp shape-cluster cluster \
      --max-chars "$MAX_CHARS" \
      --input /tmp/log-shapes-to-classify.ndjson
    ```
@@ -84,7 +84,7 @@ Close phase 2 in one or two lines: the template count and what it means ("16.5M 
    **Rule whole fields first** when the bootstrap printed `TEMPLATE_FIELDS_FILE=`, and let the ratio propose the rules rather than picking them by eye:
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/log-shape-cluster fields \
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp shape-cluster fields \
      --template-fields /tmp/log-shape-template-fields.ndjson --freqs-file /tmp/log-shape-freqs.ndjson \
      --propose-rules /tmp/log-shape-field-rules.json
    ```
@@ -141,32 +141,32 @@ Then validate, expand ids to every member template (by hash, exact by constructi
    # StructuredArray nodes. On one archive `toolUseResult:*` matches 116
    # records, not the 4,641 that carry the path. An entry fails when the share
    # it can reach falls below 0.95.
-   "$BIN"/kql-build check-plan /tmp/log-shape-class.json \
+   "$BIN"/clp kql check-plan /tmp/log-shape-class.json \
      --drift-file "$TYPE_DRIFT_FILE" || exit 1
    # Exits 2 and writes NOTHING on missing/unknown/duplicate ids — fix the
    # assignments and re-run; do NOT store in that case. On GROWTH add
    # --categories-from /tmp/log-shape-base-classification.json, since the
    # classifier lists only the categories it adds:
-   "$BIN"/log-shape-cluster expand --clusters /tmp/log-shape-clusters.json \
+   "$BIN"/clp shape-cluster expand --clusters /tmp/log-shape-clusters.json \
      --classification /tmp/log-shape-class.json --output /tmp/log-shape-expanded.json \
      ${BASE_KEY:+--categories-from /tmp/log-shape-base-classification.json}
    if [[ "$MODE" == "GROWTH" ]]; then
      # Guard: an empty BASE_KEY would silently keep ONLY the new templates.
      [[ -n "$BASE_KEY" ]] || { echo "error: GROWTH with empty BASE_KEY" >&2; exit 1; }
-     "$BIN"/log-shape-cache merge --base-key "$BASE_KEY" < /tmp/log-shape-expanded.json > /tmp/log-shape-classification.json
+     "$BIN"/clp shape-cache merge --base-key "$BASE_KEY" < /tmp/log-shape-expanded.json > /tmp/log-shape-classification.json
    else
-     "$BIN"/log-shape-cache merge < /tmp/log-shape-expanded.json > /tmp/log-shape-classification.json
+     "$BIN"/clp shape-cache merge < /tmp/log-shape-expanded.json > /tmp/log-shape-classification.json
    fi
    # Store it for the next run (milliseconds; step 7 reads the file above):
    # Key it with the field rules, NOT with the bootstrap's APP_KEY. A ruled
    # template takes its category from its rule, so the rules are part of the
    # classification and belong in the key; APP_KEY was computed before the rules
-   # existed, since they come from `log-shape-cluster fields`, which runs later.
+   # existed, since they come from `clp shape-cluster fields`, which runs later.
    # Omit both --field-rules when this run applied none: "no rules" is its own
    # key and must not be conflated with a rule set.
-   KEY=$("$BIN"/log-shape-cache key --log-shapes-file "$LOG_SHAPES_FILE" \
+   KEY=$("$BIN"/clp shape-cache key --log-shapes-file "$LOG_SHAPES_FILE" \
      --max-chars "$MAX_CHARS" --field-rules /tmp/log-shape-field-rules.json)
-   "$BIN"/log-shape-cache put --key "$KEY" --max-chars "$MAX_CHARS" \
+   "$BIN"/clp shape-cache put --key "$KEY" --max-chars "$MAX_CHARS" \
      --field-rules /tmp/log-shape-field-rules.json < /tmp/log-shape-classification.json
    ```
 
@@ -176,10 +176,10 @@ After storing, close phase 3 in one line: how many categories you found and that
 
    ```bash
    BIN=~/.codex/marketplaces/yscope/plugins/clp/bin
-   "$BIN"/clp-insights extract          # add --no-freqs when FREQS=UNAVAILABLE
+   "$BIN"/clp extract          # add --no-freqs when FREQS=UNAVAILABLE
    ```
 
-   `QUERY_PLAN_INVALID=` is 0 for any classification `log-shape-cache` produced; if it is not, report it and stop. Then open phase 4 with a short summary, the one place the category table appears — the log shape count, the record kinds and their shares from `RECORD_FAMILIES_FILE` (these are a partition, so they may be read as shares of the whole; say the method and the residual when the partition is approximate), the categories as a small table (records, templates, priority, from the extract's `CATEGORY` lines), the `why` of each high-priority category, and the severity split as the bootstrap's DIST lines sampled it. Record kinds and text categories are two different axes — a kind is what a record *is*, a category is what its text is *about* — so present them as two tables and never merge them into one — and ask three questions in the same message (run `"$BIN"/clp-report save --list-formats` first, so the third offers only formats this machine can produce: PDF only when it prints a `PDF_ENGINE` path):
+   `QUERY_PLAN_INVALID=` is 0 for any classification `clp shape-cache` produced; if it is not, report it and stop. Then open phase 4 with a short summary, the one place the category table appears — the log shape count, the record kinds and their shares from `RECORD_FAMILIES_FILE` (these are a partition, so they may be read as shares of the whole; say the method and the residual when the partition is approximate), the categories as a small table (records, templates, priority, from the extract's `CATEGORY` lines), the `why` of each high-priority category, and the severity split as the bootstrap's DIST lines sampled it. Record kinds and text categories are two different axes — a kind is what a record *is*, a category is what its text is *about* — so present them as two tables and never merge them into one — and ask three questions in the same message (run `"$BIN"/clp report save --list-formats` first, so the third offers only formats this machine can produce: PDF only when it prints a `PDF_ENGINE` path):
 
    - **What do you already know about these logs?** Chasing a problem (what: a symptom, a time, a component), checking something specific, or just exploring.
    - **What should the report focus on?** Offer the high-priority categories by name, each with its record count and how many deeper checks choosing it queues (the extract's `drill=` count); "everything", described truthfully as the standard checks alone, which already cover every category, with no extra queries; or their own question.
@@ -187,30 +187,30 @@ After storing, close phase 3 in one line: how many categories you found and that
 
    Then **end your turn and wait for the answer.** The questions come after classification because the focus options are its categories; asking once keeps it to one stop. In a non-interactive run (`codex exec`, or when told not to ask), skip the questions and treat the answer as "everything, no context", with the report left at `/tmp/clp-insights-report.md`.
 
-8. **Queue the focus, then run the queries.** Run `clp-insights focus` ONCE with the answer — even for "everything", since it closes the inbox the pool reads:
+8. **Queue the focus, then run the queries.** Run `clp focus` ONCE with the answer — even for "everything", since it closes the inbox the pool reads:
 
    ```bash
-   "$BIN"/clp-insights focus --category <C> [--category <C2>] [--entries-file /tmp/clp-insights-focus-entries.ndjson] \
+   "$BIN"/clp focus --category <C> [--category <C2>] [--entries-file /tmp/clp-insights-focus-entries.ndjson] \
      --context '<what the user said they know, verbatim, or empty>' --question '<their own question, or empty>'
-   "$BIN"/clp-insights focus --everything --context '<...>'           # the whole picture
+   "$BIN"/clp focus --everything --context '<...>'           # the whole picture
    ```
 
-   A category queues its drill entries; `NO_DRILL=<C>` means it has none. For the user's own question, a category with no drill entries, or context that names something specific (a component, a symptom, an error text), write 1–3 entries to `/tmp/clp-insights-focus-entries.ndjson`, one per line, shaped like plan entries (`label`, `match`, `method`, `project` for projecting methods, `category` when one fits), derived from templates in `/tmp/log-shape-templates-by-category.txt`; `clp-insights focus` validates them and queues nothing if one is invalid (fix it and re-run). A time the user mentions cannot be a filter (`match` has no time range); keep it for the report. Never fold the answer into the classification: it is cached per app, and the answer is about this capture. Then run the baseline and the plan — the plan's pool takes the focus entries from the inbox ahead of the core plan, so they run first:
+   A category queues its drill entries; `NO_DRILL=<C>` means it has none. For the user's own question, a category with no drill entries, or context that names something specific (a component, a symptom, an error text), write 1–3 entries to `/tmp/clp-insights-focus-entries.ndjson`, one per line, shaped like plan entries (`label`, `match`, `method`, `project` for projecting methods, `category` when one fits), derived from templates in `/tmp/log-shape-templates-by-category.txt`; `clp focus` validates them and queues nothing if one is invalid (fix it and re-run). A time the user mentions cannot be a filter (`match` has no time range); keep it for the report. Never fold the answer into the classification: it is cached per app, and the answer is about this capture. Then run the baseline and the plan — the plan's pool takes the focus entries from the inbox ahead of the core plan, so they run first:
 
    ```bash
    # The severity/logger baseline, as its own plan and pool (samples the archive
    # for a few seconds; SCHEMA= is the extract's line):
-   "$BIN"/clp-insights baseline-plan --archive <archive-dir> --schema-json '<SCHEMA= line>'
-   "$BIN"/clp-insights run --retry-failed --query-plan-file /tmp/clp-insights-baseline-plan.txt \
+   "$BIN"/clp baseline-plan --archive <archive-dir> --schema-json '<SCHEMA= line>'
+   "$BIN"/clp run --retry-failed --query-plan-file /tmp/clp-insights-baseline-plan.txt \
      --results-file /tmp/clp-insights-baseline-results.ndjson <archive-dir>
    # Then the core plan, with the focus from the inbox first:
-   "$BIN"/clp-insights run --retry-failed --inbox /tmp/clp-insights-focus-inbox.ndjson <archive-dir>
+   "$BIN"/clp run --retry-failed --inbox /tmp/clp-insights-focus-inbox.ndjson <archive-dir>
    # Both tables, each numbered from 1 (cite "baseline #N" or "plan #N"; focus entries marked):
-   "$BIN"/clp-insights run --print-table --results-file /tmp/clp-insights-baseline-results.ndjson | tee /tmp/clp-insights-baseline-table.md
-   "$BIN"/clp-insights run --print-table | tee /tmp/clp-insights-plan-table.md
+   "$BIN"/clp run --print-table --results-file /tmp/clp-insights-baseline-results.ndjson | tee /tmp/clp-insights-baseline-table.md
+   "$BIN"/clp run --print-table | tee /tmp/clp-insights-plan-table.md
    ```
 
-   The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in its results file (`/tmp/clp-insights-baseline-results.ndjson` for the baseline, `/tmp/clp-insights-query-results.ndjson` for the plan); the run also records the archive's total record count. Do not give a line per entry; post one status line each time a minute passes without news (`12 of 20 checks done`). The baseline entries (`origin: "baseline"`) give the severity and logger breakdown; when a rare-severity residual is small, a follow-up entry fetches those records, and its `samples` are the errors and warnings themselves. `/tmp/log-shape-category-totals.json` holds the exact records per category, so report those instead of a keyword probe's count. Then run `"$BIN"/clp-insights facts --schema-json '<SCHEMA= line>' --freqs-file <FREQS_FILE> --schema-tree-file /tmp/clp-insights-schema-tree.json` (it reads both results files and `/tmp/clp-insights-focus.json`) (add `--freqs-file none --category-totals none` when frequencies are unavailable): it writes `/tmp/clp-insights-facts.md` with every number of the report computed in code, the user's focus and context first, so quote figures from that file and never add up or derive your own. Before presenting the report, save it to `/tmp/clp-insights-report.md` and run `"$BIN"/clp-report check /tmp/clp-insights-report.md --also /tmp/clp-insights-baseline-table.md --also /tmp/clp-insights-plan-table.md --schema-tree-file /tmp/clp-insights-schema-tree.json`; fix or remove any figure it flags. When the pools are done, close phase 4 in one or two lines: how many checks ran, and each that failed or matched nothing, with what it costs the report. Keep both tables for the report's Query Log instead of pasting them into the chat. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give 3–5 lines of early numbers from the facts file, the focus first, and open phase 5 (`[5/5] Writing the report`) before step 9. For the queries you run yourself, pick the method that fits:
+   The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in its results file (`/tmp/clp-insights-baseline-results.ndjson` for the baseline, `/tmp/clp-insights-query-results.ndjson` for the plan); the run also records the archive's total record count. Do not give a line per entry; post one status line each time a minute passes without news (`12 of 20 checks done`). The baseline entries (`origin: "baseline"`) give the severity and logger breakdown; when a rare-severity residual is small, a follow-up entry fetches those records, and its `samples` are the errors and warnings themselves. `/tmp/log-shape-category-totals.json` holds the exact records per category, so report those instead of a keyword probe's count. Then run `"$BIN"/clp facts --schema-json '<SCHEMA= line>' --freqs-file <FREQS_FILE> --schema-tree-file /tmp/clp-insights-schema-tree.json` (it reads both results files and `/tmp/clp-insights-focus.json`) (add `--freqs-file none --category-totals none` when frequencies are unavailable): it writes `/tmp/clp-insights-facts.md` with every number of the report computed in code, the user's focus and context first, so quote figures from that file and never add up or derive your own. Before presenting the report, save it to `/tmp/clp-insights-report.md` and run `"$BIN"/clp report check /tmp/clp-insights-report.md --also /tmp/clp-insights-baseline-table.md --also /tmp/clp-insights-plan-table.md --schema-tree-file /tmp/clp-insights-schema-tree.json`; fix or remove any figure it flags. When the pools are done, close phase 4 in one or two lines: how many checks ran, and each that failed or matched nothing, with what it costs the report. Keep both tables for the report's Query Log instead of pasting them into the chat. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give 3–5 lines of early numbers from the facts file, the focus first, and open phase 5 (`[5/5] Writing the report`) before step 9. For the queries you run yourself, pick the method that fits:
    - `count`: run the KQL with `--count` (in-engine; cannot be combined with `--projection`), never `--projection ... | grep -c '^{'`. It prints one `{"archive_id":...,"count":N}` line per archive, `"count":0` included, and on a zero says when the archive's structure explains it (a filter at an `Object` path, or a path the archive does not have).
    - `project+grep`: fold the target into the KQL as `<message>:"*text*"`, and OR the wildcards for a keyword alternation (`<message>:"*a*" OR <message>:"*b*"`). Only when the target needs real regex features (anchors, character classes, backreferences), run the KQL with `--projection`, then `jq -r '.<message>' | grep -Ei '<grep>'`. Add `--limit N` when a few example records are enough.
    - `project+jq`: run the KQL with `--projection`, then `jq -r '<jq>'`.
@@ -235,22 +235,22 @@ Then:
    9. **Follow-up queries** — 2–3 concrete queries derived from templates.
    10. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every query you ran beyond the plan (exact KQL + flags), its result, and whether the report uses it, including empty ones and corrected re-runs of failed plan entries.
 
-10. Save the report as the user chose, every format in one run: `"$BIN"/clp-report save --format html,pdf --dest <folder-or-file> --name <name>`. It prints `SAVED_<FORMAT>=<path>` per file, never overwrites a file (it adds `-2`, `-3`, ...), and creates missing folders. `PDF_ERROR=` means that one format failed: say why in one line and keep the other files; never install a browser to get PDF. Then close with a short message: three to five findings, most important first, with inferences labelled; the caveats that change how to read them; and where the report is: each saved path. Do not restate the report. Then offer at most three next steps, one line each: drill deeper on a finding or another category's drill entries, note that re-running on the same application skips classification (cached plan reused), or decompress: `~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-decompress <archives-dir> <out-dir>`.
+10. Save the report as the user chose, every format in one run: `"$BIN"/clp report save --format html,pdf --dest <folder-or-file> --name <name>`. It prints `SAVED_<FORMAT>=<path>` per file, never overwrites a file (it adds `-2`, `-3`, ...), and creates missing folders. `PDF_ERROR=` means that one format failed: say why in one line and keep the other files; never install a browser to get PDF. Then close with a short message: three to five findings, most important first, with inferences labelled; the caveats that change how to read them; and where the report is: each saved path. Do not restate the report. Then offer at most three next steps, one line each: drill deeper on a finding or another category's drill entries, note that re-running on the same application skips classification (cached plan reused), or decompress: `~/.codex/marketplaces/yscope/plugins/clp/bin/clp decompress <archives-dir> <out-dir>`.
 
 ## The message field needs the same wildcard rule as any field
 
 The message field (`message` structurized, `msg` native Mongo, …) is stored as a CLP-string (log shape + encoded variables — what makes `stats.log_shapes` and the compression work). That storage is irrelevant to searching it: `<message>:term` is an exact match, same as `<field>:term` on any field, so it correctly returns 0 unless a message equals exactly `term`. Exact match is faster, so prefer it whenever you know the full field value; wildcard only for a substring match — `<message>:"*term*"` — which is what message content almost always needs, since it's free text. Prefer a direct wildcard search on the message field over project+grep:
 
 ```bash
-S=~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-search-kql
-"$S" --projection <timestamp>,<severity>,<message> <archive-dir> \
+CLP=~/.codex/marketplaces/yscope/plugins/clp/bin/clp
+"$CLP" search --projection <timestamp>,<severity>,<message> <archive-dir> \
   '<severity>:WARNING AND <message>:"*StaticText*"'
 ```
 
 Fall back to projecting the message field and grepping/jq-filtering only when the distinctive text needs a regex the wildcard syntax can't express:
 
 ```bash
-"$S" --projection <timestamp>,<severity>,<message> <archive-dir> '<severity>:WARNING' \
+"$CLP" search --projection <timestamp>,<severity>,<message> <archive-dir> '<severity>:WARNING' \
   | jq -rc 'select(.<message>|test("StaticText";"i"))'
 ```
 
@@ -258,7 +258,7 @@ Semantic search (`semantic("…")`) also reads the log shapes directly and is a 
 
 ## Classification cache notes
 
-- `app_key = sha256(sorted set of distinct log shape strings, each capped at `MAX_CHARS` characters)` — the fingerprint of the *embedded* vocabulary, since the same limit is applied before embedding; the cache is `cache.sqlite` in `~/.config/yscope-clp-plugin/log-shape-cache/` (`$CLP_LOG_SHAPE_CACHE_DIR` or `--cache-dir` to override). Entries store `schema`, `taxonomy`, `query_plan`, `max_chars`, `classified_at`, `grown_from` lineage, and per template its `hash` (full text), `prefix_hash` (first `MAX_CHARS` characters) and `category` — never the text, which stays in the archive's dictionary dump and which `clp-insights extract` joins on the hash.
+- `app_key = sha256(sorted set of distinct log shape strings, each capped at `MAX_CHARS` characters)` — the fingerprint of the *embedded* vocabulary, since the same limit is applied before embedding; the cache is `cache.sqlite` in `~/.config/yscope-clp-plugin/log-shape-cache/` (`$CLP_LOG_SHAPE_CACHE_DIR` or `--cache-dir` to override). Entries store `schema`, `taxonomy`, `query_plan`, `max_chars`, `classified_at`, `grown_from` lineage, and per template its `hash` (full text), `prefix_hash` (first `MAX_CHARS` characters) and `category` — never the text, which stays in the archive's dictionary dump and which `clp extract` joins on the hash.
 - `diff` modes: **UPTODATE** (reuse, no classifying — but verify the cached schema; a template differing from a cached one only past the character limit takes its category through the shared prefix hash), **GROWTH** (classify only the new templates; `merge` unions them into the base entry), **NEW** (classify all). The bootstrap runs `diff` for you and fetches the relevant entries. An entry stored before classifications were ranked (no `priority`) is never reused: `diff` warns and reports NEW or GROWTH as if it were absent, and `put` replaces it. If `diff` warns that entries are in the old JSON format, tell the user they are ignored and can be deleted.
-- GROWTH matching compares hashes of the full templates; the subset test behind it uses the prefix hashes. Both are exact when you go through `log-shape-cluster expand`, which hashes the members straight from the cluster file.
-- Inspect: `log-shape-cache list` (shows lineage), `log-shape-cache show <APP_KEY>`.
+- GROWTH matching compares hashes of the full templates; the subset test behind it uses the prefix hashes. Both are exact when you go through `clp shape-cluster expand`, which hashes the members straight from the cluster file.
+- Inspect: `clp shape-cache list` (shows lineage), `clp shape-cache show <APP_KEY>`.

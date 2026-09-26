@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CLP_PLUGIN_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# The engine shim and the sibling helpers are resolved from bin/, one level up.
+CLP_PLUGIN_BIN_DIR="$(cd -- "${CLP_PLUGIN_LIB_DIR}/.." && pwd -P)"
 # shellcheck disable=SC1091
-source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
+source "${CLP_PLUGIN_LIB_DIR}/clp-common.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
-  clp-s-search-kql [options] ARCHIVES_DIR KQL_QUERY
+  clp search [options] ARCHIVES_DIR KQL_QUERY
 
 Run a restricted clp-s KQL search and return results on stdout.
 
@@ -69,14 +71,14 @@ Allowed search controls:
                            plugin binary; useful for pointing at a local build.
 
 Examples:
-  clp-s-search-kql /tmp/archive 'level:error'
-  clp-s-search-kql /tmp/archive 'message.content.name:Bash'
-  clp-s-search-kql /tmp/archive 'semantic("slow database queries")'
-  clp-s-search-kql --projection timestamp,type,sessionId /tmp/archive 'message.content.name:Bash'
-  clp-s-search-kql /tmp/archive 'stats.log_shapes'
-  clp-s-search-kql --experimental /tmp/archive 'shape(message): "*error*"'
-  clp-s-search-kql --experimental --projection 'shape(message)' /tmp/archive '*'
-  clp-s-search-kql --experimental --projection 'decompose(message)' /tmp/archive '*'
+  clp search /tmp/archive 'level:error'
+  clp search /tmp/archive 'message.content.name:Bash'
+  clp search /tmp/archive 'semantic("slow database queries")'
+  clp search --projection timestamp,type,sessionId /tmp/archive 'message.content.name:Bash'
+  clp search /tmp/archive 'stats.log_shapes'
+  clp search --experimental /tmp/archive 'shape(message): "*error*"'
+  clp search --experimental --projection 'shape(message)' /tmp/archive '*'
+  clp search --experimental --projection 'decompose(message)' /tmp/archive '*'
 
 Stats queries (dictionary dumps, not KQL): 'stats.log_shapes' emits the
 archive's log shape dictionary as NDJSON ({"archive_id","count","id","shape"});
@@ -86,8 +88,8 @@ These require the shapes API (clp-core >= 0.13); the wrapper adds
 the shape, stored at compression time (null for archives compressed before
 clp-s stored it). Shapes mark variables as %int%/%str%/%float% on regular
 archives and %rule.name% on clpp archives (older builds emit raw placeholder
-bytes); `log-shape-cache normalize` renders all of them to '<*>', and
-`log-shape-cache freqs` sums the counts per template. The legacy
+bytes); `clp shape-cache normalize` renders all of them to '<*>', and
+`clp shape-cache freqs` sums the counts per template. The legacy
 'stats.logtypes' query is rejected — shapes-API binaries silently return
 nothing for it.
 
@@ -292,8 +294,8 @@ case "$trimmed_query" in
     ;;
   stats.logtypes)
     echo "error: stats.logtypes was renamed to stats.log_shapes (clp-core >= 0.13 shapes API)." >&2
-    echo "  Dump the dictionary with:  clp-s-search-kql ARCHIVE 'stats.log_shapes'" >&2
-    echo "  then render placeholders:  ... | log-shape-cache normalize" >&2
+    echo "  Dump the dictionary with:  clp search ARCHIVE 'stats.log_shapes'" >&2
+    echo "  then render placeholders:  ... | clp shape-cache normalize" >&2
     exit 2
     ;;
 esac
@@ -305,7 +307,7 @@ fi
 # Catch unquoted wildcard values that contain spaces, e.g. field:*multi word* — clp-s
 # treats those as natural language and triggers the semantic fallback, which errors when
 # no endpoint is active. The fix is always field:"*multi word*".
-"$(dirname "$0")/kql-build" validate-wildcards "$kql_query" || exit 2
+"${CLP_PLUGIN_BIN_DIR}/clp" kql validate-wildcards "$kql_query" || exit 2
 
 # Per-invocation binary override composes with the CLP_S_BIN env var already
 # honored by resolve_clp_s; the flag wins for this invocation only.
@@ -419,7 +421,7 @@ search_archive() {
   # tree the columns stay as given.
   if [[ ${#dir_projections[@]} -gt 0 ]]; then
     if schema_tree="$("$clp_s_bin" s --experimental "$dir" stats.schema_tree 2>/dev/null)" \
-        && resolved_projections="$(python3 "${CLP_PLUGIN_BIN_DIR}/lib/projection.py" "${dir_projections[@]}" \
+        && resolved_projections="$(python3 "${CLP_PLUGIN_LIB_DIR}/projection.py" "${dir_projections[@]}" \
              <<<"$schema_tree")" \
         && [[ -n "$resolved_projections" ]]; then
       mapfile -t dir_projections <<<"$resolved_projections"

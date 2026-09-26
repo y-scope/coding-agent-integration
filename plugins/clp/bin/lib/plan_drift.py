@@ -7,7 +7,7 @@ path can hold several types across records:
   toolUseResult   ClpString:116   Object:4525
 
 What a filter reaches of such a path depends on where the filter sits, and the
-two directions are opposites. Measured with `clp-s-search-kql --count` on a
+two directions are opposites. Measured with `clp search --count` on a
 32,614-record agent-session archive:
 
   toolUseResult:*            116   ClpString only -- not the 4,525 Objects
@@ -34,7 +34,7 @@ the other 4,525. Both are silent: the query is valid and returns hits. It is the
 same trap as a NOT predicate over a field some records lack, except nothing in
 the query says so.
 
-`clp-s-schema-tree --drift --drift-file F` writes the archive's drifting paths as
+`clp schema --drift --drift-file F` writes the archive's drifting paths as
 NDJSON, one row per path:
 
   {"path", "kql_path", "types": [{"type", "id", "count"}, ...], "records"}
@@ -79,7 +79,7 @@ DEFAULT_FAIL_BELOW = 0.95
 
 def load_drift(path):
     """{kql_path: {"types": {type_name: count}, "ids": {type_name: id},
-    "records": n}} from the NDJSON that clp-s-schema-tree --drift-file writes.
+    "records": n}} from the NDJSON that clp schema --drift-file writes.
     Rows are keyed by `kql_path`, and two display paths that share one
     `kql_path` are merged: their counts add up because a query cannot tell them
     apart. `records` is the sum of the counts, so a merged row stays consistent.

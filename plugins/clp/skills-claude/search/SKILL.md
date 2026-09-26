@@ -1,7 +1,7 @@
 ---
 name: search
 description: Search local CLP archives with KQL including semantic search (stable, non-experimental clp-s). Use clpp-search for clp+/clpp/clp-s --experimental search with shape()/decompose().
-allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql:*)"]
+allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp:*)"]
 ---
 
 # Search
@@ -14,7 +14,7 @@ Use only the plugin wrapper. Do not call bare `clp-s`.
 
 **See also:** `clpp-search` for the experimental path, and `dev` for pointing the wrapper at a locally-built `clp-s`.
 
-For session-log workflows (list → compress → search), use the `claude-code-trajectory` skill instead of this one.
+For session-log workflows (list → compress → search), use the `analyze-logs` skill instead of this one.
 
 ## Read the shared reference
 
@@ -27,7 +27,7 @@ That covers: the KQL table, the wildcard-substring rule (literals match whole va
 ## Quick start
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" ARCHIVES_DIR 'KQL_QUERY'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" search ARCHIVES_DIR 'KQL_QUERY'
 ```
 
 The wrapper accepts the top-level `Archives dir` printed by compression or the inner clp-s archive directory (resolved automatically). Use single quotes around KQL. A sensible default embedding endpoint is built in; pass extra clp-s flags only if the user asks for something specific.
