@@ -45,6 +45,7 @@ For a single ad-hoc KQL query, use the `search` skill. To compress raw logs firs
 
 ## References — read on demand, not up front
 
+- `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/evidence-tiers.md` — read before the first figure you quote: the four evidence tiers, and the two things that look measured and are not.
 - `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/log-shape-classify.md` — read at step 6 (classification subagent prompt, cluster/expand contract, merge and cache store commands).
 - `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/clp-insights.md` — read at step 7 (the questions, summary, extract, query pool and focus commands, report-writer prompt, the save question and commands, report format).
 - `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/log-shape-baseline.md` — read only if the dump/fallback misbehaves or when drilling into individual templates (stats.log_shapes encodings, CLP-string limitation, retrieve/count/analysis patterns, semantic-search flags).

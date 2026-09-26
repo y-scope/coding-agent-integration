@@ -37,6 +37,7 @@ For a single ad-hoc KQL query, use the `search` skill. For a non-session log, us
 
 ## References — read on demand, not up front
 
+- `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/evidence-tiers.md` — read before the first figure you quote: the four evidence tiers, and the two things that look measured and are not.
 - `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/session-insight.md` — read at step 2: the seven categories, the three questions' wording, the extras and report-writer prompts, the focus-shift rule, the scorecard, the report format.
 - `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/session-forensics.md` — read when drilling into a finding, or when the user asks an ad-hoc question instead of running the full pass: KQL starters, bundle SQL, evidence commands, the harness-review checklist, and the conclusions the logs do not support.
 
@@ -58,7 +59,7 @@ The user sees your messages, not the tools' output. Keep every message short, an
 - **Each figure once.** The totals and the category table appear once, in the step 4 summary; later messages refer back instead of repeating.
 - **Ask only what changes the run,** and make every option's description literally true about what choosing it queues.
 - **Never state a number that is not in the facts file.** Every figure in your messages and in the report comes from `clp-session facts`. If you want a number it does not have, compute it with a query and say you did.
-- **Never quote a currency figure, and never sum the per-kind token column.** Cost is reported in tokens because the log's `totalCostUSD` is derived from an assumed unit price rather than what was billed, and is not always refreshed; converting to money needs the reader's own rates. And one API response can be recorded in several logs — a fork inherits its parent's transcript — so the bundle total counts each response once and is *smaller* than the per-kind rows added up. The reference in `session-insight.md` has both in full; if a figure surprises you, read it there before repeating it.
+- **Label every claim with its evidence tier**, in chat as well as in the report: measured, derived, inference or domain knowledge. `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/evidence-tiers.md` is the single definition — read it before the first figure you quote, and do not restate it in your own words. The two rules that bite most often: a derived figure is never quoted bare, and a derivation carries its trap.
 - **No scripted pleasantries or apologies.**
 
 ## Workflow
@@ -134,7 +135,7 @@ Run anything that can take over a minute in the background so you can post a sta
 
    `clp-report` is shared with the `log-insights` skill and its default report path is *that* skill's, so omitting the path saves the wrong file — and silently, because both can exist in `/tmp` at once. One run writes every chosen format and never overwrites a file; for a claude.ai page it writes a finished page that you publish with the Artifact tool as-is. A format that fails gets one line with the reason; the others are still saved.
 
-7. **Close.** Three to five findings, most important first, with inferences labelled; the caveats that change how to read them; and where the report is — each saved path and the claude.ai link. Do not restate the report. Then offer at most three next steps, one line each:
+7. **Close.** Three to five findings, most important first, each carrying its evidence tier and a derived figure never quoted bare; the caveats that change how to read them, including any trap a derivation carries; and where the report is — each saved path and the claude.ai link. Do not restate the report. Then offer at most three next steps, one line each:
    - Drill into a specific finding (patterns in `session-forensics.md`).
    - Review many sessions for recurring harness problems: `clp-bundle-review` (see `session-forensics.md`).
    - Decompress for raw inspection: `"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress" ARCHIVE /tmp/session-decompressed`.

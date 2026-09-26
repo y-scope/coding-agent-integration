@@ -239,6 +239,11 @@ Rules:
    among the fetched records", never present them as the archive's span.
 3. Do not state a rate, a duration, or a cause as fact. A cause or a
    recommendation is inference: label it "inference".
+2a. Label every claim with its evidence tier: measured, derived, inference or
+   domain knowledge. The definition, the rules, and the two cases that look
+   measured but are not -- a category is classification output while its
+   counts are measured; a score is a policy mapping -- are in
+   references/evidence-tiers.md. Read it and follow it; do not paraphrase it.
 3a. APPLICATION is what these logs appear to be, with the evidence that
    identified it. Use what you know about that system to say why a finding
    matters -- what a gossip failure means for a distributed database, what a
@@ -316,4 +321,5 @@ The report has these sections:
 8. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that template-classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
 9. **What this means for the system** — only where APPLICATION named one, and only where it adds something: what the findings above imply for a system of that kind, and the blast radius of each. Every claim here is labelled "domain knowledge", carries no number that is not already above, and gives way to the records wherever the two disagree. Nothing worth saying — leave the section out rather than filling it.
 10. **Follow-up queries** — 2–3 concrete queries derived from templates.
-11. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.
+11. **Checks** — each headline figure with the one command that reproduces it, from the facts file's verification section: measured figures name their query, derived ones their inputs and formula. This is what makes the report arguable instead of trusted.
+12. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.

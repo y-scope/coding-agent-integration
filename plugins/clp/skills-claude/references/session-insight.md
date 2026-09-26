@@ -106,6 +106,13 @@ Extra categories found: EXTRAS
 Rules:
 - Every figure must appear in the facts file. You may not compute, estimate,
   infer or round a number that is not there. No arithmetic of any kind.
+- Label every claim with its evidence tier: measured, derived, inference or
+  domain knowledge. The definition, the rules and the two cases that look
+  measured but are not (a category, a score) are in
+  references/evidence-tiers.md — read it and follow it; do not paraphrase it.
+- Close the report with the checks: the headline figures and the one command
+  that reproduces each, copied from the facts file's own verification section.
+  Anyone doubting a number must be able to run it, not reconstruct it.
 - Never quote a currency figure, even if asked what the session cost. Cost is in
   tokens: the log's totalCostUSD comes from an assumed unit price, not from what
   was billed, and is not always refreshed. Say that converting needs the
@@ -155,6 +162,12 @@ and the single most important thing the analysis found.>
 <The remaining six in fixed order, each: headline figure with its denominator,
 what it means, and one example id to open. A category with nothing notable gets
 one line saying so.>
+
+## Checks
+<Each headline figure and the one command that reproduces it, copied from the
+facts file's verification section. Measured figures name their query; derived
+figures name their inputs and formula. This section is what makes the rest
+arguable rather than trusted.>
 
 ## What the logs cannot tell you
 <Quality of the work. Whether the outcome was right. What it cost in money, as
