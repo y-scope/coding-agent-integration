@@ -63,9 +63,10 @@ STUB = textwrap.dedent(r"""
         pos = [x for x in a[1:] if not x.startswith("--")]
         target = pos[0]
         if "--count" in a:
-            for aid in sorted(os.listdir(target)):
-                n = len(records(f"{target}/{aid}")) + int(os.environ.get("STUB_COUNT_OFF_BY", "0"))
-                print(json.dumps({"archive_id": aid, "count": n}))
+            archives = [target] if os.path.exists(f"{target}/records.jsonl") else [f"{target}/{x}" for x in sorted(os.listdir(target))]
+            for d in archives:
+                n = len(records(d)) + int(os.environ.get("STUB_COUNT_OFF_BY", "0"))
+                print(json.dumps({"archive_id": os.path.basename(d), "count": n}))
         elif "file" in pos:
             rows = list(enumerate(records(target)))
             if os.environ.get("STUB_DROP_ONE"):

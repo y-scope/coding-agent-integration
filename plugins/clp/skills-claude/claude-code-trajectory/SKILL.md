@@ -9,6 +9,7 @@ allowed-tools:
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-session-turns:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle:*)"
+  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle-review:*)"
 ---
 
 # Claude Code Trajectory
@@ -209,7 +210,20 @@ call with its result or a launch with its agent, an `agentId` or `runId` opens a
 ## Reviewing sessions for harness issues
 
 When the goal is the harness itself (Claude Code, a gateway, a workflow runtime) rather than the task,
-look for problems that recur across sessions and projects. A message that repeats across unrelated
+look for problems that recur across sessions and projects. `clp-bundle-review` does the whole pass over
+many sessions: it bundles every Claude Code session under a Claude home, computes the signals below
+for each, ranks them against each other, and groups failed tool calls across sessions:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle-review" /tmp/yscope-clp-bundles --build --skip <THIS_SESSION_ID>
+```
+
+Pass `--skip` with the id of the session you are running in (it is still being written). Error groups
+send the template text of non-command error messages (variables already replaced by `<*>`) to the
+plugin's built-in semantic endpoint; tell the user before running it on logs they have not agreed to
+send, and relay an endpoint error as it is. Each finding line carries an example id to open with
+`clp-bundle /tmp/yscope-clp-bundles/<SESSION> show|context`. The rest of this section is what it checks,
+and how to check one session by hand. A message that repeats across unrelated
 projects points at the harness or provider; one tied to a single repository points at the task.
 
 - **Log integrity** (any occurrence is a finding): a build's `REPAIRED` line (NUL bytes from a lost

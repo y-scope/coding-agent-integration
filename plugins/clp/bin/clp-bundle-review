@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""
+clp-bundle-review - review a directory of session bundles: what went wrong, where, how often.
+
+Usage:
+  clp-bundle-review DIR [--build] [--claude-home DIR] [--skip ID]... [--clp-s PATH]
+                        [--semantic-endpoint URL] [--top N] [--json]
+
+DIR holds one bundle per session (clp-bundle BUNDLE build), named by session id. With --build,
+every Claude Code session under --claude-home (default ~/.claude) gets a current bundle in DIR
+first: a missing one is built, one whose main log has grown is built again, one whose catalog has
+an older layout is rebuilt from the bundle. A session still being written (its last record cut off)
+is skipped, and so is any session whose id starts with a --skip value (use it for the session you
+are running in).
+
+Output, one line each:
+  REVIEW sessions=N projects=N multi_agent=N with_workflows=N tool_calls=N hours=N
+         tokens_in=N tokens_out=N
+  BUILD <status>=N ...                                   (with --build)
+  ZERO <signal> sessions=N total=N [<session>:<count>:<example id> ...]
+  RATE <signal> rated=N median=… p90=… [above: <session> <value> ...]
+  FLAGGED <session> <project> <n>: <signal>; ...
+  ERRORS templates=N groups=N recurring=N endpoint=URL
+  ERROR projects=N sessions=N n=N templates=N method=… example=<session> <uuid> text="…"
+
+Zero-tolerance signals are findings whenever they occur; rate signals are compared with the median
+and 90th percentile of the sessions active enough to rate (at least 5), so "above" means unusual for
+this set of sessions, not for all users. Example ids open with clp-bundle DIR/<session> show|context.
+
+Error groups: failed tool calls are grouped by CLP's own template, shape(toolUseResult), then merged:
+command failures by a shared beginning and end; other messages (harness, tool and provider errors) by
+embeddings, which sends their template text (variables already replaced by <*>) to the plugin's
+built-in semantic endpoint, the one log-insights uses (DEFAULT_SEMANTIC_ENDPOINTS in lib/clp-common.sh),
+or to --semantic-endpoint URL. If the endpoint cannot be reached, the review fails with its error.
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+
+import bundle as B  # noqa: E402
+import bundle_review as R  # noqa: E402
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("dir")
+    parser.add_argument("--build", action="store_true")
+    parser.add_argument("--claude-home", default="~/.claude")
+    parser.add_argument("--skip", action="append", default=[])
+    parser.add_argument("--clp-s")
+    parser.add_argument("--semantic-endpoint")
+    parser.add_argument("--top", type=int, default=20)
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--search-wrapper",
+                        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"))
+    args = parser.parse_args()
+    try:
+        build = None
+        if args.build:
+            home = os.path.expanduser(args.claude_home)
+            build = R.ensure_bundles(R.find_sessions(home), args.dir, clp_s=args.clp_s, skip=args.skip,
+                                     log=lambda line: print(line, file=sys.stderr))
+        bundles = sorted(os.path.dirname(p) for p in
+                         (os.path.join(args.dir, d, "catalog.sqlite") for d in os.listdir(args.dir)) if os.path.isfile(p))
+        if build is not None:
+            bundles = [b for b in bundles if build.get(os.path.basename(b), "").split(":")[0] in ("kept", "built", "rebuilt")]
+        if not bundles:
+            raise B.BundleError(f"no bundles in {args.dir}" + ("" if args.build else " (add --build to make them)"))
+        sessions = [R.signals(b, args.search_wrapper) for b in bundles]
+        ranking = R.rank(sessions)
+        templates = R.error_templates(bundles, args.search_wrapper)
+        endpoint = args.semantic_endpoint or R.default_endpoint()
+        groups = R.error_groups(templates, endpoint)
+    except (B.BundleError, OSError) as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+
+    real = sessions
+    summary = {"sessions": len(real), "projects": len({s["project"] for s in real}),
+               "multi_agent": sum(1 for s in real if s["agents"] or s["attempts"]),
+               "with_workflows": sum(1 for s in real if s["workflow_runs"]),
+               "tool_calls": sum(s["tool_calls"] for s in real), "hours": round(sum(s["hours"] for s in real)),
+               "tokens_in": sum(s["tokens_input"] for s in real), "tokens_out": sum(s["tokens_output"] for s in real)}
+    recurring = [g for g in groups if len(g["projects"]) >= 2]
+    method = endpoint
+    if args.json:
+        for s in sessions:
+            s.pop("bundle", None)
+        print(json.dumps({"summary": summary, "build": build, "sessions": sessions, **ranking,
+                          "errors": {"templates": len(templates), "endpoint": endpoint, "groups": groups}},
+                         indent=1, default=str))
+        return 0
+
+    print("REVIEW " + " ".join(f"{k}={v}" for k, v in summary.items()))
+    if build is not None:
+        counts = {}
+        for status in build.values():
+            key = status.split(":")[0]
+            counts[key] = counts.get(key, 0) + 1
+        print("BUILD " + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    for z in ranking["zero"]:
+        hits = " ".join(f"{h['session'][:8]}:{h['count']}" + (f":{h['examples'][0]}" if h["examples"] else "")
+                        for h in z["hits"][:4])
+        print(f"ZERO {z['signal']} sessions={z['sessions']} total={z['total']}" + (f" {hits}" if hits else ""))
+    for r in ranking["rates"]:
+        if r["median"] is None:
+            print(f"RATE {r['signal'].replace(' ', '_')} rated={r['rated']} (fewer than {R.MIN_RATED} sessions to rate)")
+            continue
+        fmt = r["format"]
+        above = ", ".join(f"{a['session'][:8]} {fmt.format(a['value'])}" for a in r["above"][:4])
+        print(f"RATE {r['signal'].replace(' ', '_')} rated={r['rated']} median={fmt.format(r['median'])} "
+              f"p90={fmt.format(r['p90'])}" + (f" above: {above}" if above else ""))
+    for f in ranking["flagged"][:args.top]:
+        print(f"FLAGGED {f['session'][:8]} {f['project']} {len(f['signals'])}: {'; '.join(f['signals'])}")
+    print(f"ERRORS templates={len(templates)} groups={len(groups)} recurring={len(recurring)} endpoint={endpoint}")
+    for g in recurring[:args.top]:
+        print(f"ERROR projects={len(g['projects'])} sessions={len(g['sessions'])} n={g['n']} templates={g['templates']} "
+              f"method={g['method']} example={g['examples'][0] if g['examples'] else '-'} "
+              f"text={json.dumps(g['leader'][:140], ensure_ascii=False)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
