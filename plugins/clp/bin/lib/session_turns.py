@@ -27,7 +27,7 @@ paired with its result by tool_use_id. What it adds is a filter for user records
 that the harness injects (task notifications, command output, compaction summaries),
 which are not human prompts, and the idle category.
 
-Stdlib only, like the other log-shape-* helpers.
+Stdlib only, like the other plugin helpers.
 """
 
 from datetime import datetime

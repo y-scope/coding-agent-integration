@@ -1,5 +1,5 @@
 """log_shapes - the character limit, the field rules and the hashing shared by
-the log-shape-* helpers.
+the plugin's helpers.
 
 A log shape (message template) can be hundreds of kilobytes long: CockroachDB logs
 multi-line Pebble stats tables as single messages. Nothing downstream needs the
@@ -23,7 +23,7 @@ so a changed rule set is a changed classification. The cache fingerprint
 therefore folds in field_rules_digest() -- canonical over the rules, so only a
 change that changes the outcome changes the key (see that function).
 
-Stdlib only, like the other log-shape-* helpers.
+Stdlib only, like the other plugin helpers.
 """
 
 import hashlib

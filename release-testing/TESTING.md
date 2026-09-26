@@ -346,7 +346,7 @@ unset CLP_LOG_SHAPE_CACHE_DIR
 Step 9 wrote outside it:
 - **The agent's archive**, under the archives root (`/tmp/yscope-clp-archives` unless you configured another).
 - **A classification and the archive's stored counts**, in the cache that `CLP_LOG_SHAPE_CACHE_DIR` named in the shell you started `claude` from. That is `release-testing/workdir/lt-cache-growth` if you kept the Step 6 shell, which the `rm -rf` above already removed. Otherwise it is your real cache, `~/.config/yscope-clp-plugin/log-shape-cache`, and the commands below remove only this run's rows from it.
-- **The working files** `/tmp/clp-insights-*`, `/tmp/clp-report-flags.txt`, `/tmp/log-shape-*`, `/tmp/log-shapes*.ndjson` and `/tmp/lt-diff.out`. They are shared by every analysis on the machine, so remove them only while no other analysis is running.
+- **The working files** `/tmp/clp-insights-*`, `/tmp/clp-report-flags.txt`, `/tmp/log-shape-*` and `/tmp/log-shapes*.ndjson`. They are shared by every analysis on the machine, so remove them only while no other analysis is running.
 
 ```bash
 LC=./plugins/clp/bin/log-shape-cache
@@ -356,7 +356,7 @@ A="$(ls -dt "$ROOT"/folder-vllm-*/ | head -1)"      # the agent's archive: the n
 "$LC" list                                          # the entry classified just now; the agent's
 "$LC" forget <APP_KEY>                              #   bootstrap printed its APP_KEY too
 rm -rf "$A"
-rm -f /tmp/clp-insights-* /tmp/clp-report-flags.txt /tmp/log-shape-* /tmp/log-shapes*.ndjson /tmp/lt-diff.out
+rm -f /tmp/clp-insights-* /tmp/clp-report-flags.txt /tmp/log-shape-* /tmp/log-shapes*.ndjson
 ```
 
 `forget` prints what it removed, and deleting nothing is not an error, so the commands are safe to repeat. Without the `forget` lines, the next agent run on these logs finds the classification (`CACHE_MODE=UPTODATE`) instead of classifying from scratch, and stored archives you no longer analyze drop out of the cache after 30 days.
