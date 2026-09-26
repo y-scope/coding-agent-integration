@@ -78,7 +78,7 @@ class BundleCommands(unittest.TestCase):
         db.executemany("INSERT INTO events(uuid,kind,agent_id,ts,type,turn,human,interrupt,is_error,ref_agent_id,ref_task_id) "
                        "VALUES(?,?,?,?,?,?,?,?,?,?,?)", events)
         ids = {u: i for u, i in db.execute("SELECT uuid, id FROM events")}
-        db.executemany("INSERT INTO event_tools VALUES(?,?,?,?,?)", [
+        db.executemany("INSERT INTO event_tools(event, tool_use_id, role, name, is_error) VALUES(?,?,?,?,?)", [
             (ids["11111111-0000-0000-0000-000000000001"], "toolu_9", "use", "Workflow", None),
             (ids["22222222-0000-0000-0000-000000000001"], "t", "use", "Bash", None),
             (ids["22222222-0000-0000-0000-000000000002"], "t", "result", None, 1),

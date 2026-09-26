@@ -82,6 +82,57 @@ KQL = {
     "interrupts": 'message.content.text:"[Request interrupted*"',
     "truncated_reads": 'attachment.type:"read_truncation_notice"',
 }
+CHANGES_FILES = {"Edit", "MultiEdit", "Write", "NotebookEdit"}
+
+
+def call_patterns(db):
+    """{"identical_retries": (count, example uuids), "redundant_reads": (count, example uuids)} from the
+    tool calls of each agent (and of the main thread), in their original order.
+
+    identical_retries  a failed tool call immediately followed, by the same agent, by the same tool with
+                       byte-identical input
+    redundant_reads    a Read of a file and range the same agent already read, with nothing in the session
+                       that could have changed the file since: no edit or write of it, and no Bash command,
+                       by any agent (a command in a parallel agent could change it). A change made outside
+                       the session cannot be seen.
+    """
+    failed = {r[0] for r in db.execute("SELECT tool_use_id FROM event_tools WHERE role = 'result' AND is_error = 1")}
+    commands = sorted(r[0] for r in db.execute("SELECT e.ts FROM event_tools t JOIN events e ON e.id = t.event "
+                                                "WHERE t.role = 'use' AND t.name = 'Bash'"))
+    changes = {}                         # file hash -> times any agent of the session edited or wrote it
+    for file_hash, ts in db.execute("SELECT t.file_hash, e.ts FROM event_tools t JOIN events e ON e.id = t.event "
+                                    "WHERE t.role = 'use' AND t.file_hash IS NOT NULL AND t.name IN "
+                                    f"({','.join(repr(n) for n in sorted(CHANGES_FILES))})"):
+        changes.setdefault(file_hash, []).append(ts)
+    rows = db.execute("SELECT e.kind, e.agent_id, e.uuid, e.ts, t.tool_use_id, t.name, t.input_hash, t.file_hash, "
+                      "t.read_hash FROM event_tools t JOIN events e ON e.id = t.event WHERE t.role = 'use' "
+                      "ORDER BY e.kind, e.agent_id, e.pos, t.rowid").fetchall()
+    retries, rereads = [], []
+    previous, seen = None, {}            # seen: read hash -> (file hash, time of the earlier read)
+    for kind, agent, uuid, ts, tool_use_id, name, input_hash, file_hash, read_hash in rows:
+        if previous is None or previous[0] != (kind, agent):
+            previous, seen = None, {}
+        if previous and previous[1] in failed and previous[2] == name and previous[3] == input_hash:
+            retries.append(uuid)
+        if name == "Bash":
+            seen = {}
+        elif name == "Read" and read_hash:
+            earlier = seen.get(read_hash)
+            if (earlier and not any(earlier[1] <= t <= ts for t in changes.get(file_hash, ()))
+                    and not _any_between(commands, earlier[1], ts)):
+                rereads.append(uuid)
+            seen[read_hash] = (file_hash, ts)
+        previous = ((kind, agent), tool_use_id, name, input_hash)
+    return {"identical_retries": (len(retries), retries[:3]), "redundant_reads": (len(rereads), rereads[:3])}
+
+
+def _any_between(sorted_times, start, end):
+    """Whether a sorted list of timestamps has one in [start, end]."""
+    import bisect
+    i = bisect.bisect_left(sorted_times, start)
+    return i < len(sorted_times) and sorted_times[i] <= end
+
+
 ZERO = [
     ("nul_bytes", "logs damaged by lost writes (NUL bytes removed)"),
     ("repeated_uuids", "records rewritten with the same uuid"),
@@ -91,6 +142,8 @@ ZERO = [
     ("resume_reruns", "logical agents re-run by a resume after succeeding"),
     ("launch_errors", "workflow launches rejected"),
     ("configuration_errors", "agents or attempts failed with API 400 (configuration)"),
+    ("identical_retries", "failed tool calls retried at once with identical input"),
+    ("redundant_reads", "file reads repeated with nothing in the session able to change the file since"),
 ]
 # name, value, whether a session is active enough to rate, format
 RATES = [
@@ -211,6 +264,10 @@ def signals(bundle_dir, wrapper):
             s[name] = db.execute(value_sql).fetchone()[0]
             if example_sql and s[name]:
                 s["examples"][name] = [r[0] for r in db.execute(example_sql)]
+        for name, (count, examples) in call_patterns(db).items():
+            s[name] = count
+            if count:
+                s["examples"][name] = examples
         main = db.execute("SELECT archive_id FROM archives WHERE kind = 'main'").fetchone()[0]
     finally:
         db.close()
