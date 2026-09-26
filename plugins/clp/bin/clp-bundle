@@ -13,6 +13,7 @@ Usage:
                             [--type T] [--after TIME] [--before TIME] [--limit N] [--json]
   clp-bundle BUNDLE_DIR record UUID [--raw]
   clp-bundle BUNDLE_DIR context UUID [--before N] [--after N] [--copy K] [--raw]
+  clp-bundle BUNDLE_DIR outcomes [--by turn|agent] [--json]
   clp-bundle BUNDLE_DIR sql QUERY [--json]
 
 BUNDLE_DIR holds manifest.json, archives/, files/ and catalog.sqlite. ID is a node id (attempt:a1b2..,
@@ -51,6 +52,11 @@ characters), a run id or a task id.
             and original order: N before (default 10) and N after (default 5), the event marked
             with ">". Records without a uuid are included, and the window stops at the edges of the
             file. When a uuid was written more than once, --copy K picks the K-th copy (default 1).
+  outcomes  What each turn (or agent) produced: files changed (successful edits and writes; for the main
+            thread also the file versions the harness backed up, whose earlier content is in files/),
+            and the commit, PR and test commands it ran. A command is shown as run; it is
+            "confirmed" only when its output showed the result ([branch sha], a PR URL, test counts),
+            which a chained or piped command often hides, so "run" is not "exists".
   sql       A read-only query on the catalog.
 
 Options:
@@ -324,6 +330,57 @@ def cmd_context(args, db):
     return 0
 
 
+def cmd_outcomes(args, db):
+    if args.by == "turn":
+        key, label = "turn", lambda k: f"turn {k}"
+    else:
+        key, label = "kind || ':' || coalesce(agent_id, 'main')", lambda k: k
+    groups = {}
+
+    def group(k):
+        return groups.setdefault(k, {"edits": 0, "files": 0, "versions": 0, "commit": [0, 0], "pr": [0, 0], "test": [0, 0, 0, 0, 0],
+                                     "shas": [], "prs": []})
+    for k, edits, files in db.execute(f"SELECT {key}, COUNT(*), COUNT(DISTINCT file_hash) FROM file_changes GROUP BY 1"):
+        g = group(k); g["edits"], g["files"] = edits, files
+    if args.by == "turn":
+        for k, n in db.execute("SELECT turn, COUNT(*) FROM file_versions GROUP BY 1"):
+            group(k)["versions"] = n
+    else:
+        n = db.execute("SELECT COUNT(*) FROM file_versions").fetchone()[0]
+        if n:
+            group("main:main")["versions"] = n
+    for k, action, failed, confirmed, sha, url, passed, failures in db.execute(
+            f"SELECT {key}, action, failed, confirmed, sha, pr_url, tests_passed, tests_failed FROM actions ORDER BY ts"):
+        g = group(k)
+        if action == "test":
+            t = g["test"]
+            t[0] += 1; t[1] += failed; t[2] += confirmed; t[3] += passed or 0; t[4] += failures or 0
+        else:
+            g[action][0] += 1; g[action][1] += confirmed
+            if sha:
+                g["shas"].append(sha[:9])
+            if url:
+                g["prs"].append(url)
+    order = sorted(groups, key=lambda k: (k is None, k if isinstance(k, int) else str(k)))
+    if args.json:
+        print(json.dumps([{"group": k, **groups[k]} for k in order], indent=1, default=str))
+        return 0
+    for k in order:
+        g = groups[k]
+        parts = [f"files={g['files']} edits={g['edits']}"]
+        if g["versions"]:
+            parts.append(f"versions={g['versions']}")
+        if g["commit"][0]:
+            parts.append(f"commits run={g['commit'][0]} confirmed={g['commit'][1]}" + (f" [{','.join(g['shas'][:5])}]" if g["shas"] else ""))
+        if g["pr"][0]:
+            parts.append(f"prs run={g['pr'][0]} confirmed={g['pr'][1]}" + (f" [{' '.join(g['prs'])}]" if g["prs"] else ""))
+        if g["test"][0]:
+            t = g["test"]
+            parts.append(f"tests run={t[0]} failed_runs={t[1]} with_counts={t[2]} passed={t[3]} failed={t[4]}")
+        print(f"OUTCOME {label(k) if k is not None else 'before the first prompt'} " + " ".join(parts))
+    return 0
+
+
 def cmd_sql(args, db):
     cur = db.execute(args.query)
     names = [d[0] for d in cur.description or []]
@@ -364,6 +421,8 @@ def main():
     p = sub.add_parser("context"); p.add_argument("uuid"); p.add_argument("--before", type=int, default=10)
     p.add_argument("--after", type=int, default=5); p.add_argument("--copy", type=int, default=1)
     p.add_argument("--raw", action="store_true")
+    p = sub.add_parser("outcomes"); p.add_argument("--by", choices=("turn", "agent"), default="turn")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("sql"); p.add_argument("query"); p.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
@@ -373,7 +432,8 @@ def main():
             return cmd_rebuild(args)
         db = B.open_catalog(args.bundle)
         return {"show": cmd_show, "evidence": cmd_evidence, "who": cmd_who, "events": cmd_events,
-                "record": cmd_record, "context": cmd_context, "sql": cmd_sql}[args.command](args, db)
+                "record": cmd_record, "context": cmd_context, "outcomes": cmd_outcomes,
+                "sql": cmd_sql}[args.command](args, db)
     except (B.BundleError, __import__("session_graph").GraphError) as err:
         print(f"error: {err}", file=sys.stderr)
         return 1

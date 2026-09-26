@@ -115,6 +115,11 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`, and `BUNDLE` 
      status: ok, failed (cause api-503, api-400, timeout), stalled-retried (no outcome, later
      retried), unresolved. Agent status: completed, failed, no-notification.
      edges(src, dst, kind: launch, result, contains, executes, ran, resume, phase_order; tool_use_id).
+     outcomes: file_versions(turn, ts, path, file_hash, version, backup) from the harness's file history
+     (main thread only; backup is the earlier content under files/), actions(uuid, kind, agent_id, turn, ts,
+     action commit|pr|test, failed, confirmed, branch, sha, pr_url, tests_passed, tests_failed), and the
+     view file_changes(uuid, kind, agent_id, turn, ts, name, file_hash) of successful edits and writes.
+     An agent's events carry the main thread's turn at their time.
      events(uuid, kind, pos, agent_id, ts, type, turn, human, interrupt, is_error, ref_agent_id,
      ref_task_id, message_id, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write) with
      event_tools(event -> events.id, tool_use_id, role use|result, name, is_error): one row per user or
@@ -196,7 +201,7 @@ run the health check below, report what stands out with numbers, then offer the 
 | What failed, and whether it recovered | Error counts; error messages grouped by CLP's template: `clp-s-search-kql --experimental --projection 'uuid,shape(toolUseResult)' ARCHIVE 'message.content.is_error:true'` (every failed tool call carries its error as the top-level string `toolUseResult`; `shape()` cannot reach the text inside `message.content`) | One template's records: keep each record's `uuid` from that projection (exact), or filter with the template's literal text and `*` for each variable, as in `shape(toolUseResult): "Error: Exit code*"` (a superset: a typed `%int%` matches nothing); then the records just before and after: `clp-bundle BUNDLE context UUID` |
 | Whether effort was wasted | Repeated templates (the same command shape many times) | Each occurrence and what followed it |
 | What it cost | `clp-s-session-turns` (TOTAL_TOKENS, and tokens per turn); for a bundle, `tokens_*` on nodes | The heaviest turns or agents; `clp-s-session-turns --calls` or the events' `tokens_input` for the context per call (a sharp drop is a compaction) |
-| What it produced | `type:"pr-link"` records; edits (`toolUseResult.structuredPatch`, `toolUseResult.filePath`) | The turn or agent that made a PR, the edits and test runs before it |
+| What it produced | `clp-bundle BUNDLE outcomes` (per turn) or `--by agent`: files changed, file versions backed up, commits, PRs and test runs | A turn's files and actions; the backed-up earlier content under the bundle's `files/`. A commit, PR or test command is "run"; it is "confirmed" only when its output showed the result, so report run and confirmed separately and never call a run command a commit that exists |
 | How often the human stepped in | Prompts, interrupts, denials, `AskUserQuestion` waits | The prompt and what preceded it |
 | Which agents did what, and why they failed | Bundle catalog SQL | `clp-bundle show`, `evidence`, then back with `who --uuid` |
 
