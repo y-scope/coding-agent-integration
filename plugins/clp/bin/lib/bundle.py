@@ -23,7 +23,7 @@ from datetime import datetime
 
 # The catalog's layout. A catalog of another layout is refused, and rebuilt from its bundle
 # (`clp-bundle BUNDLE rebuild`) when the bundle's manifest layout is current.
-LAYOUT = 4
+LAYOUT = 5
 # The layout of manifest.json, archives/ and files/. A bundle of another layout is made again (`build --force`).
 MANIFEST_LAYOUT = 2
 
@@ -80,6 +80,22 @@ CREATE INDEX events_ref_agent ON events(ref_agent_id) WHERE ref_agent_id IS NOT 
 CREATE INDEX events_ref_task ON events(ref_task_id) WHERE ref_task_id IS NOT NULL;
 CREATE INDEX events_calls ON events(agent_id, ts) WHERE tokens_input IS NOT NULL;
 CREATE INDEX event_tools_event ON event_tools(event);
+-- Outcomes. file_versions: one row per file version the harness backed up before changing a file (a
+-- file-history-delta record of the main log): the turn it belongs to, the file, its version, and the backup
+-- (the content before the change) under files/. actions: one row per commit, PR or test command an agent ran:
+-- failed is its exit status; confirmed is set only when its output showed the result (a [branch sha] line, a
+-- PR URL, test counts), and the parsed values are kept. A command that was run is not a commit that exists.
+CREATE TABLE file_versions(turn INTEGER, ts TEXT, path TEXT, file_hash TEXT, version INTEGER, backup TEXT,
+                           message_uuid TEXT, prompt_uuid TEXT);
+CREATE TABLE actions(uuid TEXT, kind TEXT, agent_id TEXT, turn INTEGER, ts TEXT, action TEXT, failed INTEGER,
+                     confirmed INTEGER, branch TEXT, sha TEXT, pr_url TEXT, tests_passed INTEGER, tests_failed INTEGER);
+CREATE INDEX actions_turn ON actions(turn);
+CREATE INDEX file_versions_turn ON file_versions(turn);
+-- Successful edits and writes, per agent and turn.
+CREATE VIEW file_changes AS SELECT e.uuid, e.kind, e.agent_id, e.turn, e.ts, u.name, u.file_hash
+  FROM event_tools u JOIN events e ON e.id = u.event
+  JOIN event_tools r ON r.tool_use_id = u.tool_use_id AND r.role = 'result' AND r.is_error = 0
+  WHERE u.role = 'use' AND u.name IN ('Edit', 'MultiEdit', 'Write', 'NotebookEdit') AND u.file_hash IS NOT NULL;
 CREATE INDEX event_tools_use ON event_tools(tool_use_id);
 CREATE INDEX event_tools_name ON event_tools(name) WHERE name IS NOT NULL;
 """

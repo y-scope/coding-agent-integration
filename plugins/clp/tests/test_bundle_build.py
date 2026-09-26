@@ -97,9 +97,9 @@ def use(u, ts, tid, name, inp=None, tokens=None, **extra):
     return line(uuid=u, type="assistant", timestamp=ts, message=message, **extra)
 
 
-def result(u, ts, tid, tur=None, error=False, **extra):
+def result(u, ts, tid, tur=None, error=False, out="ok", **extra):
     return line(uuid=u, type="user", timestamp=ts, toolUseResult=tur, message={"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": tid, "content": "ok", "is_error": error}]}, **extra)
+        {"type": "tool_result", "tool_use_id": tid, "content": out, "is_error": error}]}, **extra)
 
 
 def note(u, ts, task, status="completed"):
@@ -141,6 +141,17 @@ def make_session(home, with_agents=True):
         note("u10", T(10, 30), "tk2"),
         line(uuid="u11", type="attachment", timestamp=T(10, 31), attachment={"type": "hook", "content": "x"}),  # unlisted
         text("u12", T(11, 0), "user", "second prompt"),
+        use("u13", T(11, 1), "g1", "Bash", {"command": "git add -A && git commit -m 'x'"}),
+        result("u14", T(11, 1, 1), "g1", out="[main 1a2b3c4] x\n 1 file changed"),
+        use("u15", T(11, 2), "g2", "Bash", {"command": "git commit -qm 'y' | tail -1"}),
+        result("u16", T(11, 2, 1), "g2", out=""),
+        use("u17", T(11, 3), "g3", "Bash", {"command": "gh pr create --title t --body b"}),
+        result("u18", T(11, 3, 1), "g3", out="https://github.com/o/r/pull/7"),
+        use("u19", T(11, 4), "g4", "Bash", {"command": "cargo test --workspace"}),
+        result("u20", T(11, 4, 1), "g4", out="test result: ok. 5 passed; 0 failed\ntest result: FAILED. 2 passed; 1 failed", error=True),
+        line(type="file-history-delta", messageId="u19", snapshotMessageId="u12", trackingPath="src/a.rs",
+             backup={"backupFileName": "abc@v1", "version": 1, "backupTime": T(11, 4, 5), "realParentDir": "/w/src"},
+             timestamp=T(11, 4, 5)),
     ]
     write(f"{proj}/{SID}.jsonl", main)
     if with_agents:
@@ -233,15 +244,15 @@ class Full(BuildTest):
 
     def test_archives_hold_every_record(self):
         rows = dict(self.db().execute("SELECT kind, records FROM archives").fetchall())
-        self.assertEqual(rows, {"main": 13, "agent": 9, "workflow-agent": 8, "workflow-journal": 5, "workflow-run": 1})
+        self.assertEqual(rows, {"main": 22, "agent": 9, "workflow-agent": 8, "workflow-journal": 5, "workflow-run": 1})
 
     def test_events_are_counted_and_the_leftovers_accounted_for(self):
         b = dict(self.db().execute("SELECT k, v FROM bundle").fetchall())
-        self.assertEqual((b["events_unlisted_main"], b["events_skipped_main"]), ("1", "1"))
+        self.assertEqual((b["events_unlisted_main"], b["events_skipped_main"]), ("1", "2"))
         self.assertEqual((b["events_unlisted_agent"], b["events_skipped_agent"]), ("1", "1"))
         self.assertEqual(b["events_unlisted_workflow-agent"], "1")
         kinds = dict(self.db().execute("SELECT kind, COUNT(*) FROM events GROUP BY kind").fetchall())
-        self.assertEqual(kinds, {"main": 11, "agent": 7, "workflow-agent": 7})
+        self.assertEqual(kinds, {"main": 19, "agent": 7, "workflow-agent": 7})
         self.assertEqual(b["layout"], str(bundle.LAYOUT))
 
     def test_interrupts_equal_attempts_without_an_outcome(self):
@@ -301,6 +312,31 @@ class Full(BuildTest):
         self.assertIn("mode", lines[2])                                  # line 2 is the bookkeeping record with no uuid
         _, raw, _ = self.cli("context", "u02", "--before", "1", "--after", "0", "--raw")
         self.assertEqual([json.loads(l).get("type") for l in raw.splitlines()], ["mode", "assistant"])
+
+    def test_actions_are_run_and_confirmed_only_when_the_output_shows_it(self):
+        rows = [tuple(r) for r in self.db().execute(
+            "SELECT action, turn, failed, confirmed, branch, sha, pr_url, tests_passed, tests_failed FROM actions ORDER BY ts")]
+        self.assertEqual(rows, [("commit", 2, 0, 1, "main", "1a2b3c4", None, None, None),
+                                ("commit", 2, 0, 0, None, None, None, None, None),      # quiet and piped: run, not confirmed
+                                ("pr", 2, 0, 1, None, None, "https://github.com/o/r/pull/7", None, None),
+                                ("test", 2, 1, 1, None, None, None, 7, 1)])
+
+    def test_file_versions_take_their_prompt_s_turn_and_point_at_the_backup(self):
+        row = tuple(self.db().execute("SELECT turn, path, version, backup FROM file_versions").fetchone())
+        self.assertEqual(row, (2, "/w/src/a.rs", 1, "files/file-history/abc@v1"))
+
+    def test_outcomes_by_turn(self):
+        code, out, err = self.cli("outcomes")
+        self.assertEqual(code, 0, err)
+        line2 = next(l for l in out.splitlines() if l.startswith("OUTCOME turn 2 "))
+        self.assertIn("commits run=2 confirmed=1 [1a2b3c4]", line2)
+        self.assertIn("prs run=1 confirmed=1 [https://github.com/o/r/pull/7]", line2)
+        self.assertIn("tests run=1 failed_runs=1 with_counts=1 passed=7 failed=1", line2)
+        self.assertIn("versions=1", line2)
+
+    def test_agents_take_the_main_thread_s_turn(self):
+        turns = dict(self.db().execute("SELECT uuid, turn FROM events WHERE kind = 'workflow-agent'").fetchall())
+        self.assertEqual(turns["w1u1"], 1)
 
     def test_nested_agent_and_turns(self):
         rows = {r["id"]: r for r in self.db().execute("SELECT * FROM nodes WHERE kind='agent'")}
@@ -364,7 +400,7 @@ class Failures(BuildTest):
         with open(path, "w") as fh:                                  # at the end, complete: named the same way
             fh.write("\n".join(l for l in lines if l != "{broken") + "{broken\n")
         code, _, err = self.build()
-        self.assertIn(f"{SID}.jsonl:14: not a JSON record", err)
+        self.assertIn(f"{SID}.jsonl:23: not a JSON record", err)
 
     def test_a_record_cut_off_at_the_end_is_named_not_dropped(self):
         make_session(self.home)
@@ -372,7 +408,7 @@ class Failures(BuildTest):
             fh.write('{"uuid":"u99","type":"user","timestamp":"2026-01-01T11:30:00.000Z","mess')
         code, _, err = self.build()
         self.assertEqual(code, 1)
-        self.assertIn(f"{SID}.jsonl:14: the last record is cut off", err)
+        self.assertIn(f"{SID}.jsonl:23: the last record is cut off", err)
         self.assertFalse(os.path.exists(self.out))
 
     def test_a_meta_without_its_transcript_is_an_error(self):

@@ -332,13 +332,72 @@ def _event(kind, pos, r):
     return None, tools
 
 
+TEST_RUNNER = re.compile(r"\b(cargo (?:test|nextest)|pytest|python3? -m (?:pytest|unittest)|go test|npm (?:run )?test|"
+                         r"yarn test|pnpm test|jest|vitest|ctest|mvn test|gradle test|task test)")
+COMMIT = re.compile(r"\bgit commit\b")
+PR_CREATE = re.compile(r"\bgh pr create\b")
+
+
+def _action(command, output, failed):
+    """(action, fields) for a commit, PR or test command, or None. Fields hold what its output confirmed."""
+    if COMMIT.search(command):
+        m = re.search(r"\[([^\]\s]+)(?: \(root-commit\))? ([0-9a-f]{7,40})\]", output)
+        return "commit", {"confirmed": int(bool(m)), "branch": m.group(1) if m else None, "sha": m.group(2) if m else None}
+    if PR_CREATE.search(command):
+        m = re.search(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+", output)
+        return "pr", {"confirmed": int(bool(m)), "pr_url": m.group(0) if m else None}
+    if TEST_RUNNER.search(command):
+        passed = failed_tests = None
+        cargo = re.findall(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed", output)
+        if cargo:
+            passed, failed_tests = sum(int(p) for p, _ in cargo), sum(int(f) for _, f in cargo)
+        else:
+            p = re.search(r"\b(\d+) passed", output)
+            f = re.search(r"\b(\d+) failed", output)
+            ran = re.search(r"\bRan (\d+) tests?\b", output)
+            if p or f:
+                passed, failed_tests = int(p.group(1)) if p else 0, int(f.group(1)) if f else 0
+            elif ran:
+                fm = re.search(r"FAILED \((?:failures|errors)=(\d+)", output)
+                passed = int(ran.group(1)) - (int(fm.group(1)) if fm else 0)
+                failed_tests = int(fm.group(1)) if fm else 0
+        return "test", {"confirmed": int(passed is not None), "tests_passed": passed, "tests_failed": failed_tests}
+    return None
+
+
+def _result_text(block):
+    content = block.get("content")
+    if isinstance(content, list):
+        return " ".join(str(x.get("text", "")) for x in content if isinstance(x, dict))
+    return str(content or "")
+
+
 def _write_events(db, positioned):
-    """Events for the main log and the agent transcripts; returns {kind: (events, unlisted, no uuid)}."""
+    """Events for the main log and the agent transcripts, and the outcomes found among them (file versions,
+    actions); returns {kind: (events, unlisted, no uuid)}."""
     counts = {}
+    prompts, turn_of_prompt = [], {}
     for kind in EVENT_KINDS:
         rows, unlisted, no_uuid = [], 0, 0
+        deltas, pending, actions = [], {}, []
         for _source, records in positioned.get(kind, []):
             for pos, r in enumerate(records, records.first):
+                if r.get("type") == "file-history-delta":
+                    deltas.append(r)
+                message = r.get("message") if isinstance(r.get("message"), dict) else {}
+                content = message.get("content") if isinstance(message.get("content"), list) else []
+                for blk in content:
+                    if not isinstance(blk, dict):
+                        continue
+                    if blk.get("type") == "tool_use" and blk.get("name") == "Bash":
+                        command = (blk.get("input") or {}).get("command")
+                        if isinstance(command, str):
+                            pending[blk.get("id")] = (command, r.get("uuid"), r.get("agentId"), r.get("timestamp"))
+                    elif blk.get("type") == "tool_result" and blk.get("tool_use_id") in pending:
+                        command, uuid, agent, ts = pending.pop(blk["tool_use_id"])
+                        found = _action(command, _result_text(blk), bool(blk.get("is_error")))
+                        if found:
+                            actions.append((uuid, agent, ts, found[0], int(bool(blk.get("is_error"))), found[1]))
                 if not r.get("uuid"):
                     no_uuid += 1
                     continue
@@ -364,13 +423,34 @@ def _write_events(db, positioned):
                 r[f"tokens_{name}"] = u[name] if u else None
         if kind == "main":  # a turn runs from one human prompt to the next
             prompts = sorted(r["ts"] for r, _ in rows if r["human"] and r["ts"])
-            for r, _ in rows:
-                r["turn"] = bisect.bisect_right(prompts, r["ts"]) if r["ts"] else None
+            turn_of_prompt = {r["uuid"]: bisect.bisect_right(prompts, r["ts"]) for r, _ in rows if r["human"] and r["ts"]}
+        # an agent's records take the main thread's turn at their time
+        for r, _ in rows:
+            r["turn"] = bisect.bisect_right(prompts, r["ts"]) if r["ts"] and prompts else None
         cols = ["uuid", "kind", "pos", "agent_id", "ts", "type", "turn", "human", "interrupt", "is_error", "ref_agent_id",
                 "ref_task_id", "message_id", "tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_write"]
         for r, tools in rows:
             cur = db.execute(f"INSERT INTO events({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [r[c] for c in cols])
             db.executemany("INSERT INTO event_tools VALUES(?,?,?,?,?,?,?,?)", [(cur.lastrowid, *t) for t in tools])
+        for d in deltas:
+            backup = d.get("backup") if isinstance(d.get("backup"), dict) else {}
+            parent, tracked = backup.get("realParentDir"), d.get("trackingPath")
+            path = os.path.join(parent, os.path.basename(tracked)) if parent and tracked else tracked
+            ts = d.get("timestamp") or backup.get("backupTime")
+            turn = turn_of_prompt.get(d.get("snapshotMessageId"))
+            if turn is None and isinstance(ts, str) and prompts:
+                turn = bisect.bisect_right(prompts, ts[:23])
+            name = backup.get("backupFileName")
+            db.execute("INSERT INTO file_versions VALUES(?,?,?,?,?,?,?,?)",
+                       (turn, ts[:23] if isinstance(ts, str) else None, path, _hash(path) if path else None,
+                        backup.get("version"), f"files/file-history/{name}" if name else None, d.get("messageId"),
+                        d.get("snapshotMessageId")))
+        for uuid, agent, ts, action, failed, fields in actions:
+            turn = bisect.bisect_right(prompts, ts[:23]) if isinstance(ts, str) and prompts else None
+            db.execute("INSERT INTO actions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       (uuid, kind, agent, turn, ts[:23] if isinstance(ts, str) else None, action, failed,
+                        fields.get("confirmed"), fields.get("branch"), fields.get("sha"), fields.get("pr_url"),
+                        fields.get("tests_passed"), fields.get("tests_failed")))
         if rows or unlisted or no_uuid:
             counts[kind] = (len(rows), unlisted, no_uuid)
         db.execute("INSERT INTO bundle VALUES(?,?)", (f"events_unlisted_{kind}", str(unlisted)))
