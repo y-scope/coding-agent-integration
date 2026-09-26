@@ -59,6 +59,7 @@ The user sees your messages, not the tools' output. Keep every message short, an
 - **Each figure once.** The totals and the category table appear once, in the step 6 summary; later messages refer back instead of repeating.
 - **Ask only what changes the run,** and make every option's description literally true about what choosing it queues.
 - **Never state a number that is not in the facts file.** Every figure in your messages and in the report comes from `clp-session-facts`. If you want a number it does not have, compute it with a query and say you did.
+- **Never quote a currency figure, and never sum the per-kind token column.** Cost is reported in tokens because the log's `totalCostUSD` is derived from an assumed unit price rather than what was billed, and is not always refreshed; converting to money needs the reader's own rates. And one API response can be recorded in several logs — a fork inherits its parent's transcript — so the bundle total counts each response once and is *smaller* than the per-kind rows added up. The reference in `session-insight.md` has both in full; if a figure surprises you, read it there before repeating it.
 - **No scripted pleasantries or apologies.**
 
 ## Workflow
