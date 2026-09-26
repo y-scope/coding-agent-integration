@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLP_PLUGIN_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CLP_PLUGIN_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# The sibling tools this stage runs, and the clp-s lookup in clp-common,
+# are all relative to bin/, one level up from here.
+CLP_PLUGIN_BIN_DIR="$(cd -- "${CLP_PLUGIN_LIB_DIR}/.." && pwd -P)"
 # shellcheck disable=SC1091
-source "${CLP_PLUGIN_BIN_DIR}/lib/clp-common.sh"
+source "${CLP_PLUGIN_LIB_DIR}/clp-common.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
-  log-shape-insights-bootstrap [options] ARCHIVES_DIR
+  clp-insights bootstrap [options] ARCHIVES_DIR
 
 Mechanical bootstrap for the log-insights skill. One call reads the field
 names and per-field value distributions from a sample of records, gets the

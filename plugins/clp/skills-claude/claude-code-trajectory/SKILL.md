@@ -8,14 +8,12 @@ allowed-tools:
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql:*)"
-  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-session-turns:*)"
+  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-session:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-schema-tree:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle-review:*)"
-  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-session-facts:*)"
-  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-session-score:*)"
-  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/log-shape-report-save:*)"
+  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-report:*)"
   - "Bash(jq:*)"
   - "Bash(grep:*)"
   - "Bash(head:*)"
@@ -58,7 +56,7 @@ The user sees your messages, not the tools' output. Keep every message short, an
 - **Keep the plumbing out.** Never mention task IDs, output files, background shells, archive UUIDs or `KEY=VALUE` names.
 - **Each figure once.** The totals and the category table appear once, in the step 6 summary; later messages refer back instead of repeating.
 - **Ask only what changes the run,** and make every option's description literally true about what choosing it queues.
-- **Never state a number that is not in the facts file.** Every figure in your messages and in the report comes from `clp-session-facts`. If you want a number it does not have, compute it with a query and say you did.
+- **Never state a number that is not in the facts file.** Every figure in your messages and in the report comes from `clp-session facts`. If you want a number it does not have, compute it with a query and say you did.
 - **Never quote a currency figure, and never sum the per-kind token column.** Cost is reported in tokens because the log's `totalCostUSD` is derived from an assumed unit price rather than what was billed, and is not always refreshed; converting to money needs the reader's own rates. And one API response can be recorded in several logs — a fork inherits its parent's transcript — so the bundle total counts each response once and is *smaller* than the per-kind rows added up. The reference in `session-insight.md` has both in full; if a figure surprises you, read it there before repeating it.
 - **No scripted pleasantries or apologies.**
 
@@ -110,7 +108,7 @@ Run anything that can take over a minute in the background so you can post a sta
 4. **Read the reference and start the checks.** Read `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/session-insight.md` NOW. Open phase 3, then run the facts pass — it computes every number the report can quote, in code, so nothing is left to arithmetic:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-session-facts" --bundle /tmp/yscope-clp-bundles/<SESSION_ID>
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp-session" facts --bundle /tmp/yscope-clp-bundles/<SESSION_ID>
    ```
 
    Pass `--archive ARCHIVE` instead when there is no bundle, and add `--axes` when the user wants scores (see step 7). It takes a few seconds; on a large session run it in the background. Its stdout gives the headline `KEY=VALUE`s and one `ALERT=<category>:<slug> value=… threshold=…` line per category whose headline metric crosses a bad threshold. Those alerts order the focus options at step 6 and nothing else: they are not scores, and one does not enter the report without you saying what fired it.
@@ -130,12 +128,12 @@ Run anything that can take over a minute in the background so you can post a sta
 7. **Score, if asked.** When the user picked "Score it", or asked for scores at any point:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/clp-session-score" --bundle /tmp/yscope-clp-bundles/<SESSION_ID> --format table
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp-session" score --bundle /tmp/yscope-clp-bundles/<SESSION_ID> --format table
    ```
 
    It runs the measurement pass, applies the scale's ladders, writes `/tmp/clp-session-scores.json` for a dashboard, and prints a table for you. It validates the scale first and **refuses on a bad one** — relay the `SCALE_PROBLEM` lines to the user rather than falling back to the default.
 
-   **The division of labour is the point.** Measuring is `clp-session-facts`; mapping a value to a score through a declared ladder is `clp-session-score`, because it is a table lookup and arithmetic; choosing the thresholds is the customer's, in the scale file. What is left for you is what none of them can do: what the scores mean, which of platform, provider, model, task or environment each low axis belongs to, and anything the ladder has no rung for. Do not recompute a score or a group mean by hand — quote the tool's.
+   **The division of labour is the point.** Measuring is `clp-session facts`; mapping a value to a score through a declared ladder is `clp-session score`, because it is a table lookup and arithmetic; choosing the thresholds is the customer's, in the scale file. What is left for you is what none of them can do: what the scores mean, which of platform, provider, model, task or environment each low axis belongs to, and anything the ladder has no rung for. Do not recompute a score or a group mean by hand — quote the tool's.
 
    Add `--cohort task_type=… --cohort repo=…` when the user has said what kind of work this was; a trend needs sessions grouped by similar shape, and nothing in the log infers that reliably. The JSON records which cohort keys were left unset so a dashboard can tell "not grouped" from "grouped as null".
 
@@ -145,9 +143,9 @@ Run anything that can take over a minute in the background so you can post a sta
 
 8. **Write and save the report.** Open phase 5. Spawn the report writer (Agent tool, model unset) with the facts file, the results of the deeper checks, the user's context and focus, and the prompt in the reference. Every figure is already computed, so it runs no searches and does no arithmetic: it puts facts into words, leads with the focus, treats the user's context as a claim to check against the records, may quote no figure absent from the facts file, and writes to `/tmp/clp-session-report.md`.
 
-   **Right after spawning it, ask where to save** (AskUserQuestion; wording in the reference). Run `log-shape-report-save --list-formats` first (instant) so every format offered is one this machine can produce: PDF only when it prints a `PDF_ENGINE` path, and a claude.ai page only when the Artifact tool is in this session's tool list. Nobody to ask → the report stays at `/tmp/clp-session-report.md`.
+   **Right after spawning it, ask where to save** (AskUserQuestion; wording in the reference). Run `clp-report save --list-formats` first (instant) so every format offered is one this machine can produce: PDF only when it prints a `PDF_ENGINE` path, and a claude.ai page only when the Artifact tool is in this session's tool list. Nobody to ask → the report stays at `/tmp/clp-session-report.md`.
 
-   Then save it as chosen with `log-shape-report-save`: one run writes every chosen format and never overwrites a file; for a claude.ai page it writes a finished page that you publish with the Artifact tool as-is. A format that fails gets one line with the reason; the others are still saved.
+   Then save it as chosen with `clp-report save`: one run writes every chosen format and never overwrites a file; for a claude.ai page it writes a finished page that you publish with the Artifact tool as-is. A format that fails gets one line with the reason; the others are still saved.
 
 9. **Close.** Three to five findings, most important first, with inferences labelled; the caveats that change how to read them; and where the report is — each saved path and the claude.ai link. Do not restate the report. Then offer at most three next steps, one line each:
    - Drill into a specific finding (patterns in `session-forensics.md`).

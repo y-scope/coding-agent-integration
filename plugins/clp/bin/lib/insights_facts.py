@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-log-shape-insight-facts - compute every number of a log-insights report in
+clp-insights facts - compute every number of a log-insights report in
 code, so the report writer only has to put them into words
 (log-insights skill, step 7).
 
@@ -24,11 +23,11 @@ Inputs (all produced earlier in the run):
                          /tmp/log-shape-query-results.ndjson). The two are
                          numbered separately, so a query is cited as
                          [baseline #N] or [plan #N].
-  --category-totals F    log-shape-insight-extract's {category: {templates,
+  --category-totals F    clp-insights extract's {category: {templates,
                          records, priority, why}} (default:
                          /tmp/log-shape-category-totals.json, or "none" when
                          frequencies were unavailable)
-  --focus-file F         log-shape-focus's record of the user's focus and
+  --focus-file F         clp-insights focus's record of the user's focus and
                          context (default: /tmp/log-shape-focus.json; absent
                          when no one was asked). Its section comes first, with
                          the results of the focus entries (origin "focus").
@@ -545,6 +544,3 @@ def main(argv=None) -> int:
     print(f"FACTS_FILE={args.out}")
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

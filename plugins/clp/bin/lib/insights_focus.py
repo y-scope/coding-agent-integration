@@ -1,23 +1,22 @@
-#!/usr/bin/env python3
 """
-log-shape-focus - turn the user's answer to "what should this analysis focus
+clp-insights focus - turn the user's answer to "what should this analysis focus
 on?" into queries for the running plan pool (log-insights skill).
 
 The classifier ranks its categories and writes, besides the core plan that
 runs on every analysis, "drill" entries per category that run only when the
-user focuses on that category (log-shape-insight-extract writes them to
+user focuses on that category (clp-insights extract writes them to
 /tmp/log-shape-drill-plan.txt). This tool queues the chosen categories' drill
 entries, plus any entries the agent wrote from the user's own words, into the
-plan runner's inbox (log-shape-query-plan-run --inbox), then closes the inbox so
+plan runner's inbox (clp-insights run --inbox), then closes the inbox so
 the pool finishes. It also records the focus and the user's context in
-/tmp/log-shape-focus.json, which log-shape-insight-facts puts at the top of the
+/tmp/log-shape-focus.json, which clp-insights facts puts at the top of the
 facts file for the report writer.
 
 Call it ONCE per analysis: the runner stops reading the inbox at the close
 line, so entries queued by a second call are not run.
 
 Usage:
-  log-shape-focus [--category C]... [--entries-file F] [--everything]
+  clp-insights focus [--category C]... [--entries-file F] [--everything]
                 [--question TEXT] [--context TEXT]
 
 Options:
@@ -52,7 +51,7 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from classification import category_names  # noqa: E402
 from kql_build import FilterError, check_entry  # noqa: E402
 
@@ -143,6 +142,3 @@ def main(argv=None):
     print("INBOX_CLOSED=1")
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

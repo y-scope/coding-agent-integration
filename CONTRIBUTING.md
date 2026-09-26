@@ -20,12 +20,8 @@ plugins/clp/.codex-plugin/plugin.json
 plugins/clp/bin/
     Restricted-passthrough bash wrappers (clp-s-*) and shared lib/clp-common.sh,
     plus local helpers that are not clp-s passthroughs (clp-detect-logs, structurize.py,
-    log-shape-cache, log-shape-insights-bootstrap, log-shape-cluster,
-    log-shape-insight-extract, log-shape-baseline-plan, log-shape-query-plan-run,
-    log-shape-insight-facts, log-shape-report-check, log-shape-report-save,
-    clp-compress-status,
-    kql-build,
-    kql-validate-wildcards; shared Python in lib/kql_build.py and
+    log-shape-cache, log-shape-cluster, clp-insights, clp-report,
+    clp-compress-status, kql-build; shared Python in lib/kql_build.py and
     lib/log_shapes.py).
 plugins/clp/skills-claude/
     Claude Code skills: compress, compress-folder, search, log-insights,
@@ -172,7 +168,7 @@ A few things to check before opening a PR, in addition to the preflight commands
 - New `SKILL.md` files have YAML frontmatter with both `name` and `description`.
 - New wrapper flags appear in the wrapper's allowlist, the corresponding `SKILL.md` in **both** product trees, and `plugins/clp/README.md`.
 - A wrapper change that exposes new behavior is reflected in the wrapper's `--help` (or equivalent) text.
-- A change to `plugins/clp/scoring-scale.json` passes `plugins/clp/bin/clp-session-facts --check-scale` (the release workflow runs it too). Every axis needs a `basis` and a `rationale`: a threshold nobody can justify is not a threshold. Moving a rung is a behavior change — bump `scale_version`, since scores from before and after are not comparable.
+- A change to `plugins/clp/scoring-scale.json` passes `plugins/clp/bin/clp-session facts --check-scale` (the release workflow runs it too). Every axis needs a `basis` and a `rationale`: a threshold nobody can justify is not a threshold. Moving a rung is a behavior change — bump `scale_version`, since scores from before and after are not comparable.
 
 ## Release process
 

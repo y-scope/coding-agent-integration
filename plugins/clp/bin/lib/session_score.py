@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-clp-session-score - apply a scale to clp-session-facts' axis measurements and
+clp-session score - apply a scale to clp-session facts' axis measurements and
 emit the scores as JSON for a dashboard.
 
 Why this is code and not a prompt: applying a declared ladder is a table lookup
@@ -17,10 +16,10 @@ end up on a dashboard. Everything past the lookup belongs to the agent and the
 report.
 
 Inputs (exactly one of the first two):
-  --bundle DIR      Run `clp-session-facts --axes` here and score its stdout.
+  --bundle DIR      Run `clp-session facts --axes` here and score its stdout.
   --axes-file FILE  Score a previously captured `--axes` stdout instead, so a
                     caller can re-score without re-measuring.
-  --archive DIR     Passed through to clp-session-facts.
+  --archive DIR     Passed through to clp-session facts.
   --scale FILE      The scale to apply. Without it, the first of these that
                     exists wins, and the JSON records which:
                       ./.clp-scoring-scale.json          (source project-local)
@@ -39,7 +38,7 @@ Inputs (exactly one of the first two):
                     terminal-width summary, and still writes the JSON.
 
 The scale is validated before anything is scored, by shelling out to
-`clp-session-facts --check-scale` so that there is one validator and not two.
+`clp-session facts --check-scale` so that there is one validator and not two.
 That form needs no bundle and reads no catalog, so a scale can be checked in
 either mode. If it reports defects they are printed verbatim, no JSON is
 written, and the exit code is 2. A customer scale that does not validate is
@@ -58,7 +57,7 @@ got without a person", so in a supervised session it is left unscored rather
 than marked down for waiting. A gated-out axis appears in `unscored` with
 `"gated": true`, so a consumer can tell a policy skip from something the session
 could not measure, and its group's mean rests on one fewer axis. The
-measurement itself is untouched: clp-session-facts still reports C4's value in
+measurement itself is untouched: clp-session facts still reports C4's value in
 every run, gate or no gate.
 
 Each scored axis carries the scale's `basis` and `rationale` (and `anchors`
@@ -67,14 +66,14 @@ basis. A score is only as good as the threshold that produced it, so the
 justification travels with it: a reader can see at a glance how much of a
 scorecard rests on a measurement and how much on a reasoned guess.
 
-`provenance.bundle` comes from the BUNDLE= line clp-session-facts prints, so a
+`provenance.bundle` comes from the BUNDLE= line clp-session facts prints, so a
 re-score from a capture records the same bundle as the run that measured it. A
 capture old enough to predate that line leaves the field null and adds
 `provenance.bundle_source: "not-recorded-in-capture"`, so a consumer can tell an
 unrecorded value from a missing one.
 
 An axis whose measured value is `n/a` is not scored. It goes in `unscored` with
-the reason clp-session-facts gave, and it is left out of its group's mean, which
+the reason clp-session facts gave, and it is left out of its group's mean, which
 is reported as null when a group has no scored axis at all. A missing
 measurement and a bad one are different findings, and neither is a zero.
 
@@ -96,9 +95,10 @@ SCHEMA_VERSION = "1.3.1"   # 1.2.0 gated unscoring; 1.3.0 min_denominator; 1.3.1
 # table; the full word and the rationale are in the JSON. A scorecard resting
 # mostly on `judgement` is not wrong, but a reader should be able to see it.
 BASIS_SHORT = {"definitional": "def", "mechanism": "mech", "observed": "obs", "judgement": "judg"}
-HERE = Path(__file__).resolve().parent
-PLUGIN_ROOT = HERE.parent
-FACTS_TOOL = HERE / "clp-session-facts"
+# The sibling tools this module runs live one level up, in bin/.
+BIN_DIR = Path(__file__).resolve().parent.parent
+PLUGIN_ROOT = BIN_DIR.parent
+FACTS_TOOL = BIN_DIR / "clp-session"
 SUBPROCESS_TIMEOUT = 3600
 
 # The cohort keys a dashboard can group on. Anything else the caller passes is
@@ -117,7 +117,7 @@ def scale_candidates():
 
 
 # ---------------------------------------------------------------------------
-# clp-session-facts' --axes stdout
+# clp-session facts' --axes stdout
 # ---------------------------------------------------------------------------
 
 AXIS_HEAD = re.compile(r"^AXIS (\S+) group=(\S+) value=(\S+)(.*)$")
@@ -129,7 +129,7 @@ SCALE_LINE = re.compile(r"^(SCALE_OK|SCALE_PROBLEM=)")
 
 
 def parse_axes_output(text):
-    """clp-session-facts --axes stdout as {keys, axes, alerts, scale_lines}."""
+    """clp-session facts --axes stdout as {keys, axes, alerts, scale_lines}."""
     out = {"keys": {}, "axes": [], "alerts": [], "scale_lines": []}
     for line in text.splitlines():
         line = line.rstrip()
@@ -217,23 +217,23 @@ def resolve_scale(given):
 
 
 def run_facts(argv):
-    """(stdout, stderr, returncode) from clp-session-facts, or a clean failure."""
+    """(stdout, stderr, returncode) from clp-session facts, or a clean failure."""
     if not FACTS_TOOL.is_file():
-        return None, f"clp-session-facts is not next to this script ({FACTS_TOOL})", 1
+        return None, f"clp-session is not next to this script ({FACTS_TOOL})", 1
     try:
-        proc = subprocess.run([str(FACTS_TOOL)] + argv, capture_output=True, text=True,
+        proc = subprocess.run([str(FACTS_TOOL), "facts"] + argv, capture_output=True, text=True,
                               timeout=SUBPROCESS_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return None, f"clp-session-facts did not finish within {SUBPROCESS_TIMEOUT}s", 1
+        return None, f"clp-session facts did not finish within {SUBPROCESS_TIMEOUT}s", 1
     except OSError as exc:
-        return None, f"clp-session-facts could not be run: {exc}", 1
+        return None, f"clp-session facts could not be run: {exc}", 1
     return proc.stdout, proc.stderr, proc.returncode
 
 
 def validate_scale_standalone(scale_path):
     """The validator's verdict on a scale, with no session involved.
 
-    `clp-session-facts --check-scale` alone reads the scale and its own axis
+    `clp-session facts --check-scale` alone reads the scale and its own axis
     metadata, so this needs no bundle and no catalog. Returns (problem_lines,
     error): both empty means the scale is sound. An error means the verdict is
     unknown, and the caller must refuse to score, because an unchecked scale is
@@ -249,7 +249,7 @@ def validate_scale_standalone(scale_path):
     if any(ln.startswith("SCALE_OK") for ln in lines):
         return [], None
     detail = " ".join((err or out or "no output").split())[:400]
-    return [], (f"clp-session-facts --check-scale returned neither SCALE_OK nor "
+    return [], (f"clp-session facts --check-scale returned neither SCALE_OK nor "
                 f"SCALE_PROBLEM (exit {code}): {detail}")
 
 
@@ -370,7 +370,7 @@ def gate_verdict(spec, cohort):
 
 def score_session(measured, scale, scale_path, scale_source, bundle, facts_file, cohort):
     """The scored document. Every number in it is a lookup or a mean."""
-    # clp-session-facts prints BUNDLE=, so a captured --axes stdout says what it
+    # clp-session facts prints BUNDLE=, so a captured --axes stdout says what it
     # was measured from and a re-score keeps the same provenance. A capture made
     # before that line existed says so, rather than looking like a missing value.
     recorded = measured["keys"].get("BUNDLE")
@@ -390,7 +390,7 @@ def score_session(measured, scale, scale_path, scale_source, bundle, facts_file,
         label = spec.get("label") or axis["id"]
         if axis["value"] is None:
             unscored.append({"id": axis["id"], "group": axis["group"], "label": label,
-                             "reason": axis["reason"] or "clp-session-facts gave no reason"})
+                             "reason": axis["reason"] or "clp-session facts gave no reason"})
             continue
         if not spec:
             unscored.append({"id": axis["id"], "group": axis["group"], "label": label,
@@ -580,11 +580,11 @@ def wrap_reason(text, width=88):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="Apply a scale to clp-session-facts' axis measurements and emit the scores.")
+        description="Apply a scale to clp-session facts' axis measurements and emit the scores.")
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--bundle", help="a clp-bundle bundle directory to measure and score")
-    source.add_argument("--axes-file", help="a captured `clp-session-facts --axes` stdout to score")
-    ap.add_argument("--archive", default=None, help="passed through to clp-session-facts")
+    source.add_argument("--axes-file", help="a captured `clp-session facts --axes` stdout to score")
+    ap.add_argument("--archive", default=None, help="passed through to clp-session facts")
     ap.add_argument("--scale", default=None, help="the scale file to apply")
     ap.add_argument("--cohort", action="append", metavar="KEY=VALUE", default=[],
                     help="a cohort key, repeatable")
@@ -626,7 +626,7 @@ def main(argv=None) -> int:
             return refuse(scale_path, problems)
         if code != 0 or not measured["axes"]:
             detail = " ".join((err or out or "no output").split())[:400]
-            print(f"error: clp-session-facts --axes failed (exit {code}): {detail}", file=sys.stderr)
+            print(f"error: clp-session facts --axes failed (exit {code}): {detail}", file=sys.stderr)
             return 1
     else:
         bundle = None
@@ -638,7 +638,7 @@ def main(argv=None) -> int:
         measured = parse_axes_output(text)
         if not measured["axes"]:
             print(f"error: {args.axes_file} holds no AXIS lines; it is not a "
-                  "`clp-session-facts --axes` capture", file=sys.stderr)
+                  "`clp-session facts --axes` capture", file=sys.stderr)
             return 1
         # The capture says nothing about the scale, so validate it on its own.
         problems, error = validate_scale_standalone(scale_path)
@@ -676,6 +676,3 @@ def refuse(scale_path, problems):
           "substituted for a broken one, because that would hide the problem.", file=sys.stderr)
     return 2
 
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -2,7 +2,7 @@
 
 Read this at step 4 of the `claude-code-trajectory` skill. It holds the seven categories, the wording of the three questions, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
 
-Every figure quoted anywhere in this pass comes from the facts file that `clp-session-facts` writes. Nothing here recomputes a number.
+Every figure quoted anywhere in this pass comes from the facts file that `clp-session facts` writes. Nothing here recomputes a number.
 
 ## The seven categories
 
@@ -170,7 +170,7 @@ how many there were.>
 
 ## Scoring
 
-**The script measures; you score.** `clp-session-facts --axes` computes each axis's raw value and the components behind it, and assigns nothing. You map each value to 0–10 using a scale file, because a customer's thresholds are their own: what counts as an acceptable stall rate or cache hit rate is a policy decision, not a measurement.
+**The script measures; you score.** `clp-session facts --axes` computes each axis's raw value and the components behind it, and assigns nothing. You map each value to 0–10 using a scale file, because a customer's thresholds are their own: what counts as an acceptable stall rate or cache hit rate is a policy decision, not a measurement.
 
 ### Find the scale
 
@@ -181,12 +181,12 @@ Load the first of these that exists, and say in the report which one you used an
 3. `.claude/clp-scoring-scale.json`
 4. `${CLAUDE_PLUGIN_ROOT}/scoring-scale.json` — the shipped default
 
-Validate it before trusting it: `clp-session-facts --axes --check-scale --scale FILE` prints `SCALE_OK`, or one `SCALE_PROBLEM=` line per defect (a missing axis, a malformed or non-exhaustive ladder). A customer scale that fails the check is reported to the user as-is; do not fix it silently and do not fall back to the default without saying so.
+Validate it before trusting it: `clp-session facts --axes --check-scale --scale FILE` prints `SCALE_OK`, or one `SCALE_PROBLEM=` line per defect (a missing axis, a malformed or non-exhaustive ladder). A customer scale that fails the check is reported to the user as-is; do not fix it silently and do not fall back to the default without saying so.
 
 ### Apply it — with the tool, not by hand
 
 ```bash
-clp-session-score --bundle BUNDLE --format table [--scale FILE] [--cohort task_type=… --cohort repo=…]
+clp-session score --bundle BUNDLE --format table [--scale FILE] [--cohort task_type=… --cohort repo=…]
 ```
 
 It measures, applies each ladder, computes the group means, writes `/tmp/clp-session-scores.json`, and prints a table. **Do not map a value to a score or average a group yourself** — a ladder lookup and a mean are exactly the arithmetic that goes wrong, and the tool records which rung matched so a reader can check it.
@@ -207,7 +207,7 @@ Some axes are only meaningful under one intent, and the scale gates them on a co
 
 **Ask for it when you score.** Scoring is already opt-in, so one more question on that path is cheap, and guessing the intent from the log is not reliable. If the user's earlier context already makes it clear, use that instead of asking again. If they decline or cannot say, leave it undeclared: an unscored axis with a stated reason is right, and inventing a mode to fill the gap is not.
 
-The raw value is measured and reported either way — `clp-session-facts` never applies the gate — so the human-and-idle share stays visible in the Time category even when the axis is not scored. Note also what the gate does **not** do: it accounts for intent, not for quality. The logs cannot tell you whether unattended work was any good, only whether it was delivered.
+The raw value is measured and reported either way — `clp-session facts` never applies the gate — so the human-and-idle share stays visible in the Time category even when the axis is not scored. Note also what the gate does **not** do: it accounts for intent, not for quality. The logs cannot tell you whether unattended work was any good, only whether it was delivered.
 
 | Group | Axes | Owner |
 |---|---|---|
@@ -229,7 +229,7 @@ The raw value is measured and reported either way — `clp-session-facts` never 
 
 ## Ask where to save the report
 
-Right after spawning the writer (step 8). One AskUserQuestion, header `Save`, options built from `log-shape-report-save --list-formats`:
+Right after spawning the writer (step 8). One AskUserQuestion, header `Save`, options built from `clp-report save --list-formats`:
 
 > **Where should the report go?**
 >

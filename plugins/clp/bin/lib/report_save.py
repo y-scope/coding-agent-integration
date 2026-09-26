@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-log-shape-report-save - save a finished log-insights report where the user
+clp-report save - save a finished log-insights report where the user
 asked, as Markdown, HTML, PDF, or a page to publish on claude.ai
 (log-insights skill, step 10).
 
@@ -629,6 +628,3 @@ def main():
         print(f"SAVED_{fmt.upper()}={out}")
     return status
 
-
-if __name__ == "__main__":
-    sys.exit(main())

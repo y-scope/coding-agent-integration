@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""
+clp-insights - the log-insights pipeline, one subcommand per stage.
+
+Each stage is a program in its own right: it reads files the previous stage
+wrote and writes the ones the next stage reads, so the skill can stop, show the
+user what it has, and carry on. This dispatcher only picks the stage; every flag
+belongs to the stage, and `clp-insights <SUB> --help` documents it.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from subcommand import dispatch  # noqa: E402
+
+SUMMARY = "Run one stage of the log-insights pipeline."
+
+SUBCOMMANDS = {
+    "bootstrap": ("insights-bootstrap.sh",
+                  "sample an archive's fields, template frequencies and classification cache"),
+    "baseline-plan": ("insights_baseline_plan.py",
+                      "write a run's app-agnostic baseline queries to their own plan file"),
+    "extract": ("insights_extract.py",
+                "build the report writer's prompt pieces from a classification"),
+    "run": ("insights_run.py",
+            "execute a query plan and report each entry's result as it completes"),
+    "focus": ("insights_focus.py",
+              "turn the user's answer about what to focus on into queries for the plan pool"),
+    "facts": ("insights_facts.py",
+              "compute every number of a log-insights report in code"),
+}
+
+if __name__ == "__main__":
+    sys.exit(dispatch("clp-insights", SUMMARY, SUBCOMMANDS, sys.argv[1:]))

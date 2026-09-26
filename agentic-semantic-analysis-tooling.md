@@ -32,7 +32,7 @@ Read CLP's intrinsic metadata to learn what can be queried: fields and nesting, 
 |---|---|---|---|---|
 | `clp-s-search-kql` with `stats.schema_tree` | Reads stored record structure. | Archive. | Schema metadata. | Discover field paths and nesting before choosing filters. |
 | `clp-s-search-kql` with `stats.log_shapes` | Reads stored message patterns. | Archive. | Raw shape dictionary with identifiers and available counts. | Discover the event vocabulary and retain links to stored patterns. |
-| `log-shape-insights-bootstrap` — helper | Samples records, normalizes the dictionary, and checks for reusable classifications. | Archive and optional sampling/cache settings. | Summary, sampled field distributions, template files, and classification-cache status. | Prepare an initial working context for an unfamiliar archive. |
+| `clp-insights bootstrap` — helper | Samples records, normalizes the dictionary, and checks for reusable classifications. | Archive and optional sampling/cache settings. | Summary, sampled field distributions, template files, and classification-cache status. | Prepare an initial working context for an unfamiliar archive. |
 
 **Match discovery to the data scope.** These stats commands and bootstrap describe their input archive; they do not accept an arbitrary KQL predicate for filtered discovery. If the archive contains exactly the selected data, the scopes match. Otherwise, treat its metadata as candidates and execute scoped queries to establish which fields and patterns occur. A later record filter does not retroactively scope an archive-wide dictionary.
 
@@ -52,7 +52,7 @@ Use discovered fields and patterns to retrieve evidence from the compressed data
 | Tool | What it does | Input | Output | When to use |
 |---|---|---|---|---|
 | `clp-s-search-kql` — wrapper | Executes key-value, wildcard, and semantic search queries, including combined predicates. | Archive, KQL query, and optional time bounds/projection. | Matching results on stdout, plus wrapper metadata headers. | Narrow the investigation, test a hypothesis, or retrieve supporting records. |
-| `log-shape-query-plan-run` — helper | Executes a classification's query plan through `clp-s-search-kql`, entry by entry, rendering each entry's structured `match` filter to KQL with `kql-build`, and reports each result as it completes. | Archive and the extracted query plan. | Per-entry KQL, count, share of records, status (ok, zero, error, timeout, non-selective), elapsed time, and samples, as NDJSON and a Markdown table. | Run a stored plan with visible progress and see which of its queries fail or do not discriminate. |
+| `clp-insights run` — helper | Executes a classification's query plan through `clp-s-search-kql`, entry by entry, rendering each entry's structured `match` filter to KQL with `kql-build`, and reports each result as it completes. | Archive and the extracted query plan. | Per-entry KQL, count, share of records, status (ok, zero, error, timeout, non-selective), elapsed time, and samples, as NDJSON and a Markdown table. | Run a stored plan with visible progress and see which of its queries fail or do not discriminate. |
 | `clp-s-decompress` — wrapper | Reconstructs stored records. | Archive. | Decompressed records. | Export or inspect raw data when query results are insufficient. |
 
 Filter wrapper metadata headers before parsing search output as NDJSON. Counting returned JSON lines is local processing, not archive-side aggregation; a record can also contain multiple events or tool calls.
@@ -141,7 +141,7 @@ flowchart TD
 
 ### Investigate an operational symptom
 
-Start with an archive and a declared service/time scope. Use `log-shape-insights-bootstrap` and schema discovery to establish candidate context, then scoped `clp-s-search-kql` queries to check what occurs. Use semantic search to locate relevant events; optionally cluster and classify the inventory to examine other categories. Query occurrences and compare with an explicit reference window or expectation.
+Start with an archive and a declared service/time scope. Use `clp-insights bootstrap` and schema discovery to establish candidate context, then scoped `clp-s-search-kql` queries to check what occurs. Use semantic search to locate relevant events; optionally cluster and classify the inventory to examine other categories. Query occurrences and compare with an explicit reference window or expectation.
 
 If semantic matches define the selected data, the inventory covers those matches. To evaluate coverage beyond semantic retrieval, use a separately declared broader scope. The [demo walkthrough](agentic-semantic-analysis-demo.md) details the evaluation procedure; it does not yet contain measured results.
 

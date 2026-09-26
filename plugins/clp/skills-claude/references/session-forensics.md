@@ -52,9 +52,9 @@ CLP searches the compressed archive — unmatched records are never decompressed
 | Patch failures | `"git apply" AND ("failed" OR "reject" OR "patch does not apply")` |
 | Semantic | `semantic("slow operations")`, `semantic("authentication failures")`, `semantic("errors") AND level:error` |
 
-Turn timing comes from `clp-s-session-turns ARCHIVE`, not KQL. Do not add up `subtype:turn_duration` records: they nest inside each other and can be negative.
+Turn timing comes from `clp-session turns ARCHIVE`, not KQL. Do not add up `subtype:turn_duration` records: they nest inside each other and can be negative.
 
-**If `clp-s-session-turns` or `clp-bundle repo` fails with `Failed to open archive … Error code: 18`**, the search wrapper resolved a `clp-s` too old to read the archive (a stale `/usr/bin/clp-s`, say). Set `CLP_S_BIN` to the build that made the bundle — the catalog records it in its `bundle.clp_s` row — and run again. `clp-session-facts` already does this for its own subprocesses, so the failure only shows up when you call these two by hand.
+**If `clp-session turns` or `clp-bundle repo` fails with `Failed to open archive … Error code: 18`**, the search wrapper resolved a `clp-s` too old to read the archive (a stale `/usr/bin/clp-s`, say). Set `CLP_S_BIN` to the build that made the bundle — the catalog records it in its `bundle.clp_s` row — and run again. `clp-session facts` already does this for its own subprocesses, so the failure only shows up when you call these two by hand.
 
 Field discovery: `clp-s-schema-tree ARCHIVE` lists every field with its type and record count.
 

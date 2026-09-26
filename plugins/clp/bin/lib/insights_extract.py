@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-log-shape-insight-extract - build the report writer's prompt pieces from a
+clp-insights extract - build the report writer's prompt pieces from a
 classification (log-insights skill, step 7).
 
 The classification (`log-shape-cache get`, `log-shape-cache merge`, or
@@ -28,7 +27,7 @@ the bootstrap already produced, never recomputed), each truncated to
 result stays one line per template.
 
 Usage:
-  log-shape-insight-extract [options]
+  clp-insights extract [options]
 
 Options:
   --classification-file F   Classification JSON
@@ -52,10 +51,10 @@ Options:
                              (default: /tmp/log-shape-query-plan.txt)
   --out-drill-plan F        Where to write the "drill" entries the same way,
                              grouped by category; they run only when the user
-                             focuses on their category (log-shape-focus)
+                             focuses on their category (clp-insights focus)
                              (default: /tmp/log-shape-drill-plan.txt)
   --focus-inbox F           The inbox the plan runner reads focus entries from
-                             (log-shape-query-plan-run --inbox); emptied here,
+                             (clp-insights run --inbox); emptied here,
                              with the previous run's focus file
                              (--focus-file), so a new analysis starts with no
                              focus (defaults: /tmp/log-shape-focus-inbox.ndjson,
@@ -95,7 +94,7 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from classification import category_names, plan_errors, priority_rank  # noqa: E402
 from log_shapes import default_max_chars, prefix_hash, template_hash  # noqa: E402
 
@@ -325,6 +324,3 @@ def main(argv=None) -> int:
 
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())
