@@ -1,0 +1,572 @@
+#!/usr/bin/env python3
+"""
+clp-session-score - apply a scale to clp-session-facts' axis measurements and
+emit the scores as JSON for a dashboard.
+
+Why this is code and not a prompt: applying a declared ladder is a table lookup
+and averaging a handful of integers is arithmetic, and an LLM asked to do either
+across 20 axes gets rungs and group means wrong. So the lookup lives here.
+
+Why it is only a lookup: choosing the thresholds is policy, and policy belongs
+to the customer, in the scale file. This script therefore makes no judgement the
+scale does not already encode. It applies no penalty, weights nothing, writes no
+narrative, attributes no cause, and emits **no overall composite anywhere** -
+not even as a null field. The four groups have different owners, a single number
+hides exactly the signal each owner needs, and a field that exists at all will
+end up on a dashboard. Everything past the lookup belongs to the agent and the
+report.
+
+Inputs (exactly one of the first two):
+  --bundle DIR      Run `clp-session-facts --axes` here and score its stdout.
+  --axes-file FILE  Score a previously captured `--axes` stdout instead, so a
+                    caller can re-score without re-measuring.
+  --archive DIR     Passed through to clp-session-facts.
+  --scale FILE      The scale to apply. Without it, the first of these that
+                    exists wins, and the JSON records which:
+                      ./.clp-scoring-scale.json          (source project-local)
+                      ./.claude/clp-scoring-scale.json   (source claude-dir)
+                      <plugin root>/scoring-scale.json   (source plugin-default)
+                    A path given with --scale has source `explicit`.
+  --cohort KEY=VALUE  Repeatable and free-form. The conventional keys are
+                    task_type, repo and duration_band; any the caller omits are
+                    listed in cohort._unset so a dashboard can tell "not grouped"
+                    from "grouped as null". duration_band is DERIVED from the
+                    session's wall-clock hours when the caller does not pass it
+                    (under-an-hour, hours, full-day, multi-day).
+  --out FILE        Where the JSON goes (default /tmp/clp-session-scores.json).
+  --format json|table
+                    json (default) writes only the JSON. table also prints a
+                    terminal-width summary, and still writes the JSON.
+
+The scale is validated before anything is scored, by shelling out to
+`clp-session-facts --check-scale` so that there is one validator and not two.
+That form needs no bundle and reads no catalog, so a scale can be checked in
+either mode. If it reports defects they are printed verbatim, no JSON is
+written, and the exit code is 2. A customer scale that does not validate is
+never quietly swapped for the default: the caller has to see the problem.
+
+Each scored axis carries the scale's `basis` and `rationale` (and `anchors`
+where the scale gives them), and `basis_summary` counts the scored axes by
+basis. A score is only as good as the threshold that produced it, so the
+justification travels with it: a reader can see at a glance how much of a
+scorecard rests on a measurement and how much on a reasoned guess.
+
+`provenance.bundle` comes from the BUNDLE= line clp-session-facts prints, so a
+re-score from a capture records the same bundle as the run that measured it. A
+capture old enough to predate that line leaves the field null and adds
+`provenance.bundle_source: "not-recorded-in-capture"`, so a consumer can tell an
+unrecorded value from a missing one.
+
+An axis whose measured value is `n/a` is not scored. It goes in `unscored` with
+the reason clp-session-facts gave, and it is left out of its group's mean, which
+is reported as null when a group has no scored axis at all. A missing
+measurement and a bad one are different findings, and neither is a zero.
+
+Exit codes: 0 ok, 1 an input could not be read, 2 the scale is invalid.
+"""
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"   # 1.1.0 adds each axis's basis/rationale/anchors and basis_summary
+
+# The scale says what each threshold rests on. These are the short forms for the
+# table; the full word and the rationale are in the JSON. A scorecard resting
+# mostly on `judgement` is not wrong, but a reader should be able to see it.
+BASIS_SHORT = {"definitional": "def", "mechanism": "mech", "observed": "obs", "judgement": "judg"}
+HERE = Path(__file__).resolve().parent
+PLUGIN_ROOT = HERE.parent
+FACTS_TOOL = HERE / "clp-session-facts"
+SUBPROCESS_TIMEOUT = 3600
+
+# The cohort keys a dashboard can group on. Anything else the caller passes is
+# kept as given; these are the ones whose absence is worth reporting.
+COHORT_KEYS = ("task_type", "repo", "duration_band")
+
+# Wall-clock hours -> duration_band, when the caller did not name one. Ordered,
+# first match wins; the last band catches everything above.
+DURATION_BANDS = ((1.0, "under-an-hour"), (8.0, "hours"), (24.0, "full-day"), (None, "multi-day"))
+
+# The scale lookup order, as (source name, path relative to cwd or absolute).
+def scale_candidates():
+    return (("project-local", Path(".clp-scoring-scale.json")),
+            ("claude-dir", Path(".claude") / "clp-scoring-scale.json"),
+            ("plugin-default", PLUGIN_ROOT / "scoring-scale.json"))
+
+
+# ---------------------------------------------------------------------------
+# clp-session-facts' --axes stdout
+# ---------------------------------------------------------------------------
+
+AXIS_HEAD = re.compile(r"^AXIS (\S+) group=(\S+) value=(\S+)(.*)$")
+AXIS_TAIL = re.compile(r'\s(components|reason)="(.*)"\s*$', re.S)
+AXIS_UNIT = re.compile(r"\bunit=(\S+)")
+ALERT_LINE = re.compile(r"^ALERT=([^:\s]+):(\S+) value=(\S+) threshold=(\S+)\s*$")
+SCALE_LINE = re.compile(r"^(SCALE_OK|SCALE_PROBLEM=)")
+
+
+def parse_axes_output(text):
+    """clp-session-facts --axes stdout as {keys, axes, alerts, scale_lines}."""
+    out = {"keys": {}, "axes": [], "alerts": [], "scale_lines": []}
+    for line in text.splitlines():
+        line = line.rstrip()
+        if not line:
+            continue
+        if SCALE_LINE.match(line):
+            out["scale_lines"].append(line)
+            continue
+        alert = ALERT_LINE.match(line)
+        if alert:
+            out["alerts"].append({"category": alert.group(1), "slug": alert.group(2),
+                                  "value": as_number(alert.group(3)),
+                                  "threshold": alert.group(4)})
+            continue
+        head = AXIS_HEAD.match(line)
+        if head:
+            axis_id, group, raw, rest = head.groups()
+            components = reason = ""
+            tail = AXIS_TAIL.search(rest)
+            if tail:
+                if tail.group(1) == "components":
+                    components = tail.group(2)
+                else:
+                    reason = tail.group(2)
+                rest = rest[: tail.start()]
+            unit = AXIS_UNIT.search(rest)
+            out["axes"].append({"id": axis_id, "group": group,
+                                "value": None if raw == "n/a" else as_number(raw),
+                                "unit": unit.group(1) if unit else None,
+                                "components": components, "reason": reason})
+            continue
+        if "=" in line:
+            key, value = line.split("=", 1)
+            if key.isupper():
+                out["keys"][key] = value
+    return out
+
+
+def as_number(text):
+    """A bare number from the facts output: an int when it has no decimal point."""
+    try:
+        return int(text) if "." not in text else float(text)
+    except ValueError:
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+
+def to_float(value, default=None):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def to_int(value, default=None):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+# ---------------------------------------------------------------------------
+# the scale
+# ---------------------------------------------------------------------------
+
+def resolve_scale(given):
+    """(path, source) for the scale to apply, or (None, reason) when none exists."""
+    if given:
+        path = Path(given).expanduser()
+        if not path.is_file():
+            return None, f"--scale {path} does not exist"
+        return path.resolve(), "explicit"
+    for source, candidate in scale_candidates():
+        if candidate.is_file():
+            return candidate.resolve(), source
+    return None, ("no scale found: none of .clp-scoring-scale.json, "
+                  ".claude/clp-scoring-scale.json or "
+                  f"{PLUGIN_ROOT / 'scoring-scale.json'} exists")
+
+
+def run_facts(argv):
+    """(stdout, stderr, returncode) from clp-session-facts, or a clean failure."""
+    if not FACTS_TOOL.is_file():
+        return None, f"clp-session-facts is not next to this script ({FACTS_TOOL})", 1
+    try:
+        proc = subprocess.run([str(FACTS_TOOL)] + argv, capture_output=True, text=True,
+                              timeout=SUBPROCESS_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None, f"clp-session-facts did not finish within {SUBPROCESS_TIMEOUT}s", 1
+    except OSError as exc:
+        return None, f"clp-session-facts could not be run: {exc}", 1
+    return proc.stdout, proc.stderr, proc.returncode
+
+
+def validate_scale_standalone(scale_path):
+    """The validator's verdict on a scale, with no session involved.
+
+    `clp-session-facts --check-scale` alone reads the scale and its own axis
+    metadata, so this needs no bundle and no catalog. Returns (problem_lines,
+    error): both empty means the scale is sound. An error means the verdict is
+    unknown, and the caller must refuse to score, because an unchecked scale is
+    exactly what this guards against.
+    """
+    out, err, code = run_facts(["--check-scale", "--scale", str(scale_path)])
+    if out is None:
+        return [], err
+    lines = out.splitlines()
+    problems = [ln for ln in lines if ln.startswith("SCALE_PROBLEM=")]
+    if problems:
+        return problems, None
+    if any(ln.startswith("SCALE_OK") for ln in lines):
+        return [], None
+    detail = " ".join((err or out or "no output").split())[:400]
+    return [], (f"clp-session-facts --check-scale returned neither SCALE_OK nor "
+                f"SCALE_PROBLEM (exit {code}): {detail}")
+
+
+# ---------------------------------------------------------------------------
+# the lookup
+# ---------------------------------------------------------------------------
+
+def match_rung(axis_spec, value):
+    """The first rung whose bound `value` satisfies, or None.
+
+    Rungs are ordered highest score first, so the first match is the score. A
+    higher_is_better ladder is bounded below by `min`, a lower_is_better one
+    above by `max`. A validated scale always ends in an unconditional rung, so
+    None only happens on a scale that was not checked.
+    """
+    key = "min" if axis_spec.get("direction") == "higher_is_better" else "max"
+    for rung in axis_spec.get("ladder") or []:
+        bound = rung.get(key)
+        if not isinstance(bound, (int, float)) or isinstance(bound, bool):
+            continue
+        if (value >= bound) if key == "min" else (value <= bound):
+            return rung
+    return None
+
+
+def basis_summary(axes):
+    """How many of the scored axes rest on each kind of basis."""
+    counts = {basis: 0 for basis in BASIS_SHORT}
+    for axis in axes:
+        basis = axis.get("basis") or "unstated"
+        counts[basis] = counts.get(basis, 0) + 1
+    return {basis: n for basis, n in counts.items() if n}
+
+
+def duration_band(hours):
+    if hours is None:
+        return None
+    for limit, band in DURATION_BANDS:
+        if limit is None or hours < limit:
+            return band
+    return None
+
+
+def build_cohort(pairs, hours):
+    """The cohort key, with the conventional keys the caller left out listed."""
+    cohort = {}
+    for pair in pairs or []:
+        key, _, value = pair.partition("=")
+        key = key.strip()
+        if key:
+            cohort[key] = value.strip()
+    if "duration_band" not in cohort:
+        band = duration_band(hours)
+        if band:
+            cohort["duration_band"] = band
+    unset = [key for key in COHORT_KEYS if key not in cohort]
+    if unset:
+        cohort["_unset"] = unset
+    return cohort
+
+
+def score_session(measured, scale, scale_path, scale_source, bundle, facts_file):
+    """The scored document. Every number in it is a lookup or a mean."""
+    # clp-session-facts prints BUNDLE=, so a captured --axes stdout says what it
+    # was measured from and a re-score keeps the same provenance. A capture made
+    # before that line existed says so, rather than looking like a missing value.
+    recorded = measured["keys"].get("BUNDLE")
+    bundle_path = recorded or (str(bundle) if bundle else None)
+    provenance = {
+        "facts_file": facts_file,
+        "bundle": bundle_path,
+        "scored_by": f"clp-session-score {VERSION}",
+        "measured_by": f"clp-session-facts {VERSION}",
+    }
+    if bundle_path is None:
+        provenance["bundle_source"] = "not-recorded-in-capture"
+    by_id = {axis.get("id"): axis for axis in (scale.get("axes") or []) if axis.get("id")}
+    axes, unscored = [], []
+    for axis in measured["axes"]:
+        spec = by_id.get(axis["id"]) or {}
+        label = spec.get("label") or axis["id"]
+        if axis["value"] is None:
+            unscored.append({"id": axis["id"], "group": axis["group"], "label": label,
+                             "reason": axis["reason"] or "clp-session-facts gave no reason"})
+            continue
+        if not spec:
+            unscored.append({"id": axis["id"], "group": axis["group"], "label": label,
+                             "reason": f"{axis['id']} is not in {scale_path}, so no ladder applies"})
+            continue
+        rung = match_rung(spec, axis["value"])
+        if rung is None:
+            unscored.append({"id": axis["id"], "group": axis["group"], "label": label,
+                             "reason": (f"{axis['value']} falls off the end of the {axis['id']} "
+                                        "ladder, so the scale gives it no rung")})
+            continue
+        scored = {
+            "id": axis["id"],
+            "group": axis["group"],
+            "label": label,
+            "unit": axis["unit"] or spec.get("unit"),
+            "value": axis["value"],
+            "direction": spec.get("direction"),
+            "score": int(rung["score"]),
+            "rung": rung,
+            "cohort_relative": bool(spec.get("cohort_relative")),
+            # Carried through from the scale so a score never travels without
+            # the justification for the threshold that produced it.
+            "basis": spec.get("basis"),
+            "rationale": spec.get("rationale"),
+        }
+        if spec.get("anchors"):
+            scored["anchors"] = spec["anchors"]
+        scored["components"] = axis["components"]
+        axes.append(scored)
+
+    groups = []
+    for group_id, group in (scale.get("groups") or {}).items():
+        scored = [a["score"] for a in axes if a["group"] == group_id]
+        total = sum(1 for a in measured["axes"] if a["group"] == group_id)
+        groups.append({
+            "id": group_id,
+            "label": (group or {}).get("label"),
+            "owner": (group or {}).get("owner"),
+            # null, never 0: a group with nothing measured has no mean, and a
+            # zero here would read as a group that did badly.
+            "mean": round(sum(scored) / len(scored), 1) if scored else None,
+            "axes_scored": len(scored),
+            "axes_total": total,
+        })
+
+    hours = to_float(measured["keys"].get("WALL_CLOCK_HOURS"))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "session": {
+            "id": measured["keys"].get("SESSION_ID"),
+            "turns": to_int(measured["keys"].get("TURNS")),
+            "wall_clock_hours": hours,
+            "total_input_tokens": to_int(measured["keys"].get("TOTAL_INPUT_TOKENS")),
+        },
+        "cohort": None,   # filled in by the caller, which knows --cohort
+        "scale": {
+            "file": str(scale_path),
+            "scale_version": scale.get("scale_version"),
+            "name": scale.get("name"),
+            "source": scale_source,
+            "validated": True,
+        },
+        "provenance": provenance,
+        "axes": axes,
+        "groups": groups,
+        # Counted over the scored axes only, so it sums to len(axes): how much of
+        # this scorecard rests on a guess is itself a fact worth reporting.
+        "basis_summary": basis_summary(axes),
+        "unscored": unscored,
+        "alerts": measured["alerts"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# --format table
+# ---------------------------------------------------------------------------
+
+def rung_text(axis):
+    """The bound that put this axis on its rung, as the reader would check it."""
+    rung = axis.get("rung") or {}
+    if "min" in rung:
+        return f"min>={fmt_bound(rung['min'])}"
+    if "max" in rung:
+        return f"max<={fmt_bound(rung['max'])}"
+    return "-"
+
+
+def fmt_bound(value):
+    value = float(value)
+    if value >= 1e6:
+        return f"{value:.3g}"
+    return f"{value:g}"
+
+
+def fmt_value(value):
+    if value is None:
+        return "n/a"
+    if isinstance(value, float):
+        return f"{value:.4f}" if abs(value) < 1e5 else f"{value:.4g}"
+    return str(value)
+
+
+def print_table(doc):
+    session = doc["session"]
+    print(f"SESSION {session['id']}  turns={session['turns']}  "
+          f"wall_clock_hours={session['wall_clock_hours']}")
+    print(f"SCALE   {doc['scale']['name']} {doc['scale']['scale_version']} "
+          f"({doc['scale']['source']})  {doc['scale']['file']}")
+    cohort = {k: v for k, v in (doc["cohort"] or {}).items() if k != "_unset"}
+    unset = (doc["cohort"] or {}).get("_unset") or []
+    print("COHORT  " + (", ".join(f"{k}={v}" for k, v in cohort.items()) or "(none given)")
+          + (f"   unset: {', '.join(unset)}" if unset else ""))
+    print()
+    print(f"{'AXIS':<4} {'BASIS':<5} {'LABEL':<26} {'VALUE':>12} {'UNIT':<24} {'SCORE':>5} RUNG")
+    for axis in doc["axes"]:
+        star = "*" if axis["cohort_relative"] else " "
+        basis = BASIS_SHORT.get(axis.get("basis"), "?")
+        print(f"{axis['id']:<4} {basis:<5} {axis['label'][:26]:<26} {fmt_value(axis['value']):>12} "
+              f"{(axis['unit'] or '-')[:24]:<24} {axis['score']:>4}{star} {rung_text(axis)}")
+    if any(a["cohort_relative"] for a in doc["axes"]):
+        print("     * cohort-relative: comparable only inside a cohort, never as an absolute")
+    print()
+    for group in doc["groups"]:
+        mean = "null" if group["mean"] is None else f"{group['mean']:.1f}"
+        print(f"GROUP {group['id']} {(group['label'] or '?'):<10} mean {mean:>5}   "
+              f"{group['axes_scored']} of {group['axes_total']} axes   "
+              f"owner: {group['owner'] or '-'}")
+    summary = doc.get("basis_summary") or {}
+    if summary:
+        mix = ", ".join(f"{n} {basis}" for basis, n in summary.items())
+        print(f"BASIS   of {sum(summary.values())} scored axes: {mix}")
+        if summary.get("judgement"):
+            print("        judgement rungs are reasoned, not measured - calibrate those first")
+    if doc["unscored"]:
+        print()
+        for axis in doc["unscored"]:
+            print(f"UNSCORED {axis['id']} {axis['label']} ({axis['group']})")
+            for line in wrap_reason(axis["reason"]):
+                print(f"         {line}")
+    if doc["alerts"]:
+        print()
+        for alert in doc["alerts"]:
+            print(f"ALERT {alert['category']}:{alert['slug']} "
+                  f"value={fmt_value(alert['value'])} threshold={alert['threshold']}")
+
+
+def wrap_reason(text, width=88):
+    words, line, out = str(text).split(), "", []
+    for word in words:
+        if line and len(line) + 1 + len(word) > width:
+            out.append(line)
+            line = word
+        else:
+            line = f"{line} {word}".strip()
+    if line:
+        out.append(line)
+    return out
+
+
+# ---------------------------------------------------------------------------
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Apply a scale to clp-session-facts' axis measurements and emit the scores.")
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--bundle", help="a clp-bundle bundle directory to measure and score")
+    source.add_argument("--axes-file", help="a captured `clp-session-facts --axes` stdout to score")
+    ap.add_argument("--archive", default=None, help="passed through to clp-session-facts")
+    ap.add_argument("--scale", default=None, help="the scale file to apply")
+    ap.add_argument("--cohort", action="append", metavar="KEY=VALUE", default=[],
+                    help="a cohort key, repeatable")
+    ap.add_argument("--out", default="/tmp/clp-session-scores.json", help="where the JSON goes")
+    ap.add_argument("--format", choices=("json", "table"), default="json",
+                    help="json writes only the JSON; table also prints a summary")
+    args = ap.parse_args(argv)
+
+    scale_path, scale_source = resolve_scale(args.scale)
+    if scale_path is None:
+        print(f"error: {scale_source}", file=sys.stderr)
+        return 1
+    try:
+        scale = json.loads(scale_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"error: cannot read the scale {scale_path}: {exc}", file=sys.stderr)
+        return 1
+
+    # -- measure (or read what was measured), and validate the scale, first
+    if args.bundle:
+        bundle = Path(args.bundle).expanduser().resolve()
+        facts_argv = ["--bundle", str(bundle), "--axes", "--check-scale", "--scale", str(scale_path)]
+        if args.archive:
+            facts_argv += ["--archive", args.archive]
+        out, err, code = run_facts(facts_argv)
+        if out is None:
+            print(f"error: {err}", file=sys.stderr)
+            return 1
+        measured = parse_axes_output(out)
+        problems = [ln for ln in measured["scale_lines"] if ln.startswith("SCALE_PROBLEM=")]
+        if problems:
+            return refuse(scale_path, problems)
+        if code != 0 or not measured["axes"]:
+            detail = " ".join((err or out or "no output").split())[:400]
+            print(f"error: clp-session-facts --axes failed (exit {code}): {detail}", file=sys.stderr)
+            return 1
+    else:
+        bundle = None
+        try:
+            text = Path(args.axes_file).expanduser().read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"error: cannot read --axes-file {args.axes_file}: {exc}", file=sys.stderr)
+            return 1
+        measured = parse_axes_output(text)
+        if not measured["axes"]:
+            print(f"error: {args.axes_file} holds no AXIS lines; it is not a "
+                  "`clp-session-facts --axes` capture", file=sys.stderr)
+            return 1
+        # The capture says nothing about the scale, so validate it on its own.
+        problems, error = validate_scale_standalone(scale_path)
+        if error:
+            print(f"error: the scale {scale_path} could not be validated, so nothing was "
+                  f"scored: {error}", file=sys.stderr)
+            return 2
+        if problems:
+            return refuse(scale_path, problems)
+
+    doc = score_session(measured, scale, scale_path, scale_source, bundle,
+                        measured["keys"].get("FACTS_FILE"))
+    doc["cohort"] = build_cohort(args.cohort, doc["session"]["wall_clock_hours"])
+
+    try:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"error: cannot write {args.out}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "table":
+        print_table(doc)
+    else:
+        print(f"SCORES_FILE={args.out}")
+    return 0
+
+
+def refuse(scale_path, problems):
+    """Print the validator's own words and score nothing."""
+    print(f"error: the scale {scale_path} is not valid, so nothing was scored:", file=sys.stderr)
+    for line in problems:
+        print(line, file=sys.stderr)
+    print("Fix the scale, or point --scale at one that validates. The default scale is not "
+          "substituted for a broken one, because that would hide the problem.", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
