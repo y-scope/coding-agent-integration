@@ -7,7 +7,8 @@ Usage:
                         [--semantic-endpoint URL] [--trend week|day] [--top N] [--json]
 
 DIR holds one bundle per session (clp-bundle BUNDLE build), named by session id. With --build,
-every Claude Code session under --claude-home (default ~/.claude) gets a current bundle in DIR
+every Claude Code session under --claude-home -- the directory that HOLDS projects/, not projects/
+itself (default ~/.claude) -- gets a current bundle in DIR
 first: a missing one is built, one whose main log has grown is built again, one whose catalog has
 an older layout is rebuilt from the bundle. A session still being written (its last record cut off)
 is skipped, and so is any session whose id starts with a --skip value (use it for the session you
@@ -71,7 +72,7 @@ def main():
     try:
         build = None
         if args.build:
-            home = os.path.expanduser(args.claude_home)
+            home = B.check_claude_home(args.claude_home)
             build = R.ensure_bundles(R.find_sessions(home), args.dir, clp_s=args.clp_s, skip=args.skip,
                                      log=lambda line: print(line, file=sys.stderr))
         bundles = sorted(os.path.dirname(p) for p in

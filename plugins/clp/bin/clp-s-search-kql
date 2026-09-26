@@ -35,8 +35,11 @@ Allowed search controls:
                            it is far cheaper than projecting and piping to
                            `grep -c '^{'` when many records match (measured:
                            ~6-7s whether a filter matched 92 or 16.5M records
-                           of a 16.5M-record archive). Prints NOTHING when zero
-                           records match; treat empty output as a real zero.
+                           of a 16.5M-record archive). Prints one row per
+                           archive, `"count":0` included, so a zero is never
+                           silence. On a zero it also says when the archive's
+                           structure explains it (a filter at an Object path,
+                           or a path the archive does not have).
   --unique FIELD           List the distinct values of FIELD among matches with
                            clp-s's in-engine aggregation. Still scans the
                            matching records (measured: ~84s for a
@@ -437,13 +440,41 @@ search_archive() {
     printf ' %q' "${cmd[@]}"
     echo
   } >&2
+  # A count is small enough to hold, and holding it is what lets a zero be turned
+  # into an explicit row and explained. Records are never buffered: they stream.
+  if [[ "$count_mode" -eq 1 ]]; then
+    local count_out count_err rc=0
+    count_out="$(mktemp)"; count_err="$(mktemp)"
+    "${cmd[@]}" >"$count_out" 2>"$count_err" || rc=$?
+    cat "$count_err" >&2
+    cat "$count_out"
+    if [[ "$rc" -ne 0 ]]; then
+      # The failing call's own stderr names the real cause; the probe is the fallback.
+      diagnose_clp_s_failure "$clp_s_bin" "$dir" "--count" "$count_err"
+      rm -f "$count_out" "$count_err"
+      return "$rc"
+    fi
+    rm -f "$count_err"
+    # clp-s prints no row for an archive nothing matched. Say the zero instead, in
+    # the same shape, so a caller never has to read "no output" as a number.
+    if ! grep -q '^{' "$count_out"; then
+      printf '{"archive_id":"%s","count":0}\n' "$(basename -- "$dir")"
+      explain_zero_match "$clp_s_bin" "$dir" "$kql_query"
+    fi
+    rm -f "$count_out"
+    return 0
+  fi
   # A record row is wrapped by string concatenation, so the record is passed through
   # byte for byte. Rows that already say which archive they belong to are not wrapped.
-  if [[ "$with_archive" -eq 1 && "$count_mode" -eq 0 && -z "$unique_field" && "$trimmed_query" != stats.* ]]; then
+  local rc=0
+  if [[ "$with_archive" -eq 1 && -z "$unique_field" && "$trimmed_query" != stats.* ]]; then
     "${cmd[@]}" | awk -v id="$(basename -- "$dir")" '/^\{/ { print "{\"archive_id\":\"" id "\",\"record\":" $0 "}"; next } { print }'
+    rc="${PIPESTATUS[0]}"
   else
-    "${cmd[@]}"
+    "${cmd[@]}" || rc=$?
   fi
+  [[ "$rc" -eq 0 ]] || diagnose_clp_s_failure "$clp_s_bin" "$dir" "that search"
+  return "$rc"
 }
 
 if [[ ${#archive_dirs[@]} -eq 1 ]]; then

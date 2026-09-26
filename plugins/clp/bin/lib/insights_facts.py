@@ -496,14 +496,14 @@ def main(argv=None) -> int:
             elif counted < total:
                 w(f"- check: the lines above sum to {counted:,}; the other {total - counted:,} records "
                   f"({pct(total - counted, total)}) have no `{field}` value")
-            elif overlap_note:
-                # An excess with overlapping inputs is not evidence about the data:
-                # say what the inputs did and claim nothing about the field.
-                w(f"- check: the lines above sum to {counted:,}, more than the {total:,} records. "
-                  f"No conclusion is drawn about `{field}`, because {overlap_note}")
             else:
+                # Every entry above was counted once, so an excess that is still
+                # here is the data's and not the inputs'. Say so when the inputs
+                # also overlapped, or the reader cannot tell which cause applies.
                 w(f"- check: the lines above sum to {counted:,}, more than the {total:,} records, "
-                  f"so `{field}` is multi-valued in some records")
+                  f"so `{field}` is multi-valued in some records"
+                  + (" -- each entry above was counted once, so the overlapping inputs noted "
+                     "at the top do not explain this excess" if overlap_note else ""))
         w("")
 
     fetched_all = [rec for recs in fetched.values() for rec in recs]

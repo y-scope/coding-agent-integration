@@ -89,6 +89,26 @@ def inventory(main_path, claude_home):
     return sid, sorted(found, key=lambda s: s["name"])
 
 
+def _exists_refusal(out, is_bundle):
+    """Why an existing output directory is refused, and every way on from here.
+
+    The ways differ by what is actually there, and only real ones are offered:
+    --force deletes a bundle but never an unrelated directory, so suggesting it
+    for a non-bundle would send the reader into the same refusal again.
+    """
+    if is_bundle:
+        ways = [f"reuse it as it stands -- it is already a bundle",
+                f"`clp-bundle {out} {B.CMD_REBUILD}` to rebuild its catalog from the archives it holds",
+                f"pass {B.OPT_FORCE} to delete it and build again from the session log"]
+    else:
+        ways = [f"build into a directory that does not exist yet",
+                f"remove {out} yourself if you meant to replace it "
+                f"({B.OPT_FORCE} replaces only a directory that is already a bundle, "
+                f"so it will not delete whatever is in this one)"]
+    return (f"{out} exists" + ("" if is_bundle else " and is not a bundle")
+            + "; refusing to overwrite it. Ways forward: " + "; ".join(ways) + ".")
+
+
 def make_bundle(main_path, out, clp_s=None, claude_home=None, force=False, log=lambda line: None):
     """Make the bundle of the session whose main log is main_path in `out`, then its catalog. Returns
     build_catalog's result. `claude_home` (the directory holding projects/, tasks/ and file-history/)
@@ -109,7 +129,7 @@ def make_bundle(main_path, out, clp_s=None, claude_home=None, force=False, log=l
         if force and is_bundle:
             shutil.rmtree(out)
         else:
-            raise B.BundleError(f"{out} exists" + (" and is not a bundle" if force else "") + "; refusing to overwrite it")
+            raise B.BundleError(_exists_refusal(out, is_bundle))
 
     sid, sources = inventory(main_path, claude_home)
     counts = {}

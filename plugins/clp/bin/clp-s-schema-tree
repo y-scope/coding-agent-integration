@@ -371,8 +371,9 @@ def display_shares(counts, total):
 
 def record_counter(wrapper, archives_dir):
     """count_records(kql) for the partition functions: the archive's own count
-    aggregation, summed over its archives. A query that matches nothing prints
-    no row at all, which is the count 0."""
+    aggregation, summed over its archives. A query that matches nothing prints an
+    explicit "count":0 row per archive, and summing them gives the same 0 as the
+    no-row-at-all this used to get."""
     def count_records(kql):
         proc = subprocess.run(
             [wrapper, "--count", archives_dir, kql],
