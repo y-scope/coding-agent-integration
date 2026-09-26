@@ -44,7 +44,7 @@ For a single ad-hoc KQL query, use the `search` skill. For a non-session log, us
 - A session picked from the list (the default).
 - A session id or a `.jsonl` path the user names — skip listing.
 - A bundle directory or CLP archive the user names — skip to step 4.
-- A different Claude home (`--claude-root DIR` when listing, `--claude-home DIR` when bundling). Needed whenever the sessions are not under `~/.claude`.
+- Sessions not under `~/.claude`. The two flags are one level apart, on purpose: `--claude-root DIR` when listing wants `projects/` itself, `--claude-home DIR` when bundling wants the directory above it (it also reads `tasks/` and `file-history/`). Each refuses the other's level and names the correction.
 
 ## Talking to the user
 
@@ -72,7 +72,7 @@ Run anything that can take over a minute in the background so you can post a sta
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions"
    ```
 
-   Add `--claude-root DIR` for a non-default Claude home, `--all` to list every session, `--project-filter TEXT` to narrow. Present the choices as a table: `IDX`, `AGENT`, modified timestamp, raw bytes, human size, session name, project/cwd, session id. One session → take it without asking. Several and the user has not said which → ask.
+   Add `--claude-root DIR` (the `projects/` directory itself) for a non-default location, `--all` to list every session, `--project-filter TEXT` to narrow. Present the choices as a table: `IDX`, `AGENT`, modified timestamp, raw bytes, human size, session name, project/cwd, session id. One session → take it without asking. Several and the user has not said which → ask.
 
 2. **Compress the selected `IDX`:**
 
@@ -91,13 +91,13 @@ Run anything that can take over a minute in the background so you can post a sta
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --count ARCHIVE 'message.content.name:Agent OR message.content.name:Workflow'
    ```
 
-   **Any count → build a bundle.** The main log records only each launch; what each agent did, how long it ran and what failed is in other files.
+   **A non-zero count → build a bundle.** (`--count` always prints a row now, `"count":0` included, so read the number and not the presence of output.) The main log records only each launch; what each agent did, how long it ran and what failed is in other files.
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle" /tmp/yscope-clp-bundles/<SESSION_ID> build --session-id <SESSION_ID>
    ```
 
-   Add `--claude-home DIR` for a non-default Claude home. Building takes seconds (a 290 MB session with 1,426 agent transcripts: about 12 s). If that directory already holds a bundle (it has `manifest.json`) and the session has not changed since, reuse it; rebuild with `--force` only when it has. A catalog from an older plugin version is refused with the command that rebuilds it (`clp-bundle BUNDLE rebuild`) — run it.
+   Add `--claude-home DIR` (the directory that holds `projects/`) for a non-default location. Building takes seconds (a 290 MB session with 1,426 agent transcripts: about 12 s). If that directory already holds a bundle (it has `manifest.json`) and the session has not changed since, reuse it; rebuild with `--force` only when it has. A catalog from an older plugin version is refused with the command that rebuilds it (`clp-bundle BUNDLE rebuild`) — run it.
 
    Relay any `REPAIRED` line to the user: that log had NUL bytes from a lost write, which the build removed (the source file is untouched). A build that stops on a record cut off mid-write usually means the session is still running — say so and build once it has stopped.
 

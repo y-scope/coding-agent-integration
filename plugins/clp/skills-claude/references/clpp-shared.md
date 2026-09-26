@@ -62,7 +62,7 @@ Project the decomposed view of a column (shape + extracted leaf values):
   --projection 'decompose(message)' /tmp/archive '*'
 ```
 
-Count matches without fetching full records — `--count` works with `shape()` filters too, and prints nothing when zero records match:
+Count matches without fetching full records — `--count` works with `shape()` filters too, and prints an explicit `"count":0` when nothing matches:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental --count \

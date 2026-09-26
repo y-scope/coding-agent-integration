@@ -27,6 +27,13 @@ LAYOUT = 6
 # The layout of manifest.json, archives/ and files/. A bundle of another layout is made again (`build --force`).
 MANIFEST_LAYOUT = 2
 
+# Names that clp-bundle's parser defines and that error messages suggest. Shared so
+# a refusal cannot end up naming a flag that no longer exists: rename it here and
+# both the parser and every message that offers it move together.
+OPT_FORCE = "--force"
+OPT_CLAUDE_HOME = "--claude-home"
+CMD_REBUILD = "rebuild"
+
 SCHEMA = """
 CREATE TABLE bundle(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE archives(archive_id TEXT PRIMARY KEY, kind TEXT, records INTEGER);
@@ -369,6 +376,26 @@ def fetch_event_records(bundle_dir, db, uuid, kind, wrapper):
 # ---- The engine seam: everything that runs clp-s goes through these functions (and search_command
 # above), so a different engine changes this block and nothing else.
 
+def check_claude_home(path, default="~/.claude"):
+    """The absolute Claude home, refusing a projects/ directory passed by mistake.
+
+    Two flags name a Claude directory one level apart: --claude-home wants the
+    directory that HOLDS projects/ (it also reads tasks/ and file-history/ from
+    there), while the shell wrappers' --claude-root wants projects/ itself. Passing
+    one where the other belongs finds no sessions and looks like an empty machine,
+    so the wrong level is detected and the corrected path is named. Also expands ~,
+    which the callers used to skip -- a quoted --claude-home '~/.claude' reached
+    the tasks/ lookup unexpanded.
+    """
+    expanded = os.path.abspath(os.path.expanduser(path or default))
+    if os.path.basename(expanded) == "projects":
+        raise BundleError(
+            f"{OPT_CLAUDE_HOME} wants the directory that holds projects/, not projects/ itself "
+            f"(it also reads tasks/ and file-history/ from there). You passed {path}; "
+            f"pass {os.path.dirname(expanded)}.")
+    return expanded
+
+
 def resolve_clp_s(explicit=None):
     """The clp-s binary, in the order the shell wrappers use: an explicit path, CLP_S_BIN, the plugin's
     bin/clp-s, the plugin's .clp-core/bin/clp-s, then PATH. A path that was asked for and is not
@@ -473,6 +500,58 @@ def _compress_error(stderr, prepared):
     return f"clp-s could not compress {len(prepared)} files: {stderr.strip()[-400:]}"
 
 
+PROBE_FIELD = "__clp_s_capability_probe__"
+
+
+# What clp-s says when the build, not the query, is at fault. Read from the failing
+# call's own stderr first: it names the capability that actually blocked this call,
+# where a probe can only report whatever it happens to trip over.
+CLP_S_FAILURE_SIGNS = (
+    ("Failed to open archive", "it cannot open this archive's format, which a newer clp-s wrote"),
+    ("Error code: 18", "it cannot open this archive's format, which a newer clp-s wrote"),
+    ("Aggregations are only supported",
+     "it aggregates only through the reducer output handler, so it predates the standalone "
+     "--count this plugin relies on"),
+)
+
+
+def clp_s_diagnosis(clp_s, archive_dir, stderr=""):
+    """" -- the binary is the problem: ..." when it is, else "".
+
+    The Python twin of diagnose_clp_s_failure in lib/clp-common.sh, for the calls
+    that run clp-s directly instead of going through clp-s-search-kql: without it
+    `clp-bundle repo` reports only clp-s's own error, which for a build too old to
+    open the archive says nothing about the build.
+
+    Probing rather than versioning is forced: clp-s answers --version with "Command
+    unspecified" and exit 0, and a build that rejects --count at run time still
+    lists it in --help. So when the stderr is not recognisable this asks for a count
+    of a field no archive holds, which opens the archive, exercises aggregation and
+    returns in milliseconds. Only ever called after a failure.
+    """
+    for sign, cause in CLP_S_FAILURE_SIGNS:
+        if sign in (stderr or ""):
+            return _clp_s_verdict(clp_s, cause)
+    try:
+        probe = subprocess.run([clp_s, "s", "--count", archive_dir, f"{PROBE_FIELD}:*"],
+                               capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if probe.returncode == 0:
+        return ""          # the binary is fine, so the query is the problem
+    out = (probe.stderr or "") + (probe.stdout or "")
+    for sign, cause in CLP_S_FAILURE_SIGNS:
+        if sign in out:
+            return _clp_s_verdict(clp_s, cause)
+    return _clp_s_verdict(clp_s, "a trivial probe query failed on it too")
+
+
+def _clp_s_verdict(clp_s, cause):
+    return (f" -- the binary is the problem, not the query: clp-s at {clp_s} is unusable here "
+            f"because {cause}. Point at another build with CLP_S_BIN=/path/to/clp-s "
+            f"or --clp-s PATH.")
+
+
 class ArchiveRecords:
     """Every record of one archive, in its original order, without holding them in memory. A search writes
     each record with its position through clp-s's file output handler into a temporary file; only an index
@@ -490,7 +569,8 @@ class ArchiveRecords:
             proc = subprocess.run([clp_s, "s", archive_dir, "*", "file", "--path", self._path], capture_output=True,
                                   text=True, encoding="utf-8")
             if proc.returncode != 0:
-                raise BundleError(f"clp-s could not read {archive_dir}: {proc.stderr.strip()[-300:]}")
+                raise BundleError(f"clp-s could not read {archive_dir}: {proc.stderr.strip()[-300:]}"
+                                  + clp_s_diagnosis(clp_s, archive_dir, proc.stderr))
             self._offset = array.array("Q", bytes(8 * expected))
             self._length = array.array("Q", bytes(8 * expected))
             seen = bytearray(expected)
@@ -603,5 +683,6 @@ def archive_record_counts(clp_s, archives_dir):
     proc = subprocess.run([clp_s, "s", "--count", "--experimental", archives_dir, "*"],
                           capture_output=True, text=True, encoding="utf-8")
     if proc.returncode != 0:
-        raise BundleError(f"clp-s could not count the archives: {proc.stderr.strip()[-300:]}")
+        raise BundleError(f"clp-s could not count the archives: {proc.stderr.strip()[-300:]}"
+                          + clp_s_diagnosis(clp_s, archives_dir, proc.stderr))
     return {r["archive_id"]: r["count"] for r in (json.loads(l) for l in proc.stdout.splitlines() if l.startswith("{"))}

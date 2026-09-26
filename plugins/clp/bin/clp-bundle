@@ -29,7 +29,9 @@ characters), a run id or a task id.
             original order: the graph (agents, workflow runs and their resumed instances, retried
             attempts, failure causes, timing) and the events. NUL bytes left by lost writes are removed
             before compression, and each file's count is reported (REPAIRED) and kept in the catalog. --session-file names the main .jsonl;
-            --session-id finds it under --claude-home (default ~/.claude). A file that belongs to the
+            --session-id finds it under --claude-home: the directory that HOLDS projects/, tasks/ and
+            file-history/ (default ~/.claude), not projects/ itself -- that level is --claude-root in
+            clp-s-list-sessions. A file that belongs to the
             session and matches no rule stops the build. Refuses an existing directory; --force replaces
             an existing bundle. A session with no subagents or workflows gets a catalog with only its
             main thread. Claude Code sessions only.
@@ -99,12 +101,14 @@ def cmd_build(args):
     if args.session_file:
         main_path = args.session_file
     else:
-        home = os.path.expanduser(args.claude_home or "~/.claude")
+        home = B.check_claude_home(args.claude_home)
         hits = glob.glob(os.path.join(home, "projects", "*", args.session_id + ".jsonl"))
         if len(hits) != 1:
             raise B.BundleError(f"expected one session {args.session_id} under {home}/projects, found {len(hits)}")
         main_path = hits[0]
-    result = bundle_build.make_bundle(main_path, args.bundle, clp_s=args.clp_s, claude_home=args.claude_home,
+    result = bundle_build.make_bundle(main_path, args.bundle, clp_s=args.clp_s,
+                                      claude_home=B.check_claude_home(args.claude_home)
+                                      if args.claude_home else None,
                                       force=args.force, log=print)
     return _report(result)
 
@@ -443,8 +447,9 @@ def main():
     p = sub.add_parser("build")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--session-file"); g.add_argument("--session-id")
-    p.add_argument("--claude-home"); p.add_argument("--clp-s"); p.add_argument("--force", action="store_true")
-    p = sub.add_parser("rebuild"); p.add_argument("--clp-s")
+    p.add_argument(B.OPT_CLAUDE_HOME); p.add_argument("--clp-s")
+    p.add_argument(B.OPT_FORCE, action="store_true")
+    p = sub.add_parser(B.CMD_REBUILD); p.add_argument("--clp-s")
     p = sub.add_parser("show"); p.add_argument("id"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("evidence"); p.add_argument("id"); p.add_argument("--tail", type=int, default=8)
     p.add_argument("--all", action="store_true"); p.add_argument("--raw", action="store_true")

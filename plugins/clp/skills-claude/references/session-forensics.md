@@ -15,7 +15,7 @@ IDs connect the levels: a timestamp opens a window, a `uuid` names a record, a `
 CLP searches the compressed archive — unmatched records are never decompressed. Push logic into KQL rather than fetching records and post-filtering.
 
 - **Compound KQL over multiple queries:** `field1:A AND field2:B`
-- **Count in-engine:** `clp-s-search-kql --count ARCHIVE 'KQL'` prints `{"archive_id":...,"count":N}`, or nothing when zero records match.
+- **Count in-engine:** `clp-s-search-kql --count ARCHIVE 'KQL'` prints `{"archive_id":...,"count":N}` per archive, `"count":0` included.
 - **Project aggressively:** `--projection timestamp,durationMs`. Omit only when you genuinely need whole records.
 - **Zoom by time:** `--tge EPOCH_MS --tle EPOCH_MS`. Convert with
   `python3 -c "from datetime import datetime,timezone; print(int(datetime(Y,M,D,h,m,s,tzinfo=timezone.utc).timestamp()*1000))"`
