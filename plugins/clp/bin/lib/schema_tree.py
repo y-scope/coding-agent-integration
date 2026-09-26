@@ -41,7 +41,7 @@ counting queries the caller runs:
   its own falls into the residual) and hundreds of queries, but it needs
   nothing of the data but its shape.
 
-Stdlib only, like the other log-shape-* helpers, except for the sibling module
+Stdlib only, like the other plugin helpers, except for the sibling module
 lib/kql_build, whose value escaping decides what is safe to put in a query.
 """
 

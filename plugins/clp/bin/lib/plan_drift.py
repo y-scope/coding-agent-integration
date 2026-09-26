@@ -46,7 +46,7 @@ A plan entry may declare which shape a filter is for with `"types":
 ["ClpString"]` on its `match` leaf, and then the declared types' reachable share
 is what it addresses.
 
-Stdlib only, like the other log-shape-* helpers, except for the sibling modules
+Stdlib only, like the other plugin helpers, except for the sibling modules
 lib/kql_build and lib/schema_tree.
 """
 

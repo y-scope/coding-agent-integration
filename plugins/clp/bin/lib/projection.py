@@ -23,7 +23,7 @@ schema tree cannot be read, every column is kept as given.
 Usage:
   clp-s s --experimental ARCHIVE stats.schema_tree | python3 lib/projection.py COLUMN...
 
-Stdlib only, like the other log-shape-* helpers.
+Stdlib only, like the other plugin helpers.
 """
 
 import json

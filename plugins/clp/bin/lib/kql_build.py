@@ -35,7 +35,7 @@ which of a drifting field's types the filter is written for. It does not change
 the KQL; it tells `check-plan --drift-file` that the records of the other types
 are excluded on purpose (lib/plan_drift).
 
-Stdlib only, like the other log-shape-* helpers.
+Stdlib only, like the other plugin helpers.
 """
 
 import re

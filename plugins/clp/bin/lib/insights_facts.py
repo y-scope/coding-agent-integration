@@ -72,6 +72,37 @@ def load_results(path):
     return sorted(results, key=lambda r: r.get("index", 0))
 
 
+def entry_identity(entry):
+    """What makes two result entries the same result, or None if it cannot tell.
+
+    The rendered KQL plus the count: the KQL is the query that ran and the count
+    is what it returned, so two entries agreeing on both are one result recorded
+    twice, not two queries that happen to resemble each other. An entry with no
+    KQL (one that failed before rendering) has no identity and is never treated
+    as a duplicate -- guessing wrong here would drop a real count.
+    """
+    kql = entry.get("kql")
+    if not kql:
+        return None
+    return (kql, entry.get("count"))
+
+
+def overlapping_entries(results):
+    """The identities that appear in both results files.
+
+    A count summed once per entry is wrong as soon as the same entry arrives
+    twice, which is what passing one file as both --baseline-results-file and
+    --results-file does. This says whether that happened, so an excess over the
+    record total can be explained by the inputs before it is blamed on the data.
+    """
+    seen = {}
+    for r in results:
+        ident = entry_identity(r)
+        if ident is not None:
+            seen.setdefault(ident, set()).add(r.get("table"))
+    return {ident for ident, tables in seen.items() if len(tables) > 1}
+
+
 def field_values(match):
     """(field, [values]) for an eq match or a not-of-eq(s) match, else None."""
     if not isinstance(match, dict):
@@ -275,6 +306,17 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default="/tmp/clp-insights-facts.md")
     args = ap.parse_args(argv)
 
+    # One file passed as both pools' results doubles every count summed per entry,
+    # and is never what the caller meant. Refuse before writing anything: a facts
+    # file that exists is quoted downstream as trustworthy, so it is better to
+    # produce none than one whose severity split adds up to twice the archive.
+    if os.path.realpath(args.baseline_results_file) == os.path.realpath(args.results_file):
+        print(f"error: --baseline-results-file and --results-file are the same file "
+              f"({args.results_file}); every count in both would be counted twice. "
+              f"Pass the baseline pool's results and the plan pool's results.",
+              file=sys.stderr)
+        return 2
+
     try:
         schema = json.loads(args.schema_json)
     except json.JSONDecodeError as exc:
@@ -298,6 +340,17 @@ def main(argv=None) -> int:
 
     sev, log, ts, msg = (schema.get(k) for k in ("severity", "logger", "timestamp", "message"))
     total = next((r["total_records"] for r in results if r.get("total_records")), None)
+    # Two distinct files can still share entries -- the same query recorded in
+    # both pools. Every sum below counts an entry once, so the numbers are right
+    # either way; this is reported because a caller who did not mean to overlap
+    # them has a broken pipeline that nothing else would show them.
+    overlap = overlapping_entries(results)
+    overlap_note = (
+        f"the two results files overlap: {len(overlap):,} "
+        f"{'entry' if len(overlap) == 1 else 'entries'} appear in both "
+        f"`{args.baseline_results_file}` and `{args.results_file}`, and each is counted "
+        f"once here. Pass distinct --baseline-results-file and --results-file."
+    ) if overlap else None
     out = []
     w = out.append
 
@@ -310,6 +363,8 @@ def main(argv=None) -> int:
         except (OSError, json.JSONDecodeError):
             totals = None
     w("# Facts (computed in code; every figure below is exact)\n")
+    if overlap_note:
+        w(f"> **Input problem:** {overlap_note}\n")
     w("## Totals")
     w(f"- Total records: {total:,}" if total else "- Total records: unavailable")
     if totals:
@@ -379,10 +434,19 @@ def main(argv=None) -> int:
     # -- baseline: severity and logger
     baseline = [r for r in results if r.get("origin") == "baseline" and r.get("status") in ("ok", "zero")]
     by_field = defaultdict(lambda: {"values": [], "residual": None})
+    # Each value's count is appended, so the same entry arriving from both results
+    # files would be added twice and the split would sum past the record total.
+    # Count each result once; the residual is assigned, so it was never doubled.
+    counted_once = set()
     for r in baseline:
         fv = field_values(r.get("match"))
         if not fv or r.get("method") != "count":
             continue
+        ident = entry_identity(r)
+        if ident is not None:
+            if ident in counted_once:
+                continue
+            counted_once.add(ident)
         field, values, negated = fv
         if negated:
             by_field[field]["residual"] = (values, r.get("count", 0))
@@ -390,9 +454,18 @@ def main(argv=None) -> int:
             by_field[field]["values"].append((values[0], r.get("count", 0)))
 
     fetched = defaultdict(list)  # follow-up records by the entry they followed
+    fetched_once = set()
     for r in results:
         origin = r.get("origin", "")
         if origin.startswith("follow-up of ") and r.get("samples"):
+            # Same exposure as the severity split: a follow-up recorded in both
+            # results files would contribute its records twice, inflating both the
+            # fetched total and every per-shape group below.
+            ident = entry_identity(r)
+            if ident is not None:
+                if ident in fetched_once:
+                    continue
+                fetched_once.add(ident)
             for s in r["samples"]:
                 try:
                     fetched[origin].append(json.loads(s))
@@ -423,6 +496,11 @@ def main(argv=None) -> int:
             elif counted < total:
                 w(f"- check: the lines above sum to {counted:,}; the other {total - counted:,} records "
                   f"({pct(total - counted, total)}) have no `{field}` value")
+            elif overlap_note:
+                # An excess with overlapping inputs is not evidence about the data:
+                # say what the inputs did and claim nothing about the field.
+                w(f"- check: the lines above sum to {counted:,}, more than the {total:,} records. "
+                  f"No conclusion is drawn about `{field}`, because {overlap_note}")
             else:
                 w(f"- check: the lines above sum to {counted:,}, more than the {total:,} records, "
                   f"so `{field}` is multi-valued in some records")
