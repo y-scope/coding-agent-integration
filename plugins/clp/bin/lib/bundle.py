@@ -376,26 +376,6 @@ def fetch_event_records(bundle_dir, db, uuid, kind, wrapper):
 # ---- The engine seam: everything that runs clp-s goes through these functions (and search_command
 # above), so a different engine changes this block and nothing else.
 
-def check_claude_home(path, default="~/.claude"):
-    """The absolute Claude home, refusing a projects/ directory passed by mistake.
-
-    Two flags name a Claude directory one level apart: --claude-home wants the
-    directory that HOLDS projects/ (it also reads tasks/ and file-history/ from
-    there), while the shell wrappers' --claude-root wants projects/ itself. Passing
-    one where the other belongs finds no sessions and looks like an empty machine,
-    so the wrong level is detected and the corrected path is named. Also expands ~,
-    which the callers used to skip -- a quoted --claude-home '~/.claude' reached
-    the tasks/ lookup unexpanded.
-    """
-    expanded = os.path.abspath(os.path.expanduser(path or default))
-    if os.path.basename(expanded) == "projects":
-        raise BundleError(
-            f"{OPT_CLAUDE_HOME} wants the directory that holds projects/, not projects/ itself "
-            f"(it also reads tasks/ and file-history/ from there). You passed {path}; "
-            f"pass {os.path.dirname(expanded)}.")
-    return expanded
-
-
 def resolve_clp_s(explicit=None):
     """The clp-s binary, in the order the shell wrappers use: an explicit path, CLP_S_BIN, the plugin's
     bin/clp-s, the plugin's .clp-core/bin/clp-s, then PATH. A path that was asked for and is not
