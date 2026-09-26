@@ -132,7 +132,8 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`, and `BUNDLE` 
    - Back from a record to the graph: who --uuid UUID (the agent it belongs to, what it launched or
      reports on), who --agent-id, who --tool-use-id, who --at YYYY-MM-DDTHH:MM (UTC).
    - Records by agent, turn, tool or flag: events --agent ID --tool Bash --errors --interrupts;
-     one full record: record UUID.
+     one full record: record UUID; the records around it, in its own log and order: context UUID
+     (--before N --after N), which is how to see what led to an error or a stall.
    - KQL over one kind of log: PLUGIN_BIN/clp-s-search-kql --archive-id ID BUNDLE/archives 'KQL'
      (IDs: sql "select kind, archive_id from archives"; kinds main, agent, workflow-agent,
      workflow-journal, workflow-run). Turn time and fields read the main log only: pass
@@ -191,7 +192,7 @@ run the health check below, report what stands out with numbers, then offer the 
 | --- | --- | --- |
 | What happened | Turns and their prompts (`clp-s-session-turns`); the log shape dictionary (`log-insights` skill) | One turn, its time window (`--tge/--tle`), its records |
 | Where the time went | `clp-s-session-turns` | The longest turn, its longest wait, that tool call and its output |
-| What failed, and whether it recovered | Error counts; error messages grouped by CLP's template: `clp-s-search-kql --experimental --projection 'uuid,shape(toolUseResult)' ARCHIVE 'message.content.is_error:true'` (every failed tool call carries its error as the top-level string `toolUseResult`; `shape()` cannot reach the text inside `message.content`) | One template's records: keep each record's `uuid` from that projection (exact), or filter with the template's literal text and `*` for each variable, as in `shape(toolUseResult): "Error: Exit code*"` (a superset: a typed `%int%` matches nothing); then the records just before and after |
+| What failed, and whether it recovered | Error counts; error messages grouped by CLP's template: `clp-s-search-kql --experimental --projection 'uuid,shape(toolUseResult)' ARCHIVE 'message.content.is_error:true'` (every failed tool call carries its error as the top-level string `toolUseResult`; `shape()` cannot reach the text inside `message.content`) | One template's records: keep each record's `uuid` from that projection (exact), or filter with the template's literal text and `*` for each variable, as in `shape(toolUseResult): "Error: Exit code*"` (a superset: a typed `%int%` matches nothing); then the records just before and after: `clp-bundle BUNDLE context UUID` |
 | Whether effort was wasted | Repeated templates (the same command shape many times) | Each occurrence and what followed it |
 | What it cost | `clp-s-session-turns` (TOTAL_TOKENS, and tokens per turn); for a bundle, `tokens_*` on nodes | The heaviest turns or agents; `clp-s-session-turns --calls` or the events' `tokens_input` for the context per call (a sharp drop is a compaction) |
 | What it produced | `type:"pr-link"` records; edits (`toolUseResult.structuredPatch`, `toolUseResult.filePath`) | The turn or agent that made a PR, the edits and test runs before it |
@@ -200,7 +201,8 @@ run the health check below, report what stands out with numbers, then offer the 
 
 Drilling down is the same at every level: overview (counts, templates, catalog) → locate (a turn,
 window, template, agent, tool) → evidence (the records, projected, in order) → context (the records
-around them, the tool-result file, the launching call) → check (confirm with an independent query).
+around them with `clp-bundle BUNDLE context UUID`, the tool-result file, the launching call) → check
+(confirm with an independent query).
 IDs connect the levels: a timestamp opens a window, a `uuid` names a record, a `tool_use_id` pairs a
 call with its result or a launch with its agent, an `agentId` or `runId` opens a transcript or a run.
 

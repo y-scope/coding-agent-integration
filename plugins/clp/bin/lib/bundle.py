@@ -306,6 +306,26 @@ def linked_nodes(db, event):
     return found
 
 
+def context(bundle_dir, db, event, before, after, clp_s=None):
+    """The records around an event in its own source file, in their original order: (source path, first
+    position, [(position, record)]). Positions come from the archive, so records without a uuid are
+    included, and the window stops at the file's first and last record."""
+    archive_id = db.execute("SELECT archive_id FROM archives WHERE kind = ?", (event["kind"],)).fetchone()
+    source = db.execute("SELECT path, first_pos, records FROM sources WHERE archive_id = ? AND first_pos <= ? "
+                        "AND ? < first_pos + records", (archive_id[0], event["pos"], event["pos"])).fetchone() if archive_id else None
+    if source is None:
+        raise BundleError(f"no source file holds position {event['pos']} of the {event['kind']} archive")
+    expected = db.execute("SELECT records FROM archives WHERE archive_id = ?", (archive_id[0],)).fetchone()[0]
+    start = max(source["first_pos"], event["pos"] - before)
+    stop = min(source["first_pos"] + source["records"], event["pos"] + after + 1)
+    archive = ArchiveRecords(resolve_clp_s(clp_s), os.path.join(bundle_dir, "archives", archive_id[0]), expected)
+    try:
+        rows = list(zip(range(start, stop), archive.records(start, stop - start)))
+    finally:
+        archive.close()
+    return source["path"], source["first_pos"], rows
+
+
 def fetch_event_records(bundle_dir, db, uuid, kind, wrapper):
     """Every record with this uuid in the archive of `kind`, in archive order."""
     ids = archive_ids(db, kind)
