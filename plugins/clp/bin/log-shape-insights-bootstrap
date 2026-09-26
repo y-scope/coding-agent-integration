@@ -52,7 +52,18 @@ Progress lines printed on stdout as the run goes:
 Summary keys printed on stdout (grep-able):
   ARCHIVE=            archives dir as passed (the search wrapper resolves it)
   ARCHIVE_BYTES=      the archive's size on disk
+  ARCHIVE_LOG_SHAPES= log shapes the archives store, from their headers
+                      (stats.archives, a tenth of a second) -- the real
+                      template count, known before anything is dumped.
+                      UNAVAILABLE on a clp-s that predates the query, with
+                      ARCHIVE_STATS_HINT= saying so. It counts what the
+                      archive stores, so it can exceed LOG_SHAPE_COUNT, which
+                      counts the templates the cache keeps apart at MAX_CHARS
+  ARCHIVE_VARS=       variables the archives store (same source)
+  ARCHIVE_STAT archive_id=... log_shapes=N vars=N
+                      the same two numbers per archive, before summing
   ESTIMATE_SECONDS=   expected duration of the whole run, from ARCHIVE_BYTES
+                      and ARCHIVE_LOG_SHAPES
   SAMPLE=             one full JSON record (reveals the field names)
   DIST field=... distinct=N sampled=N values="v"(count),...
                       value distribution per top-level scalar field; low
@@ -74,6 +85,45 @@ Summary keys printed on stdout (grep-able):
                       (FREQS=OK only); "log_shape" is the template's first
                       MAX_CHARS characters, the whole of it when length is no
                       longer
+  TYPE_DRIFT_COUNT=   field paths the archive stores under more than one type
+                      (clp-s-schema-tree --drift, read off the schema tree
+                      already dumped). 0 means no path drifts, which is an
+                      answer; UNAVAILABLE means no tree, with TYPE_DRIFT_HINT=
+  TYPE_DRIFT_FILE=    {"path","kql_path","types":[{"type","id","count"}],
+                      "records"} NDJSON, most records first. A path with both a
+                      scalar and an object type is a query trap: a projection
+                      or a NOT predicate written for one shape misses the other
+  FIELD_COUNT_GROUPS=       distinct record counts the record root's children
+                            read (clp-s-schema-tree --field-counts): fields
+                            reading the same count are carried by the same
+                            records, which is how a block that appears together
+                            shows itself
+  FIELD_COUNT_NOTE=         these are per-field counts, NOT a partition: a
+                            record is counted under every field it carries, so
+                            the shares overlap and must never be summed
+  FIELD_COUNTS_FILE=        {"count","share","fields":[...],"subtree_nodes"}
+                            NDJSON, most records first
+  RECORD_FAMILY_COUNT=      families in a verified partition of the records
+                            (clp-s-schema-tree --record-families), every pair
+                            proved disjoint by counting queries, so these shares
+                            do partition the records. UNAVAILABLE with
+                            RECORD_FAMILY_HINT= when the queries could not run
+  RECORD_FAMILY_METHOD=     value field=F values=N -- the values of one field
+                            every record carries, which is exact and costs
+                            about 15 queries -- or existence reason=... , which
+                            partitions by the subtree a record populates when no
+                            such field exists: coarser (a kind of record with no
+                            field of its own lands in the residual) and a few
+                            hundred queries
+  RECORD_FAMILY_RESIDUAL=   records no family matches; the families plus this
+                            residual are the whole archive. 0 under the value
+                            method. An upper bound if the run hit its query cap,
+                            which RECORD_FAMILY_CAP_NOTE in the file says
+  RECORD_FAMILY_QUERIES=    counting queries it spent (this step queries; the
+                            field counts above do not)
+  RECORD_FAMILIES_FILE=     one NDJSON row per family, then the residual, the
+                            discarded candidates with the relation that ruled
+                            each out, and the subtrees no query can select
   CLASSIFICATION_FILE=      cached plan, fetched for you (UPTODATE only)
   BASE_CLASSIFICATION_FILE= base entry, fetched for you (GROWTH only)
   BOOTSTRAP_TIMINGS sample=Ns dump=Ns cache=Ns total=Ns
@@ -149,6 +199,13 @@ tree_raw_file="${out_dir}/log-shape-schema-tree-raw.ndjson"
 tree_json_file="${out_dir}/log-shape-schema-tree.json"
 tree_summary_file="${out_dir}/log-shape-schema-tree.txt"
 template_fields_file="${out_dir}/log-shape-template-fields.ndjson"
+archive_stats_file="${out_dir}/log-shape-archive-stats.ndjson"
+archive_stats_err_file="${out_dir}/log-shape-archive-stats.err"
+type_drift_file="${out_dir}/log-shape-type-drift.ndjson"
+field_counts_file="${out_dir}/log-shape-field-counts.ndjson"
+record_families_file="${out_dir}/log-shape-record-families.ndjson"
+structure_file="${out_dir}/log-shape-structure.txt"
+record_families_out_file="${out_dir}/log-shape-record-families.txt"
 
 # --- Stored archives ----------------------------------------------------------
 # An archive is immutable. When every archive here was analyzed before, its
@@ -173,22 +230,48 @@ if [[ "$force_dump" -eq 0 && -n "$ids_csv" ]] \
   stored=1
 fi
 
+# --- Archive stats -------------------------------------------------------------
+# stats.archives reads each archive's header: how many log shapes and how many
+# variables it stores. That is the same template count the dictionary dump
+# yields, in a tenth of a second instead of about a minute per 300 MiB, so it
+# runs before everything else and the estimate below is sized by the number of
+# templates that will actually be rendered. A clp-s that predates the query
+# fails it; like the per-log-shape counts, that is reported, never fatal.
+archive_log_shapes=""
+archive_vars=""
+if "$SEARCH" "$archives_dir" 'stats.archives' 2>"$archive_stats_err_file" \
+     > "$archive_stats_file"; then
+  archive_log_shapes="$(grep '^{' "$archive_stats_file" \
+    | jq -s 'map(.num_log_shapes // 0) | add' 2>/dev/null || true)"
+  archive_vars="$(grep '^{' "$archive_stats_file" \
+    | jq -s 'map(.num_vars // 0) | add' 2>/dev/null || true)"
+fi
+[[ "$archive_log_shapes" =~ ^[0-9]+$ ]] || archive_log_shapes=""
+[[ "$archive_vars" =~ ^[0-9]+$ ]] || archive_vars=""
+
 # --- Estimate ------------------------------------------------------------------
 # Each search decompresses the archive's segments before it can answer, so the
-# run scales with the archive's size. Measured on a 357 MiB CockroachDB archive
+# run scales with the archive's size; rendering the dictionary scales with the
+# number of templates instead. Measured on a 357 MiB CockroachDB archive
 # (9.8 GiB of raw logs, 11,558 templates totalling 2.4 GB): 63 s in all when
 # the dictionary is dumped (sample 15 s, dump and ingest 40 s, cache probe 7 s),
 # 15 s when the archive is stored (the sample, nearly all of it); a 1.6 MB vLLM
-# archive takes 1 s either way. BOOTSTRAP_TIMINGS at the end is there to refine
-# these rates.
+# archive takes 1 s either way; an 8.8 MB Claude session archive with 25,524
+# templates takes 4 s. Fitting the two dumps gives the two rates below.
+# BOOTSTRAP_TIMINGS at the end is there to refine them.
 sample_ms_per_mib=45
 dump_ms_per_mib=180
+dump_us_per_log_shape=100
 bootstrap_started="$(date +%s)"
 archive_bytes="$(directory_file_bytes "$archives_dir")"
 if [[ "$stored" -eq 1 ]]; then
   estimate_seconds=$(( archive_bytes * sample_ms_per_mib / 1000 / 1048576 ))
 else
   estimate_seconds=$(( archive_bytes * dump_ms_per_mib / 1000 / 1048576 ))
+  if [[ -n "$archive_log_shapes" ]]; then
+    estimate_seconds=$(( estimate_seconds
+      + archive_log_shapes * dump_us_per_log_shape / 1000000 ))
+  fi
 fi
 [[ "$estimate_seconds" -ge 2 ]] || estimate_seconds=2
 if [[ "$estimate_seconds" -lt 60 ]]; then
@@ -196,12 +279,26 @@ if [[ "$estimate_seconds" -lt 60 ]]; then
 else
   estimate_text="about $(( (estimate_seconds + 59) / 60 )) min"
 fi
+# The template count is the archive's own, so say it rather than guess from
+# bytes; a stale clp-s leaves it out of the line.
+shapes_text=""
+[[ -n "$archive_log_shapes" ]] && shapes_text=", ${archive_log_shapes} log shapes"
 if [[ "$stored" -eq 1 ]]; then
-  echo "[bootstrap] archive $(human_bytes "$archive_bytes"), analyzed before; expect ${estimate_text}"
+  echo "[bootstrap] archive $(human_bytes "$archive_bytes")${shapes_text}, analyzed before; expect ${estimate_text}"
 else
-  echo "[bootstrap] archive $(human_bytes "$archive_bytes"); expect ${estimate_text}"
+  echo "[bootstrap] archive $(human_bytes "$archive_bytes")${shapes_text}; expect ${estimate_text}"
 fi
 echo "ARCHIVE_BYTES=$archive_bytes"
+if [[ -n "$archive_log_shapes" ]]; then
+  echo "ARCHIVE_LOG_SHAPES=$archive_log_shapes"
+  echo "ARCHIVE_VARS=$archive_vars"
+  grep '^{' "$archive_stats_file" | jq -r '
+      "ARCHIVE_STAT archive_id=\(.archive_id) log_shapes=\(.num_log_shapes)" +
+      " vars=\(.num_vars)"' 2>/dev/null || true
+else
+  echo "ARCHIVE_LOG_SHAPES=UNAVAILABLE"
+  echo "ARCHIVE_STATS_HINT=stats.archives returned no counts (see $archive_stats_err_file); the clp-s binary may predate the query — reinstall the plugin"
+fi
 echo "ESTIMATE_SECONDS=$estimate_seconds"
 
 # run_stage N LABEL FUNCTION: runs FUNCTION in the background and prints its
@@ -375,6 +472,59 @@ base_key=""
 grep '^{' "$diff_file" > "$to_classify_file" || true
 to_classify="$(grep -c '^{' "$to_classify_file" || true)"
 
+# --- Structure: type drift and per-field counts ---------------------------------
+# Two more readings of the schema tree dump stage 1 already wrote, so neither
+# searches the archive again: the paths stored under more than one type (a query
+# written for one of the shapes misses the other), and the record root's children
+# grouped by record count. Those counts are per field and overlap -- a record is
+# counted under every field it carries -- so they are not a partition; the
+# partition is the queried step below.
+type_drift_count="UNAVAILABLE"
+field_count_groups="UNAVAILABLE"
+field_count_note=""
+if [[ -s "$tree_raw_file" ]] \
+    && "$TREE_BIN" --tree-file "$tree_raw_file" \
+         --drift --drift-file "$type_drift_file" \
+         --field-counts --field-counts-file "$field_counts_file" \
+         "$archives_dir" > "$structure_file" 2>/dev/null; then
+  type_drift_count="$(sed -n 's/^DRIFT_COUNT=//p' "$structure_file")"
+  field_count_groups="$(sed -n 's/^FIELD_COUNT_GROUPS=//p' "$structure_file")"
+  field_count_note="$(sed -n 's/^FIELD_COUNT_NOTE=//p' "$structure_file")"
+fi
+
+# --- Record families (the only step here that queries) --------------------------
+# The partition the counts above cannot give: one discriminator per child subtree
+# of the record root, every pair proved disjoint with a counting query, and the
+# records left over reported as the residual. It reuses the same tree dump, so it
+# spends no scan -- but it does spend a few hundred counting queries, half a
+# minute on a session archive, which is why it says so as it goes. It is
+# reported as unavailable rather than failing the run.
+record_family_count="UNAVAILABLE"
+record_family_residual=""
+record_family_queries=""
+record_family_method=""
+if [[ -s "$tree_raw_file" ]]; then
+  families_started="$(date +%s)"
+  echo "[bootstrap] partitioning the records into families (counting queries)..."
+  if "$TREE_BIN" --tree-file "$tree_raw_file" \
+       --record-families --record-families-file "$record_families_file" \
+       "$archives_dir" > "$record_families_out_file" 2>/dev/null; then
+    record_family_count="$(sed -n 's/^RECORD_FAMILY_COUNT=//p' "$record_families_out_file")"
+    record_family_queries="$(sed -n 's/^RECORD_FAMILY_QUERIES=//p' "$record_families_out_file")"
+    record_family_residual="$(sed -n 's/^RECORD_FAMILY_RESIDUAL count=\([0-9]*\).*/\1/p' \
+      "$record_families_out_file")"
+    record_family_method="$(sed -n 's/^RECORD_FAMILY_METHOD=//p' "$record_families_out_file")"
+  fi
+  if [[ "$record_family_count" =~ ^[0-9]+$ ]]; then
+    echo "[bootstrap] record families: ${record_family_count} families," \
+         "${record_family_residual} records in the residual," \
+         "${record_family_queries} queries in $(( $(date +%s) - families_started ))s"
+  else
+    echo "[bootstrap] record families: unavailable after" \
+         "$(( $(date +%s) - families_started ))s"
+  fi
+fi
+
 if [[ -s "$tree_summary_file" ]]; then
   grep -E '^TREE_' "$tree_summary_file"
   # The fields most records carry, then every text field (the templated ones).
@@ -382,6 +532,33 @@ if [[ -s "$tree_summary_file" ]]; then
   grep '^FIELD .* type=ClpString ' "$tree_summary_file" | head -40 || true
   grep '^TEXT_FIELDS=' "$tree_summary_file"
   echo "SCHEMA_TREE_FILE=$tree_json_file"
+fi
+# 0 is an answer here -- no path drifts -- so it is not the unavailable case.
+if [[ "$type_drift_count" =~ ^[0-9]+$ ]]; then
+  echo "TYPE_DRIFT_COUNT=$type_drift_count"
+  echo "TYPE_DRIFT_FILE=$type_drift_file"
+else
+  echo "TYPE_DRIFT_COUNT=UNAVAILABLE"
+  echo "TYPE_DRIFT_HINT=no schema tree for this archive (see $tree_raw_file); the clp-s binary may predate stats.schema_tree — reinstall the plugin"
+fi
+if [[ "$field_count_groups" =~ ^[0-9]+$ ]]; then
+  echo "FIELD_COUNT_GROUPS=$field_count_groups"
+  echo "FIELD_COUNT_NOTE=$field_count_note"
+  echo "FIELD_COUNTS_FILE=$field_counts_file"
+else
+  echo "FIELD_COUNT_GROUPS=UNAVAILABLE"
+fi
+# A partition, unlike the per-field counts above: its shares and the residual
+# cover the archive exactly once.
+if [[ "$record_family_count" =~ ^[0-9]+$ ]]; then
+  echo "RECORD_FAMILY_COUNT=$record_family_count"
+  echo "RECORD_FAMILY_METHOD=$record_family_method"
+  echo "RECORD_FAMILY_RESIDUAL=$record_family_residual"
+  echo "RECORD_FAMILY_QUERIES=$record_family_queries"
+  echo "RECORD_FAMILIES_FILE=$record_families_file"
+else
+  echo "RECORD_FAMILY_COUNT=UNAVAILABLE"
+  echo "RECORD_FAMILY_HINT=the counting queries that prove a partition could not run (see $record_families_out_file); the per-field counts in FIELD_COUNTS_FILE overlap and are not a partition"
 fi
 if [[ -s "$template_fields_file" ]]; then
   echo "TEMPLATE_FIELDS_FILE=$template_fields_file"
