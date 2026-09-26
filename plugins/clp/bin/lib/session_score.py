@@ -89,7 +89,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 VERSION = "1.0.0"
-SCHEMA_VERSION = "1.3.1"   # 1.2.0 gated unscoring; 1.3.0 min_denominator; 1.3.1 deduped bundle totals
+SCHEMA_VERSION = "1.4.0"   # 1.2.0 gated unscoring; 1.3.0 min_denominator; 1.3.1 deduped bundle totals;
+                           # 1.4.0 provenance names the invocation, not the old script names
 
 # The scale says what each threshold rests on. These are the short forms for the
 # table; the full word and the rationale are in the JSON. A scorecard resting
@@ -219,7 +220,7 @@ def resolve_scale(given):
 def run_facts(argv):
     """(stdout, stderr, returncode) from clp-session facts, or a clean failure."""
     if not FACTS_TOOL.is_file():
-        return None, f"clp-session is not next to this script ({FACTS_TOOL})", 1
+        return None, f"clp-session is not in the plugin's bin directory ({FACTS_TOOL})", 1
     try:
         proc = subprocess.run([str(FACTS_TOOL), "facts"] + argv, capture_output=True, text=True,
                               timeout=SUBPROCESS_TIMEOUT)
@@ -378,8 +379,10 @@ def score_session(measured, scale, scale_path, scale_source, bundle, facts_file,
     provenance = {
         "facts_file": facts_file,
         "bundle": bundle_path,
-        "scored_by": f"clp-session-score {VERSION}",
-        "measured_by": f"clp-session-facts {VERSION}",
+        # The invocation a reader can actually type, so the provenance stays
+        # traceable: these were the script names before the commands merged.
+        "scored_by": f"clp-session score {VERSION}",
+        "measured_by": f"clp-session facts {VERSION}",
     }
     if bundle_path is None:
         provenance["bundle_source"] = "not-recorded-in-capture"

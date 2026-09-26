@@ -15,12 +15,12 @@ Inputs (all produced earlier in the run):
                          when it compresses with --timestamp-key.
   --baseline-results-file F
                          The baseline pool's results (default:
-                         /tmp/log-shape-baseline-results.ndjson). Its entries
+                         /tmp/clp-insights-baseline-results.ndjson). Its entries
                          (origin "baseline") carry the severity and logger
                          breakdown; "follow-up of N" entries carry the fetched
                          records behind a small count.
   --results-file F       The classified plan's results (default:
-                         /tmp/log-shape-query-results.ndjson). The two are
+                         /tmp/clp-insights-query-results.ndjson). The two are
                          numbered separately, so a query is cited as
                          [baseline #N] or [plan #N].
   --category-totals F    clp-insights extract's {category: {templates,
@@ -28,7 +28,7 @@ Inputs (all produced earlier in the run):
                          /tmp/log-shape-category-totals.json, or "none" when
                          frequencies were unavailable)
   --focus-file F         clp-insights focus's record of the user's focus and
-                         context (default: /tmp/log-shape-focus.json; absent
+                         context (default: /tmp/clp-insights-focus.json; absent
                          when no one was asked). Its section comes first, with
                          the results of the focus entries (origin "focus").
   --top-templates-file F The extract's top templates, overall and per category,
@@ -40,7 +40,7 @@ Inputs (all produced earlier in the run):
   --schema-json JSON     The classification schema (the extract's SCHEMA= line)
   --top N                Templates and message groups to list (default: 20)
   --out F                Where to write the facts (default:
-                         /tmp/log-shape-insight-facts.md)
+                         /tmp/clp-insights-facts.md)
 
 Every section says where its numbers come from. What cannot be known is said
 to be unavailable rather than estimated, with the reason: notably the archive's
@@ -257,12 +257,12 @@ def read_top_templates(path, n, chars=220):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Compute a log-insights report's numbers in code.")
-    ap.add_argument("--results-file", default="/tmp/log-shape-query-results.ndjson",
+    ap.add_argument("--results-file", default="/tmp/clp-insights-query-results.ndjson",
                     help="the classified plan's results")
-    ap.add_argument("--baseline-results-file", default="/tmp/log-shape-baseline-results.ndjson",
+    ap.add_argument("--baseline-results-file", default="/tmp/clp-insights-baseline-results.ndjson",
                     help="the baseline queries' results, run in their own pool")
     ap.add_argument("--category-totals", default="/tmp/log-shape-category-totals.json")
-    ap.add_argument("--focus-file", default="/tmp/log-shape-focus.json")
+    ap.add_argument("--focus-file", default="/tmp/clp-insights-focus.json")
     ap.add_argument("--freqs-file", default="/tmp/log-shape-freqs.ndjson")
     ap.add_argument("--top-templates-file", default="/tmp/log-shape-top-templates.json")
     ap.add_argument("--schema-json", required=True)
@@ -272,7 +272,7 @@ def main(argv=None) -> int:
                     help="clp-s-schema-tree --json-out file: the facts then name the text fields, "
                          "and every path in it counts as a field")
     ap.add_argument("--top", type=int, default=20)
-    ap.add_argument("--out", default="/tmp/log-shape-insight-facts.md")
+    ap.add_argument("--out", default="/tmp/clp-insights-facts.md")
     args = ap.parse_args(argv)
 
     try:

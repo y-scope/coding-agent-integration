@@ -20,10 +20,10 @@ Usage:
 
 Options:
   --query-plan-file F   One query_plan entry per line as compact JSON
-                        (default: /tmp/log-shape-query-plan.txt, written by
+                        (default: /tmp/clp-insights-query-plan.txt, written by
                         clp-insights extract)
   --results-file F      Where results accumulate as NDJSON, one line per plan
-                        entry (default: /tmp/log-shape-query-results.ndjson)
+                        entry (default: /tmp/clp-insights-query-results.ndjson)
   --entries RANGES      1-based plan entries to run, e.g. 1-5, 7, or 1-3,9
                         (default: all). Results already recorded for other
                         entries of the same archive and plan are kept, so the
@@ -128,8 +128,8 @@ BIN_DIR = os.path.dirname(LIB_DIR)
 sys.path.insert(0, LIB_DIR)
 from kql_build import METHODS, FilterError, entry_kql  # noqa: E402
 
-DEFAULT_QUERY_PLAN_FILE = "/tmp/log-shape-query-plan.txt"
-DEFAULT_RESULTS_FILE = "/tmp/log-shape-query-results.ndjson"
+DEFAULT_QUERY_PLAN_FILE = "/tmp/clp-insights-query-plan.txt"
+DEFAULT_RESULTS_FILE = "/tmp/clp-insights-query-results.ndjson"
 NON_SELECTIVE_PCT = 90.0
 
 

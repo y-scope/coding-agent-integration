@@ -22,7 +22,7 @@ Two checks:
 Usage:
   clp-report check REPORT [--facts F] [--also F ...]
 
-  --facts F   The facts file (default: /tmp/log-shape-insight-facts.md)
+  --facts F   The facts file (default: /tmp/clp-insights-facts.md)
   --also F    Another file whose figures the report may use, e.g. the results
               table; repeatable.
 
@@ -84,7 +84,7 @@ def looks_like_kql(text):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Flag unsupported figures and KQL fields in a report.")
     ap.add_argument("report")
-    ap.add_argument("--facts", default="/tmp/log-shape-insight-facts.md")
+    ap.add_argument("--facts", default="/tmp/clp-insights-facts.md")
     ap.add_argument("--also", action="append", default=[])
     ap.add_argument("--schema-tree-file", default=None,
                     help="clp-s-schema-tree --json-out file; every path in it is a field")

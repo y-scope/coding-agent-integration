@@ -48,17 +48,17 @@ Options:
                              (default: /tmp/log-shape-templates-by-category.txt)
   --out-query-plan F        Where to write the core plan: the "core" entries,
                              one per line as compact JSON, high priority first
-                             (default: /tmp/log-shape-query-plan.txt)
+                             (default: /tmp/clp-insights-query-plan.txt)
   --out-drill-plan F        Where to write the "drill" entries the same way,
                              grouped by category; they run only when the user
                              focuses on their category (clp-insights focus)
-                             (default: /tmp/log-shape-drill-plan.txt)
+                             (default: /tmp/clp-insights-drill-plan.txt)
   --focus-inbox F           The inbox the plan runner reads focus entries from
                              (clp-insights run --inbox); emptied here,
                              with the previous run's focus file
                              (--focus-file), so a new analysis starts with no
-                             focus (defaults: /tmp/log-shape-focus-inbox.ndjson,
-                             /tmp/log-shape-focus.json)
+                             focus (defaults: /tmp/clp-insights-focus-inbox.ndjson,
+                             /tmp/clp-insights-focus.json)
   --out-top-templates F     With frequencies: the most frequent templates
                              overall (--top-templates, default 30) and per
                              category (--top-per-category, default 5), each
@@ -102,12 +102,12 @@ DEFAULT_CLASSIFICATION_FILE = "/tmp/log-shape-classification.json"
 DEFAULT_FREQS_FILE = "/tmp/log-shape-freqs.ndjson"
 DEFAULT_LOG_SHAPES_FILE = "/tmp/log-shapes.ndjson"
 DEFAULT_OUT_TEMPLATES = "/tmp/log-shape-templates-by-category.txt"
-DEFAULT_OUT_QUERY_PLAN = "/tmp/log-shape-query-plan.txt"
+DEFAULT_OUT_QUERY_PLAN = "/tmp/clp-insights-query-plan.txt"
 DEFAULT_OUT_CATEGORY_TOTALS = "/tmp/log-shape-category-totals.json"
 DEFAULT_OUT_TOP_TEMPLATES = "/tmp/log-shape-top-templates.json"
-DEFAULT_OUT_DRILL_PLAN = "/tmp/log-shape-drill-plan.txt"
-DEFAULT_FOCUS_INBOX = "/tmp/log-shape-focus-inbox.ndjson"
-DEFAULT_FOCUS_FILE = "/tmp/log-shape-focus.json"
+DEFAULT_OUT_DRILL_PLAN = "/tmp/clp-insights-drill-plan.txt"
+DEFAULT_FOCUS_INBOX = "/tmp/clp-insights-focus-inbox.ndjson"
+DEFAULT_FOCUS_FILE = "/tmp/clp-insights-focus.json"
 UNCLASSIFIED = "unclassified"
 
 

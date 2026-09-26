@@ -36,7 +36,7 @@ Options:
                         "message":"msg"}'. Uses its `severity`, `logger`,
                         `timestamp` and `message` fields.
   --plan-file F         The baseline's own plan file (default:
-                        /tmp/log-shape-baseline-plan.txt), run by
+                        /tmp/clp-insights-baseline-plan.txt), run by
                         clp-insights run with its own results file.
                         Entries from an earlier run (origin "baseline") are
                         replaced, so it is safe to run twice.
@@ -139,7 +139,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Add baseline queries to a log-insights query plan.")
     parser.add_argument("--archive", required=True)
     parser.add_argument("--schema-json", required=True)
-    parser.add_argument("--plan-file", default="/tmp/log-shape-baseline-plan.txt")
+    parser.add_argument("--plan-file", default="/tmp/clp-insights-baseline-plan.txt")
     parser.add_argument("--sample", type=int, default=20000)
     parser.add_argument("--max-values", type=int, default=5)
     parser.add_argument("--max-cardinality", type=int, default=40)

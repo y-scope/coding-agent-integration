@@ -177,11 +177,11 @@ def cmd_render(argv):
 def cmd_validate_wildcards(argv):
     """Report every unquoted wildcard value holding a space, in the one KQL operand.
 
-    Anything after that operand is ignored, as it was when this was its own
-    script: the one caller that matters is clp-s-search-kql, which passes the
-    query it is about to run and treats any non-zero status as a refusal.
+    Exactly one operand, like `render`: a second query would have been accepted
+    and never checked, and a validator that silently skips its input is worse
+    than one that refuses it.
     """
-    if not argv:
+    if len(argv) != 1:
         print("usage: kql-build validate-wildcards <kql-query>", file=sys.stderr)
         return 2
 

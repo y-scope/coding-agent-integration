@@ -1,9 +1,9 @@
 """
-clp-report save - save a finished log-insights report where the user
-asked, as Markdown, HTML, PDF, or a page to publish on claude.ai
-(log-insights skill, step 10).
+clp-report save - save a finished report where the user asked, as Markdown,
+HTML, PDF, or a page to publish on claude.ai (the last step of both the
+log-insights and claude-code-trajectory skills).
 
-The report writer always writes Markdown to /tmp/log-shape-insight-report.md,
+The report writer always writes Markdown to /tmp/clp-insights-report.md,
 and the report check reads that file, so the user's choice of place and format
 only matters once the report is final. The skill asks while the writer works
 and runs this afterwards.
@@ -23,7 +23,7 @@ and runs this afterwards.
   --name N        The <name> part of a default file name (default: taken from
                   the report's title, e.g. "cockroach.node1.log").
   --facts F       The facts file whose "Time span" line gives the logs' date
-                  range for the header (default: /tmp/log-shape-insight-facts.md).
+                  range for the header (default: /tmp/clp-insights-facts.md).
                   With no file, or a span that is unavailable, the header
                   shows only the generation date.
 
@@ -48,9 +48,9 @@ import subprocess
 import sys
 import tempfile
 
-DEFAULT_REPORT = "/tmp/log-shape-insight-report.md"
-DEFAULT_FACTS = "/tmp/log-shape-insight-facts.md"
-ARTIFACT_PATH = "/tmp/log-shape-insight-report.artifact.html"
+DEFAULT_REPORT = "/tmp/clp-insights-report.md"
+DEFAULT_FACTS = "/tmp/clp-insights-facts.md"
+ARTIFACT_PATH = "/tmp/clp-insights-report.artifact.html"
 EXTENSIONS = {"md": ".md", "html": ".html", "pdf": ".pdf"}
 KNOWN_SUFFIXES = (".md", ".markdown", ".html", ".htm", ".pdf")
 

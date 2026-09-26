@@ -145,7 +145,13 @@ Run anything that can take over a minute in the background so you can post a sta
 
    **Right after spawning it, ask where to save** (AskUserQuestion; wording in the reference). Run `clp-report save --list-formats` first (instant) so every format offered is one this machine can produce: PDF only when it prints a `PDF_ENGINE` path, and a claude.ai page only when the Artifact tool is in this session's tool list. Nobody to ask → the report stays at `/tmp/clp-session-report.md`.
 
-   Then save it as chosen with `clp-report save`: one run writes every chosen format and never overwrites a file; for a claude.ai page it writes a finished page that you publish with the Artifact tool as-is. A format that fails gets one line with the reason; the others are still saved.
+   Then save it as chosen, **always naming the report path explicitly**:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp-report" save /tmp/clp-session-report.md --format <chosen>
+   ```
+
+   `clp-report` is shared with the `log-insights` skill and its default report path is *that* skill's, so omitting the path saves the wrong file — and silently, because both can exist in `/tmp` at once. One run writes every chosen format and never overwrites a file; for a claude.ai page it writes a finished page that you publish with the Artifact tool as-is. A format that fails gets one line with the reason; the others are still saved.
 
 9. **Close.** Three to five findings, most important first, with inferences labelled; the caveats that change how to read them; and where the report is — each saved path and the claude.ai link. Do not restate the report. Then offer at most three next steps, one line each:
    - Drill into a specific finding (patterns in `session-forensics.md`).

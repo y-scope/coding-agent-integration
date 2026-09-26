@@ -118,6 +118,30 @@ If your change was only made in one product's skills tree, port the equivalent c
 
 Push your branch and open a PR against `main`. The release flow is described in the [Releases](README.md#releases) section of the README — this repo follows [Semantic Versioning](https://semver.org/) for the `clp@yscope` plugin.
 
+## How the clp commands are layered
+
+Do not infer a command's role from its prefix — the prefix records where it came from, and these five tiers record what it is for. A new command belongs in exactly one of them; if it seems to belong in two, it is doing two jobs.
+
+| Tier | What it does | Commands |
+|---|---|---|
+| **Passthrough** | restricted wrappers over the `clp-s` binary, adding validation and nothing else | `clp-s-search-kql`, `clp-s-compress-session`, `clp-s-compress-folder`, `clp-s-decompress`, `clp-s-list-sessions`, `clp-detect-logs`, `clp-compress-status` |
+| **Derived reading** | computes something the records do not state, from one archive | `clp-s-schema-tree` (fields, type drift, record families), `clp-session turns` (turn boundaries and the time split) |
+| **Session model** | reconstructs a whole session from its many files, as archives plus a catalog of how they connect | `clp-bundle`, `clp-bundle-review` |
+| **Measurement** | computes every figure a report may quote, so no model does arithmetic | `clp-session facts`, `clp-insights facts` |
+| **Policy and orchestration** | applies thresholds, or drives a pipeline | `clp-session score` + `scoring-scale.json`, `clp-insights` (the rest), `clp-report`, `kql-build`, `log-shape-cache`, `log-shape-cluster` |
+
+Three things that follow from the tiers, and are easy to get wrong:
+
+**A passthrough may not compute.** If a change would have `clp-s-search-kql` derive, summarise or interpret anything, it belongs in a derived-reading command that calls it. Keeping that boundary is why the search wrapper can be trusted as the single query path.
+
+**Measurement may not judge.** `clp-session facts` publishes values and never scores them; the thresholds live in `scoring-scale.json` because what counts as acceptable is the customer's policy, not a property of the data. A penalty, a weighting or a rung in Python is a bug, not a shortcut.
+
+**`clp-insights facts` and `clp-session facts` are deliberately not merged.** They look alike and they are not: one reads a query-plan's results, the other a bundle's catalog. What they share is a *contract* — the report writer may quote no figure absent from the facts file — and that contract is worth stating in both places rather than abstracting into a base neither fits.
+
+### Naming
+
+An artefact is named after the command that produces it, including temp files: `clp-insights extract` writes `/tmp/clp-insights-query-plan.txt`. `log-shape-*` survives only where the subject genuinely is log shapes — the dictionary, the clustering, the classification cache, and the baseline *method* documented in `references/log-shape-baseline.md`. That is why `log-shape-cache` and `log-shape-cluster` keep their names while the insight pipeline lost the prefix: those two really do cache and cluster log shapes.
+
 ## What to change for each kind of edit
 
 - **New wrapper flag** — add the flag to the wrapper's explicit allowlist (and to the skill's `allowed-tools` for Claude skills), then describe the new flag in `plugins/clp/README.md` and the matching `SKILL.md`. No manifest bump unless behavior changed.
