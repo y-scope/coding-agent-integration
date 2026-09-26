@@ -1,6 +1,6 @@
 # Session insight — categories, questions, prompts, report
 
-Read this at step 4 of the `claude-code-trajectory` skill. It holds the seven categories, the wording of the three questions, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
+Read this at step 2 of the `claude-code-trajectory` skill. It holds the seven categories, the wording of the three questions, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
 
 Every figure quoted anywhere in this pass comes from the facts file that `clp-session facts` writes. Nothing here recomputes a number.
 
@@ -27,7 +27,7 @@ Four distinctions the categories depend on, all of which the facts file makes ex
 
 ## Ask what the user already knows
 
-Right after spawning the extras subagent (step 5). One AskUserQuestion, header `Context`:
+Right after spawning the extras subagent (step 3). One AskUserQuestion, header `Context`:
 
 > **What do you already know about this session?**
 >
@@ -36,11 +36,11 @@ Right after spawning the extras subagent (step 5). One AskUserQuestion, header `
 > - **Evaluating it for scoring** — you want the 0–10 scorecard to compare against other sessions. Runs the scoring pass as well as the checks.
 > - **Just exploring** — no particular suspicion. Queues nothing extra; you pick a focus once the checks come back.
 
-Keep the answer for the summary, the focus question and the report writer. Treat it as a claim to check against the records, never as a fact: a person's account of their own session is frequently wrong about *which* thing was slow or broken, and correcting that is the point of step 6.
+Keep the answer for the summary, the focus question and the report writer. Treat it as a claim to check against the records, never as a fact: a person's account of their own session is frequently wrong about *which* thing was slow or broken, and correcting that is the point of step 4.
 
 ## Ask for the focus
 
-After the summary (step 6). One AskUserQuestion, header `Focus`. Build the options from the `ALERT=` lines the facts pass printed:
+After the summary (step 4). One AskUserQuestion, header `Focus`. Build the options from the `ALERT=` lines the facts pass printed:
 
 - Each alerting category, most severe first, marked "(Recommended)", with its headline figure in the description and what choosing it queues.
 - Any extra category the subagent proposed, described as proposed and with its count.
@@ -229,7 +229,7 @@ The raw value is measured and reported either way — `clp-session facts` never 
 
 ## Ask where to save the report
 
-Right after spawning the writer (step 8). One AskUserQuestion, header `Save`, options built from `clp-report save --list-formats`:
+Right after spawning the writer (step 6). One AskUserQuestion, header `Save`, options built from `clp-report save --list-formats`:
 
 > **Where should the report go?**
 >

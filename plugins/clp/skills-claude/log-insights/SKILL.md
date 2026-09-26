@@ -5,6 +5,7 @@ allowed-tools:
   - "Agent"
   - "AskUserQuestion"
   - "Artifact"
+  - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-analyze:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-detect-logs:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-folder:*)"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql:*)"
@@ -73,9 +74,17 @@ Each Bash call runs in its own shell, so shell variables do not persist between 
 
 Run anything that can take over a minute (the bootstrap on a large archive, the query pools, a subagent) in the background, so you can post the status line while it runs.
 
-1. **Determine the input.** Archive path → use it. Log files or folders → detect, then compress, as the `compress-folder` skill describes (open phase 1 with one line: what the detector found and the flags you chose). Nothing → ask.
+1. **Prepare, with one command.** Open phase 1. `clp-analyze` classifies the target, picks the compression settings from the detector's own evidence, and names the next step:
 
-2. **Close phase 1 in one line** when you compressed: raw size → archive size, the ratio, the elapsed time, and the archives directory (`9.8 GiB → 357 MiB (28×) in 43 s; archive: <dir>`). This replaces the `compress-folder` skill's full stats list; give the full list only when asked. Input already an archive → phase 1 is one line saying so.
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp-analyze" <PATH>
+   ```
+
+   It asks one question — **which application produced these logs?** — and answers it from the records, not the path. Read `APP=`, `ROUTE=`, `WHY=` and `EVIDENCE=`, then `ARCHIVE=` for the artefact to bootstrap. `APP=unrecognised` is an ordinary success, not a problem: logs from an application with no registered specialisation are exactly what this skill discovers and caches. `ROUTE=specialised` with `NEXT_SKILL=claude-code-trajectory` means the target is a Claude Code session and that skill fits it better — say so, and use this one only if the user wants the general treatment, which `--general` forces.
+
+   Already an archive → it says so and does no work. `--dry-run` shows the plan without writing. Two exits are worth handling: a target that is not logs, or cannot be read, fails with `error:` — report it verbatim and stop; and a folder holding logs that need different compression settings is refused with the commands for each group, because one archive takes one timestamp key. Point it at one group, or compress them separately and analyse each archive.
+
+2. **Close phase 1 in one line:** raw size → archive size, the ratio, the elapsed time, and the archives directory (`9.8 GiB → 357 MiB (28×) in 43 s; archive: <dir>`). Input already an archive → one line saying so.
 
 3. **Bootstrap.** Open phase 2 with one line: what the bootstrap does, in plain words, and its estimate. It reads the field names and value distributions from a sample of up to 20,000 records, gets the per-template counts stored in the archive, then checks the classification cache. It classifies nothing (that is step 6), and it doesn't sample the dictionary: every template is counted. The first time it sees an archive, it dumps the full log shape dictionary and stores each template's counts in the cache database, which takes about 1 minute per 300 MiB of archive (`Archive bytes` from step 2, or `du -sh <archive-dir>`): 1 s for a 1.6 MB vLLM archive, about 1 minute for a 357 MiB CockroachDB archive (9.8 GiB of raw logs). A later run on the same archive reads the stored counts instead, and takes about as long as the sample (15 s for that CockroachDB archive). Then run it:
 
