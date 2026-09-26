@@ -53,6 +53,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "li
 
 import bundle as B  # noqa: E402
 import bundle_review as R  # noqa: E402
+import session_layout_claude as L  # noqa: E402
 
 
 def main():
@@ -72,7 +73,7 @@ def main():
     try:
         build = None
         if args.build:
-            home = B.check_claude_home(args.claude_home)
+            home = L.check_claude_home(args.claude_home)
             build = R.ensure_bundles(R.find_sessions(home), args.dir, clp_s=args.clp_s, skip=args.skip,
                                      log=lambda line: print(line, file=sys.stderr))
         bundles = sorted(os.path.dirname(p) for p in

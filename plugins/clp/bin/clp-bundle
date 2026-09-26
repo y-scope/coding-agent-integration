@@ -96,18 +96,14 @@ def minutes(node):
 
 
 def cmd_build(args):
-    import glob
     import bundle_build
+    import session_layout_claude as L
     if args.session_file:
         main_path = args.session_file
     else:
-        home = B.check_claude_home(args.claude_home)
-        hits = glob.glob(os.path.join(home, "projects", "*", args.session_id + ".jsonl"))
-        if len(hits) != 1:
-            raise B.BundleError(f"expected one session {args.session_id} under {home}/projects, found {len(hits)}")
-        main_path = hits[0]
+        main_path = L.find_main_log(args.session_id, L.check_claude_home(args.claude_home))
     result = bundle_build.make_bundle(main_path, args.bundle, clp_s=args.clp_s,
-                                      claude_home=B.check_claude_home(args.claude_home)
+                                      claude_home=L.check_claude_home(args.claude_home)
                                       if args.claude_home else None,
                                       force=args.force, log=print)
     return _report(result)

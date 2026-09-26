@@ -1,4 +1,4 @@
-"""bundle_build - turn one Claude Code session's files into a bundle, and a bundle into its catalog.
+"""bundle_build - turn one session's files into a bundle, and a bundle into its catalog.
 
   bundle/
     manifest.json    every source file: kind, size, hash, and where it went
@@ -6,11 +6,12 @@
     files/           the files that are not JSON logs, at their paths relative to the session
     catalog.sqlite   the map, derived from the three above
 
-make_bundle reads the session's files once: it classifies each by its path (a file that matches no rule
-stops the build), copies the plain files, and compresses each kind of log in one run, removing NUL bytes
-first (see bundle.prepare). build_catalog then reads only the bundle: each archive once, in its original
-order, and the files under files/. So a catalog can be rebuilt with nothing but the bundle. The engine is
-reached only through the functions in bundle.py. Stdlib only.
+make_bundle takes the session's files from the inventory a layout module returns (session_layout_claude
+for a Claude Code session, the only one there is): it copies the plain ones and compresses each kind of
+log in one run, removing NUL bytes first (see bundle.prepare). build_catalog then reads only the bundle:
+each archive once, in its original order, and the files under files/. So a catalog can be rebuilt with
+nothing but the bundle. Which directory a file came from is the layout's business and appears here only
+as the kind on each source; the engine is reached only through the functions in bundle.py. Stdlib only.
 """
 
 import bisect
@@ -25,23 +26,8 @@ import time
 
 import bundle as B
 import session_graph as G
+import session_layout_claude as L
 from session_turns import final_usage, is_human_prompt, usage_of
-
-# kind, where it goes (an archive or files/), and a regex on the path relative to the session directory.
-SESSION_RULES = [
-    ("agent", "archive", r"^subagents/agent-[^/]+\.jsonl$"),
-    ("agent-meta", "files", r"^subagents/agent-[^/]+\.meta\.json$"),
-    ("workflow-agent", "archive", r"^subagents/workflows/wf_[^/]+/agent-[^/]+\.jsonl$"),
-    ("workflow-agent-meta", "files", r"^subagents/workflows/wf_[^/]+/agent-[^/]+\.meta\.json$"),
-    ("workflow-journal", "archive", r"^subagents/workflows/wf_[^/]+/journal\.jsonl$"),
-    ("workflow-run", "archive", r"^workflows/wf_[^/]+\.json$"),
-    ("workflow-script", "files", r"^workflows/scripts/[^/]+\.js$"),
-    ("tool-result", "files", r"^tool-results/[^/]+$"),
-    ("session-title", "files", r"^custom-title\.json$"),
-    ("classifier-error", "files", r"^auto-mode-classifier-error\.txt$"),
-]
-ARCHIVED_KINDS = ["main", "agent", "workflow-agent", "workflow-journal", "workflow-run"]
-EVENT_KINDS = ("main", "agent", "workflow-agent")
 
 
 def _sha256(path):
@@ -50,43 +36,6 @@ def _sha256(path):
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def inventory(main_path, claude_home):
-    """(session id, [source]) for every file of the session. A source is a dict: name (its path relative
-    to the session, which is also its path under files/), path (relative to the source root), full, kind,
-    where (archive or files)."""
-    sid = os.path.basename(main_path)[:-len(".jsonl")]
-    project_dir = os.path.dirname(os.path.abspath(main_path))
-    root = os.path.join(project_dir, sid)
-    source_root = claude_home or project_dir
-
-    def source(name, full, kind, where):
-        return {"name": name, "path": os.path.relpath(full, source_root), "full": full, "kind": kind, "where": where}
-
-    found = [source(os.path.basename(main_path), os.path.abspath(main_path), "main", "archive")]
-    if os.path.isdir(root):
-        for dirpath, _, names in os.walk(root):
-            for n in names:
-                full = os.path.join(dirpath, n)
-                inner = os.path.relpath(full, root)
-                for kind, where, rx in SESSION_RULES:
-                    if re.match(rx, inner):
-                        found.append(source(inner, full, kind, where))
-                        break
-                else:
-                    raise B.BundleError(f"unclassified file: {os.path.relpath(full, source_root)} "
-                                        "(add a rule to bundle_build.SESSION_RULES or remove it)")
-    if claude_home:
-        for kind in ("tasks", "file-history"):
-            base = os.path.join(claude_home, kind, sid)
-            for dirpath, _, names in os.walk(base):
-                for n in names:
-                    full = os.path.join(dirpath, n)
-                    if dirpath != base:
-                        raise B.BundleError(f"unclassified file (nested under {kind}): {os.path.relpath(full, source_root)}")
-                    found.append(source(f"{kind}/{n}", full, kind.rstrip("s") if kind == "tasks" else kind, "files"))
-    return sid, sorted(found, key=lambda s: s["name"])
 
 
 def _exists_refusal(out, is_bundle):
@@ -111,17 +60,10 @@ def _exists_refusal(out, is_bundle):
 
 def make_bundle(main_path, out, clp_s=None, claude_home=None, force=False, log=lambda line: None):
     """Make the bundle of the session whose main log is main_path in `out`, then its catalog. Returns
-    build_catalog's result. `claude_home` (the directory holding projects/, tasks/ and file-history/)
-    defaults to the one main_path sits in; tasks and file snapshots are skipped when there is none."""
+    build_catalog's result. `claude_home` names the session's home to the layout module, which works it
+    out from main_path when the caller does not (see session_layout_claude.resolve_session)."""
     started = time.time()
-    main_path = os.path.abspath(main_path)
-    if not os.path.isfile(main_path) or not main_path.endswith(".jsonl"):
-        raise B.BundleError(f"not a session log (a .jsonl file): {main_path}")
-    if claude_home is None:
-        project_dir = os.path.dirname(main_path)
-        if os.path.basename(os.path.dirname(project_dir)) == "projects":
-            claude_home = os.path.dirname(os.path.dirname(project_dir))
-    claude_home = os.path.abspath(claude_home) if claude_home else None
+    main_path, claude_home = L.resolve_session(main_path, claude_home)
     clp_s = B.resolve_clp_s(clp_s)
     out = os.path.abspath(out)
     if os.path.exists(out):
@@ -131,7 +73,7 @@ def make_bundle(main_path, out, clp_s=None, claude_home=None, force=False, log=l
         else:
             raise B.BundleError(_exists_refusal(out, is_bundle))
 
-    sid, sources = inventory(main_path, claude_home)
+    sid, source_root, sources = L.inventory(main_path, claude_home)
     counts = {}
     for s in sources:
         counts[s["kind"]] = counts.get(s["kind"], 0) + 1
@@ -148,7 +90,7 @@ def make_bundle(main_path, out, clp_s=None, claude_home=None, force=False, log=l
                 s["file"] = f"files/{s['name']}"
                 os.makedirs(os.path.dirname(os.path.join(out, s["file"])), exist_ok=True)
                 shutil.copy2(s["full"], os.path.join(out, s["file"]))
-        for kind in ARCHIVED_KINDS:
+        for kind in L.ARCHIVED_KINDS:
             members = [s for s in sources if s["kind"] == kind]
             if not members:
                 continue
@@ -162,7 +104,7 @@ def make_bundle(main_path, out, clp_s=None, claude_home=None, force=False, log=l
                 if p.nul_bytes:
                     log(f"REPAIRED {s['path']} nul_bytes={p.nul_bytes} damaged_lines={p.damaged_lines}")
             log(f"ARCHIVE {kind} files={len(members)} records={pos} id={archive_id}")
-        manifest = {"layout": B.MANIFEST_LAYOUT, "session_id": sid, "source_root": claude_home or os.path.dirname(main_path),
+        manifest = {"layout": B.MANIFEST_LAYOUT, "session_id": sid, "source_root": source_root,
                     "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "clp_s": clp_s,
                     "sources": [{k: v for k, v in s.items() if k != "full"} for s in sources]}
         with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as fh:
@@ -398,12 +340,12 @@ def _write_events(db, positioned):
     counts = {}
     prompts, turn_of_prompt = [], {}
     cwd = None
-    for kind in EVENT_KINDS:
+    for kind in L.EVENT_KINDS:
         rows, unlisted, no_uuid = [], 0, 0
         deltas, pending, actions = [], {}, []
         for _source, records in positioned.get(kind, []):
             for pos, r in enumerate(records, records.first):
-                if r.get("type") == "file-history-delta":
+                if r.get("type") == L.FILE_VERSION_RECORD:
                     deltas.append(r)
                 if kind == "main" and cwd is None and isinstance(r.get("cwd"), str):
                     cwd = r["cwd"]
@@ -467,7 +409,7 @@ def _write_events(db, positioned):
             name = backup.get("backupFileName")
             db.execute("INSERT INTO file_versions VALUES(?,?,?,?,?,?,?,?)",
                        (turn, ts[:23] if isinstance(ts, str) else None, path, _hash(path) if path else None,
-                        backup.get("version"), f"files/file-history/{name}" if name else None, d.get("messageId"),
+                        backup.get("version"), L.snapshot_file(name) if name else None, d.get("messageId"),
                         d.get("snapshotMessageId")))
         for uuid, agent, ts, action, failed, fields in actions:
             turn = bisect.bisect_right(prompts, ts[:23]) if isinstance(ts, str) and prompts else None

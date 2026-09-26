@@ -638,7 +638,7 @@ explain_zero_match() {
 }
 
 # check_claude_root VALUE [FLAG]
-# The mirror of bundle.py's check_claude_home. --claude-root wants projects/
+# The mirror of session_layout_claude.py's check_claude_home. --claude-root wants projects/
 # itself, while the bundle tools' --claude-home wants the directory above it; one
 # level out finds no sessions and reads as an empty machine, so the wrong level is
 # named with its correction instead of failing quietly.
