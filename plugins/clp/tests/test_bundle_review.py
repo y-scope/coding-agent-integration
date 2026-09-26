@@ -72,6 +72,36 @@ class CallPatterns(unittest.TestCase):
         self.assertEqual(R.call_patterns(db)["redundant_reads"][0], 1)
 
 
+class Trends(unittest.TestCase):
+    def catalog(self, directory, calls):
+        """calls: [(timestamp, failed)]"""
+        import sqlite3
+        os.makedirs(directory)
+        db = sqlite3.connect(os.path.join(directory, "catalog.sqlite"))
+        db.executescript(B.SCHEMA)
+        db.execute("INSERT INTO bundle VALUES('layout', ?)", (str(B.LAYOUT),))
+        for i, (ts, failed) in enumerate(calls):
+            cur = db.execute("INSERT INTO events(uuid, kind, pos, ts, type) VALUES(?,?,?,?,?)", (f"u{i}", "main", i, ts, "user"))
+            db.execute("INSERT INTO event_tools(event, tool_use_id, role, is_error) VALUES(?,?,?,?)",
+                       (cur.lastrowid, f"t{i}", "result", int(failed)))
+        db.commit()
+        db.close()
+        return directory
+
+    def test_a_clear_rise_is_flagged_a_thin_period_is_not_and_weeks_are_iso(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # 2026-08-24 is the Monday of ISO week 35; 2026-08-31 of week 36; 2026-09-07 of week 37
+            a = self.catalog(os.path.join(tmp, "a"), [("2026-08-24T10:00:00.000", i < 5) for i in range(600)]
+                             + [("2026-08-31T10:00:00.000", i < 60) for i in range(600)])
+            b = self.catalog(os.path.join(tmp, "b"), [("2026-08-30T23:00:00.000", False)] * 100      # Sunday: still week 35
+                             + [("2026-09-07T10:00:00.000", True)] * 10)
+            rows = [r for r in R.trends([a, b], "week") if r["signal"] == "tool error rate"]
+            got = {r["period"]: (r["volume"], r["sessions"], r["enough"], r["change"]) for r in rows}
+        self.assertEqual(got["2026-W35"], (700, 2, True, None))
+        self.assertEqual(got["2026-W36"], (600, 1, True, "up"))                  # 0.7% -> 10%
+        self.assertEqual(got["2026-W37"], (10, 1, False, None))                  # 100% of 10 calls: too little to say
+
+
 class ErrorGroups(unittest.TestCase):
     def groups(self, templates):
         return {t: {"n": 1, "sessions": {"s"}, "projects": {"p"}, "examples": ["s u"]} for t in templates}

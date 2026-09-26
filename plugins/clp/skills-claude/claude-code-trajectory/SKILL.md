@@ -223,7 +223,7 @@ for each, ranks them against each other, and groups failed tool calls across ses
 "${CLAUDE_PLUGIN_ROOT}/bin/clp-bundle-review" /tmp/yscope-clp-bundles --build --skip <THIS_SESSION_ID>
 ```
 
-Pass `--skip` with the id of the session you are running in (it is still being written). Error groups
+Pass `--skip` with the id of the session you are running in (it is still being written). Add `--trend week` (or `day`) for the signals per period, each with its volume, the number of sessions behind it and a 95% interval; a change is flagged only between periods with enough volume. A period resting on one or two sessions is about those sessions, not a trend: say so. Error groups
 send the template text of non-command error messages (variables already replaced by `<*>`) to the
 plugin's built-in semantic endpoint; tell the user before running it on logs they have not agreed to
 send, and relay an endpoint error as it is. Each finding line carries an example id to open with
