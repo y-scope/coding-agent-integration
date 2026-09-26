@@ -47,7 +47,7 @@ def _exists_refusal(out, is_bundle):
     """
     if is_bundle:
         ways = [f"reuse it as it stands -- it is already a bundle",
-                f"`clp-bundle {out} {B.CMD_REBUILD}` to rebuild its catalog from the archives it holds",
+                f"`clp bundle {out} {B.CMD_REBUILD}` to rebuild its catalog from the archives it holds",
                 f"pass {B.OPT_FORCE} to delete it and build again from the session log"]
     else:
         ways = [f"build into a directory that does not exist yet",
@@ -81,7 +81,7 @@ def make_bundle(main_path, out, clp_s=None, claude_home=None, force=False, log=l
 
     os.makedirs(os.path.join(out, "archives"))
     os.makedirs(os.path.join(out, "files"))
-    workdir = tempfile.mkdtemp(prefix="clp-bundle-")
+    workdir = tempfile.mkdtemp(prefix="clp-build-")
     try:
         for s in sources:
             s["bytes"] = os.path.getsize(s["full"])

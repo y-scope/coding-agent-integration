@@ -1,16 +1,16 @@
 """
-clp-session turns - where a Claude Code session's time went, per turn.
+clp session turns - where a Claude Code session's time went, per turn.
 
 Usage:
-  clp-session turns [options] ARCHIVES_DIR
+  clp session turns [options] ARCHIVES_DIR
 
 ARCHIVES_DIR is an archive made from one Claude Code session's main log
-(clp-s-compress-session), compressed with or without --structurize-arrays. It
+(clp compress session), compressed with or without --structurize-arrays. It
 must hold that one archive: a directory of several (such as a bundle's
 archives/, which also holds the agents' transcripts) is refused, because agent
 prompts would be counted as human prompts. For a bundle, pass the main log's
 archive, BUNDLE/archives/<id> where <id> is
-  clp-bundle BUNDLE sql "select archive_id from archives where kind='main'".
+  clp bundle BUNDLE sql "select archive_id from archives where kind='main'".
 
 Options:
   --top N             Print the N longest turns (default: 10; 0 prints all).
@@ -25,8 +25,8 @@ Options:
                       sent with that call, so the series shows the context growing and
                       a compaction resetting it.
   --json              Print one JSON object instead of the lines below.
-  --search-wrapper P  Search wrapper (default: clp-s-search-kql next to this
-                      script).
+  --search-wrapper P  Search wrapper: one executable (default: `clp
+                      search`).
 
 A turn runs from one human prompt to the next; records the harness injects (task
 notifications, command output, compaction summaries) are not prompts. Its time is
@@ -46,7 +46,7 @@ Output, one line each:
 Tokens are the usage the API reported for the main thread's model responses, each response
 counted once (its records repeat its usage). Input is counted on every call, so a long
 conversation's input total far exceeds its context size. Agents' tokens are not included: a
-bundle's catalog has them per agent (clp-bundle).
+bundle's catalog has them per agent (clp bundle).
 
 Why: the harness's own turn_duration records nest inside each other and can be
 negative, so their durations cannot be added up or attributed. Wall-clock time here
@@ -65,6 +65,7 @@ LIB_DIR = os.path.dirname(os.path.realpath(__file__))
 BIN_DIR = os.path.dirname(LIB_DIR)
 sys.path.insert(0, LIB_DIR)
 
+import commands as C  # noqa: E402
 from session_turns import (  # noqa: E402
     HUMAN_WAIT_TOOLS,
     IDLE_SECONDS,
@@ -79,7 +80,7 @@ def read_records(wrapper, archives_dir):
     """The user and assistant records of the archive, one at a time. A search with no
     projection returns whole records, arrays included, whatever way they were stored."""
     proc = subprocess.Popen(
-        [wrapper, archives_dir, 'type:"assistant" OR type:"user"'],
+        [*wrapper, archives_dir, 'type:"assistant" OR type:"user"'],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
     )
     for line in proc.stdout:
@@ -125,11 +126,11 @@ def main():
     parser.add_argument("--human-tools", default=",".join(HUMAN_WAIT_TOOLS))
     parser.add_argument("--calls", action="store_true")
     parser.add_argument("--json", action="store_true")
-    parser.add_argument(
-        "--search-wrapper",
-        default=os.path.join(BIN_DIR, "clp-s-search-kql"),
-    )
+    parser.add_argument("--search-wrapper")
     args = parser.parse_args()
+    # One path, not an argv: a caller replacing the search with its own program gives one
+    # executable. The default is this plugin's own `clp search`, which is two words.
+    args.search_wrapper = [args.search_wrapper] if args.search_wrapper else C.search_argv()
 
     count = archive_count(args.archives_dir)
     if count > 1:
@@ -137,8 +138,8 @@ def main():
         hint = ""
         if os.path.isfile(os.path.join(bundle, "catalog.sqlite")):
             hint = (f"\nFor this bundle, pass its main log's archive: {args.archives_dir.rstrip('/')}/<id>, where <id> is\n"
-                    f"  clp-bundle {bundle} sql \"select archive_id from archives where kind='main'\"")
-        print(f"error: {args.archives_dir} holds {count} archives; clp-session turns reads one session's main log, "
+                    f"  clp bundle {bundle} sql \"select archive_id from archives where kind='main'\"")
+        print(f"error: {args.archives_dir} holds {count} archives; clp session turns reads one session's main log, "
               "and records from other logs (such as agent transcripts) would be counted as its turns." + hint,
               file=sys.stderr)
         return 2

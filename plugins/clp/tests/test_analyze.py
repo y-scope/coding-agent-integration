@@ -1,4 +1,4 @@
-"""clp-analyze: which application the records name, which route follows, and what is already there.
+"""clp: which application the records name, which route follows, and what is already there.
 
 The classification is exercised against real report text and real metadata files rather than against
 a mocked classifier, because the whole point of the design is that the answer comes from what the
@@ -17,7 +17,7 @@ BIN = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin"))
 sys.path.insert(0, os.path.join(BIN, "lib"))
 import analyze as A  # noqa: E402
 
-# One clp-detect-logs report per shape the classifier has to read: a Claude Code session log, a
+# One clp detect report per shape the classifier has to read: a Claude Code session log, a
 # bundled vLLM text format, a JSON application it does not know, and a file that is not logs.
 SESSION_REPORT = """Input: /h/projects/p/s.jsonl is a file
 Read the first 128.0 KiB of 1 file(s), 92.9 MiB in all. Nothing was written.
@@ -31,7 +31,7 @@ timestamp:  no field holds a timestamp in every record; time-range search won't 
 records:    {"type": "last-prompt"}
 
 SUMMARY files=1 json=1
-SUGGEST clp-s-compress-folder --path /h/projects/p/s.jsonl
+SUGGEST clp compress folder --path /h/projects/p/s.jsonl
 """
 
 VLLM_REPORT = """Input: /logs/w3.log is a file
@@ -43,7 +43,7 @@ to timestamp, logger, level, worker, message
 lines:      2026-06-09 10:02:41,887 - sflow.task.vllm_worker_3 - INFO - 0: hello
 
 SUMMARY files=1 text=1
-SUGGEST clp-s-compress-folder --path /logs/w3.log --structurize
+SUGGEST clp compress folder --path /logs/w3.log --structurize
 """
 
 COCKROACH_REPORT = """Input: /logs/n1.log is a file
@@ -54,7 +54,7 @@ fields:     channel: string · file: string · goroutine: number · tag: string 
 timestamp:  "timestamp": epoch seconds as a string, e.g. "1679711330.570420890"
 
 SUMMARY files=1 json=1
-SUGGEST clp-s-compress-folder --path /logs/n1.log --timestamp-key timestamp
+SUGGEST clp compress folder --path /logs/n1.log --timestamp-key timestamp
 """
 
 BINARY_REPORT = """Input: /logs/blob.log is a file
@@ -80,12 +80,12 @@ class ReadingTheDetectorsReport(unittest.TestCase):
 
     def test_the_suggested_command_is_carried_through_unchanged(self):
         report = A.parse_detect(VLLM_REPORT)
-        self.assertEqual(report["suggest"], [["clp-s-compress-folder", "--path", "/logs/w3.log",
-                                              "--structurize"]])
+        self.assertEqual(report["suggest"], [["clp", "compress", "folder", "--path",
+                                              "/logs/w3.log", "--structurize"]])
         argv = A.compress_folder_argv(report["suggest"][0], archives_root_value="/tmp/ar")
-        self.assertEqual(argv[1:], ["--path", "/logs/w3.log", "--structurize",
-                                    "--archives-root", "/tmp/ar"])
-        self.assertEqual(os.path.basename(argv[0]), "clp-s-compress-folder")
+        self.assertEqual(argv[1:], ["compress", "folder", "--path", "/logs/w3.log",
+                                    "--structurize", "--archives-root", "/tmp/ar"])
+        self.assertEqual(os.path.basename(argv[0]), "clp")
 
     def test_a_bundled_text_format_names_the_application(self):
         app, why = A.app_of_detected(A.parse_detect(VLLM_REPORT))
@@ -275,7 +275,7 @@ class WhereThingsGo(unittest.TestCase):
     def test_the_session_compressor_is_told_the_layout_and_nothing_else(self):
         argv = A.compress_session_argv("/h/projects/p/s.jsonl", "/h", archives_root_value="/tmp/ar",
                                        clp_s="/opt/clp-s")
-        self.assertEqual(os.path.basename(argv[0]), "clp-s-compress-session")
+        self.assertEqual([os.path.basename(argv[0]), *argv[1:3]], ["clp", "compress", "session"])
         self.assertIn("--claude-root", argv)
         self.assertEqual(argv[argv.index("--claude-root") + 1], "/h/projects")
         self.assertEqual(argv[argv.index("--archives-root") + 1], "/tmp/ar")
@@ -287,7 +287,7 @@ class WhereThingsGo(unittest.TestCase):
 
 class TheCommandItself(unittest.TestCase):
     def run_it(self, *args):
-        proc = subprocess.run([os.path.join(BIN, "clp-analyze"), *args], capture_output=True,
+        proc = subprocess.run([os.path.join(BIN, "clp"), *args], capture_output=True,
                               text=True)
         return proc
 

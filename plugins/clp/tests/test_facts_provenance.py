@@ -64,7 +64,7 @@ def figure_lines(text, heading):
 
 
 class SessionFactsProvenance(unittest.TestCase):
-    """clp-session facts against a hand-made catalog, checks included."""
+    """clp session facts against a hand-made catalog, checks included."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -140,7 +140,7 @@ class SessionFactsProvenance(unittest.TestCase):
 
     def run_facts(self, *extra):
         out = os.path.join(self.tmp.name, "facts.md")
-        p = subprocess.run([os.path.join(BIN, "clp-session"), "facts", "--bundle", self.dir,
+        p = subprocess.run([os.path.join(BIN, "clp"), "session", "facts", "--bundle", self.dir,
                             "--out", out, *extra], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         with open(out, "r", encoding="utf-8") as fh:
@@ -192,8 +192,9 @@ class SessionFactsProvenance(unittest.TestCase):
             self.assertTrue(words, command)
             self.assertNotIn("/", words[0],
                              f"the wrapper is named by path, not basename: {command[:80]}")
-            self.assertIn(words[0], ("clp-bundle", "clp-session", "clp-s-search-kql",
-                                     "clp-s-schema-tree", "python3", "grep"), command[:80])
+            self.assertIn(words[0], ("clp", "python3", "grep"), command[:80])
+            if words[0] == "clp":
+                self.assertIn(words[1], ("bundle", "session", "search", "schema"), command[:80])
 
     def test_no_check_names_a_home_directory_or_a_clp_s_build(self):
         home = os.path.expanduser("~")
@@ -206,9 +207,9 @@ class SessionFactsProvenance(unittest.TestCase):
         ran = 0
         for command in dict.fromkeys(check_commands(self.text)):
             words = shlex.split(command)
-            if words[0] != "clp-bundle" or "sql" not in words:
+            if words[:2] != ["clp", "bundle"] or "sql" not in words:
                 continue
-            words[0] = os.path.join(BIN, "clp-bundle")
+            words[0] = os.path.join(BIN, "clp")
             p = subprocess.run(words, capture_output=True, text=True)
             self.assertEqual(p.returncode, 0, f"{command[:120]}\n{p.stderr[:300]}")
             self.assertGreaterEqual(len(p.stdout.strip().splitlines()), 2,
@@ -244,7 +245,7 @@ class SessionFactsProvenance(unittest.TestCase):
         self.assertIn("summed attempt minutes are not elapsed time", self.text)
 
     def test_the_attribution_trap_travels_with_the_confirmed_commits(self):
-        """clp-bundle repo needs a repository, so the outcome section is driven
+        """clp bundle repo needs a repository, so the outcome section is driven
         here with an answer of the shape it returns."""
         repo = {"repo": "r", "commits_in_span": 4, "unattributed": {},
                 "commits": [{"match": "exact"}, {"match": "time+subject"},
@@ -252,7 +253,7 @@ class SessionFactsProvenance(unittest.TestCase):
                 "prs": [{"prs": ["https://example.invalid/pr/1"]}]}
         out, F = [], {"checks": [], "bundle": self.dir}
         cat = session_facts.Catalog(os.path.join(self.dir, "catalog.sqlite"))
-        session_facts.section_outcomes(cat, None, "not run", repo, "clp-bundle repo --json",
+        session_facts.section_outcomes(cat, None, "not run", repo, "clp bundle repo --json",
                                       out.append, F, {}, [], 10)
         text = "\n".join(out)
         self.assertIn(f"- {session_facts.MEASURED} **Commits the repository confirms: 3 of 4", text)
@@ -261,7 +262,7 @@ class SessionFactsProvenance(unittest.TestCase):
         self.assertIn("attributed, not proven", traps[0])
         self.assertIn("1 of 3", traps[0])       # only the exact match is proven
         commands = {c["name"]: c["command"] for c in F["checks"]}
-        self.assertEqual(commands["PRs GitHub confirms"], f"clp-bundle {self.dir} repo --json")
+        self.assertEqual(commands["PRs GitHub confirms"], f"clp bundle {self.dir} repo --json")
 
     # -- the axes
 
@@ -309,7 +310,7 @@ class SessionFactsProvenance(unittest.TestCase):
         with open(axes_file, "w", encoding="utf-8") as fh:
             fh.write(self.stdout)
         out = os.path.join(self.tmp.name, "score.json")
-        p = subprocess.run([os.path.join(BIN, "clp-session"), "score",
+        p = subprocess.run([os.path.join(BIN, "clp"), "session", "score",
                             "--axes-file", axes_file, "--out", out], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         with open(out, "r", encoding="utf-8") as fh:
@@ -326,7 +327,7 @@ class SessionFactsProvenance(unittest.TestCase):
 
 
 class InsightsFactsProvenance(unittest.TestCase):
-    """clp-insights facts: markers, and the KQL behind each count."""
+    """clp facts: markers, and the KQL behind each count."""
 
     TOTAL = 100
 
@@ -344,12 +345,12 @@ class InsightsFactsProvenance(unittest.TestCase):
                "origin": origin, "status": "ok", "total_records": self.TOTAL, "match": match,
                "kql": kql, "count": count,
                # The pool records an absolute path; the facts must not repeat it.
-               "command": f"/opt/somewhere/plugins/clp/bin/clp-s-search-kql --count "
+               "command": f"/opt/somewhere/plugins/clp/bin/clp search --count "
                           f"{self.archive} '{kql}'"}
         if samples:
             row.update(origin="follow-up of 2", samples=[json.dumps(s) for s in samples],
                        method="project+grep",
-                       command=f"/opt/somewhere/plugins/clp/bin/clp-s-search-kql "
+                       command=f"/opt/somewhere/plugins/clp/bin/clp search "
                                f"--projection timestamp,severity,message {self.archive} '{kql}'")
         return row
 
@@ -361,7 +362,7 @@ class InsightsFactsProvenance(unittest.TestCase):
 
     def run_facts(self, entries, *extra):
         baseline = self.write("baseline.ndjson", entries)
-        p = subprocess.run([os.path.join(BIN, "clp-insights"), "facts",
+        p = subprocess.run([os.path.join(BIN, "clp"), "facts",
                             "--schema-json", '{"severity":"severity","message":"msg"}',
                             "--archive-dir", self.archive,
                             "--baseline-results-file", baseline,
@@ -407,7 +408,7 @@ class InsightsFactsProvenance(unittest.TestCase):
 
     def test_the_check_for_a_count_is_the_query_that_ran(self):
         text = self.run_facts(self.split())
-        self.assertIn("clp-s-search-kql --count %s 'severity:\"INFO\"'" % self.archive, text)
+        self.assertIn("clp search --count %s 'severity:\"INFO\"'" % self.archive, text)
 
     def test_the_per_value_split_of_the_fetched_records_is_checked_by_filtering_them(self):
         text = self.run_facts(self.split())
@@ -422,7 +423,7 @@ class InsightsFactsProvenance(unittest.TestCase):
         for entry in entries:
             del entry["command"]
         text = self.run_facts(entries)
-        self.assertIn(f"clp-s-search-kql --count {self.archive} 'severity:\"INFO\"'", text)
+        self.assertIn(f"clp search --count {self.archive} 'severity:\"INFO\"'", text)
         self.assertNotIn("Not checkable in one command", text)
 
     def test_a_count_with_neither_a_command_nor_a_kql_says_which_is_missing(self):

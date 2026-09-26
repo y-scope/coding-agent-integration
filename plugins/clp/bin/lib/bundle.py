@@ -22,12 +22,12 @@ import subprocess
 from datetime import datetime
 
 # The catalog's layout. A catalog of another layout is refused, and rebuilt from its bundle
-# (`clp-bundle BUNDLE rebuild`) when the bundle's manifest layout is current.
+# (`clp bundle BUNDLE rebuild`) when the bundle's manifest layout is current.
 LAYOUT = 6
 # The layout of manifest.json, archives/ and files/. A bundle of another layout is made again (`build --force`).
 MANIFEST_LAYOUT = 2
 
-# Names that clp-bundle's parser defines and that error messages suggest. Shared so
+# Names that clp bundle's parser defines and that error messages suggest. Shared so
 # a refusal cannot end up naming a flag that no longer exists: rename it here and
 # both the parser and every message that offers it move together.
 OPT_FORCE = "--force"
@@ -95,7 +95,7 @@ CREATE INDEX event_tools_event ON event_tools(event);
 CREATE TABLE file_versions(turn INTEGER, ts TEXT, path TEXT, file_hash TEXT, version INTEGER, backup TEXT,
                            message_uuid TEXT, prompt_uuid TEXT);
 -- ts is when the command was issued, ended when its result came back: the window a repository's own history
--- is matched in (clp-bundle BUNDLE repo).
+-- is matched in (clp bundle BUNDLE repo).
 CREATE TABLE actions(uuid TEXT, kind TEXT, agent_id TEXT, turn INTEGER, ts TEXT, action TEXT, failed INTEGER,
                      confirmed INTEGER, branch TEXT, sha TEXT, pr_url TEXT, tests_passed INTEGER, tests_failed INTEGER,
                      ended TEXT);
@@ -138,7 +138,7 @@ def open_catalog(bundle_dir):
         db.close()
         found = f"layout {layout[0]}" if layout and str(layout[0]).isdigit() else "an older layout"
         raise BundleError(f"the catalog in {bundle_dir} has {found}, not layout {LAYOUT}; rebuild it with "
-                          f"`clp-bundle {bundle_dir} rebuild` (or, for a bundle with no manifest.json, `build --force`)")
+                          f"`clp bundle {bundle_dir} rebuild` (or, for a bundle with no manifest.json, `build --force`)")
     return db
 
 
@@ -170,7 +170,7 @@ def archive_ids(db, kind):
 
 
 def search_command(bundle_dir, wrapper, archive_id, kql):
-    return [wrapper, "--archive-id", archive_id, os.path.join(bundle_dir, "archives"), kql]
+    return [*wrapper, "--archive-id", archive_id, os.path.join(bundle_dir, "archives"), kql]
 
 
 def evidence_query(node):
@@ -499,8 +499,8 @@ def clp_s_diagnosis(clp_s, archive_dir, stderr=""):
     """" -- the binary is the problem: ..." when it is, else "".
 
     The Python twin of diagnose_clp_s_failure in lib/clp-common.sh, for the calls
-    that run clp-s directly instead of going through clp-s-search-kql: without it
-    `clp-bundle repo` reports only clp-s's own error, which for a build too old to
+    that run clp-s directly instead of going through clp search: without it
+    `clp bundle repo` reports only clp-s's own error, which for a build too old to
     open the archive says nothing about the build.
 
     Probing rather than versioning is forced: clp-s answers --version with "Command

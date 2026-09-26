@@ -17,7 +17,7 @@ import tempfile
 import unittest
 
 BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "bin")
-FACTS = [os.path.join(BIN, "clp-insights"), "facts"]
+FACTS = [os.path.join(BIN, "clp"), "facts"]
 SCHEMA = '{"severity":"severity","message":"msg"}'
 TOTAL = 100
 

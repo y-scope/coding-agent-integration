@@ -6,7 +6,7 @@ import os
 import sys
 import datetime
 
-# The line formats structurize.py understands. clp-detect-logs imports these, so
+# The line formats structurize.py understands. clp detect imports these, so
 # detection and conversion always agree on what counts as a vLLM line.
 
 # Regex to match the outer wrapper log format

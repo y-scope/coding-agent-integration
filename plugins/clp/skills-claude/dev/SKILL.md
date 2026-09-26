@@ -10,35 +10,35 @@ allowed-tools:
 Developer workflow for two related tasks:
 
 1. **Build/test/lint/format a local CLP source tree** (e.g. the `clp` / `clp_s` / `clpp` C++ code, plus Rust components).
-2. **Point the plugin wrappers at a locally-built `clp-s` binary** so compress/ search/clpp-compress/clpp-search run against the local build instead of the installed plugin binary — primarily for testing in-flight clpp-branch work.
+2. **Point the plugin's `clp` command at a locally-built `clp-s` binary** so compress/ search/clpp-compress/clpp-search run against the local build instead of the installed plugin binary — primarily for testing in-flight clpp-branch work.
 
 This skill is for CLP contributors. For end-user compress/search, use the `compress`, `search`, `clpp-compress`, and `clpp-search` skills instead.
 
 ## Point the wrappers at a local binary
 
-`resolve_clp_s` (in the plugin's `bin/lib/clp-common.sh`) honors the **`CLP_S_BIN` environment variable**: if set to an executable, every wrapper uses it. This is the primary mechanism and needs no wrapper changes.
+`resolve_clp_s` (in the plugin's `bin/lib/clp-common.sh`) honors the **`CLP_S_BIN` environment variable**: if set to an executable, every subcommand that runs the engine uses it. This is the primary mechanism and needs no changes to the plugin's source.
 
 ```bash
 # From a CLP source checkout after building:
 export CLP_S_BIN="$PWD/build/core/clp-s"
 
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" --session-file … --parsing-specification spec.txt
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" --experimental /tmp/archive '*'
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress session --session-file … --parsing-specification spec.txt
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" search --experimental /tmp/archive '*'
 ```
 
-For a one-off invocation, use the **`--clp-s-bin PATH`** flag that the `clp-s-compress-session` and `clp-s-search-kql` wrappers accept. The flag wins for that invocation only and composes with `CLP_S_BIN`:
+For a one-off invocation, use the **`--clp-s-bin PATH`** flag that `clp compress session` and `clp search` accept. The flag wins for that invocation only and composes with `CLP_S_BIN`:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-search-kql" \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" search \
   --experimental --clp-s-bin "$PWD/build/core/clp-s" \
   /tmp/archive 'shape(message): "*"'
 ```
 
-Tip: wrappers can also be run directly from a plugin source checkout (`~/yscope/coding-agent-integration`), which is how the plugin's own `LOCAL_TESTING.md` smoke-tests them:
+Tip: `clp` can also be run directly from a plugin source checkout (`~/yscope/coding-agent-integration`), which is how the plugin's own `LOCAL_TESTING.md` smoke-tests it:
 
 ```bash
 CLP_S_BIN="$PWD/build/core/clp-s" \
-  ~/yscope/coding-agent-integration/plugins/clp/bin/clp-s-search-kql …
+  ~/yscope/coding-agent-integration/plugins/clp/bin/clp search …
 ```
 
 ## Build (local CLP source)
@@ -111,41 +111,26 @@ task lint:fix-rust
 
 ## Plugin preflight
 
-When changing the plugin wrappers or skills (in the `~/yscope/coding-agent-integration` checkout), validate before installing:
+When changing the plugin's `clp` command or its skills (in the `~/yscope/coding-agent-integration` checkout), validate before installing. There is one command to edit through: `plugins/clp/bin/clp` is the entry point and stays as it is, every subcommand's implementation is a `*.py` module or a `*.sh` script in `plugins/clp/bin/lib/`, and `plugins/clp/bin/lib/commands.py` is the table that maps a subcommand name to its implementation — add, rename or re-blurb a subcommand there. `plugins/clp/bin/clp-s` is not a subcommand: it is the engine shim a local build replaces.
 
 ```bash
 cd ~/yscope/coding-agent-integration
 claude plugin validate .
 claude plugin validate ./plugins/clp
 
-# Wrapper syntax
-for f in plugins/clp/bin/clp-s-* \
-         plugins/clp/bin/lib/insights-bootstrap.sh \
-         plugins/clp/bin/log-shape-cluster; do bash -n "$f"; done
-python3 -m py_compile plugins/clp/bin/log-shape-cluster.py plugins/clp/bin/log-shape-cache \
-  plugins/clp/bin/clp-detect-logs plugins/clp/bin/kql-build \
-  plugins/clp/bin/clp-insights plugins/clp/bin/clp-report plugins/clp/bin/clp-session \
-  plugins/clp/bin/lib/insights_extract.py plugins/clp/bin/lib/insights_run.py \
-  plugins/clp/bin/lib/insights_facts.py plugins/clp/bin/lib/insights_focus.py \
-  plugins/clp/bin/lib/log_shapes.py plugins/clp/bin/lib/kql_build.py \
-  plugins/clp/bin/lib/classification.py plugins/clp/bin/lib/subcommand.py
+# Implementation syntax
+for f in plugins/clp/bin/lib/*.sh; do bash -n "$f"; done
+python3 -m py_compile plugins/clp/bin/clp plugins/clp/bin/lib/*.py
 
 # Static analysis (if shellcheck is installed)
-shellcheck \
-  plugins/clp/bin/clp-s-list-sessions \
-  plugins/clp/bin/clp-s-compress-session \
-  plugins/clp/bin/clp-s-search-kql \
-  plugins/clp/bin/clp-s-decompress \
-  plugins/clp/bin/lib/insights-bootstrap.sh \
-  plugins/clp/bin/log-shape-cluster \
-  plugins/clp/bin/lib/clp-common.sh
+shellcheck plugins/clp/bin/lib/*.sh
 ```
 
 To activate edited plugin source in the live session, sync it into the plugin cache (preserve the installer-generated `bin/clp-s` shim):
 
 ```bash
 rsync -a --exclude='.clp-core' --exclude='.yscope-clp-install.json' \
-  --exclude='.codex-plugin' \
+  --exclude='.codex-plugin' --exclude='__pycache__' \
   ~/yscope/coding-agent-integration/plugins/clp/ \
   ~/.claude/plugins/cache/yscope/clp/0.1.11/
 ```

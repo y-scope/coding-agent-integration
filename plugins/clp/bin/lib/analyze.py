@@ -14,7 +14,7 @@ application -- which is what an optimisation is an optimisation *of*. A second a
 its own route later by being registered here; it does not need a new mode.
 
 The application is read from the records, never from the path. An archive's records come from
-`clp-s-schema-tree --field-counts`; a raw file's come from `clp-detect-logs`, which also names the
+`clp schema --field-counts`; a raw file's come from `clp detect`, which also names the
 text formats it can convert. A path, a directory layout or a bundle manifest is evidence about which
 application wrote the logs, not a category of its own.
 
@@ -33,8 +33,9 @@ import tempfile
 
 import bundle as B
 import session_layout_claude as L
+from commands import CLP, command  # noqa: F401
 
-# The bin/ directory, which is where every command this module runs lives.
+# The bin/ directory, which holds the one command every step here runs.
 BIN_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 # The two routes through the one pipeline.
@@ -53,7 +54,7 @@ ANALYSIS_SKILL = "analyze-logs"
 # the question a user would otherwise have to know to ask.
 LAUNCH_KQL = "message.content.name:Agent OR message.content.name:Workflow"
 
-# The formats clp-detect-logs reports for a file that holds no usable log records. A target made
+# The formats clp detect reports for a file that holds no usable log records. A target made
 # only of these is not logs, which is the one classification failure that is a hard error.
 NOT_LOGS_FORMATS = ("empty", "binary", "compressed", "unreadable")
 
@@ -72,7 +73,7 @@ class Application:
     `requires` are root field names every record set of this application has; `markers` are the ones
     it draws from, of which `min_markers` must be present. `exact_roots` are complete root field
     sets, for an application whose schema is fixed and short enough that a subset rule would be
-    guesswork. `formats` are the names clp-detect-logs gives this application's text formats.
+    guesswork. `formats` are the names clp detect gives this application's text formats.
     """
 
     def __init__(self, name, route, acquire, requires=(), markers=(), min_markers=0,
@@ -80,7 +81,7 @@ class Application:
         self.name = name
         self.route = route
         self.acquire = acquire          # "session" or "folder": which compressor its logs need
-        self.agent = agent              # for a session acquire: what clp-s-compress-session --agent takes
+        self.agent = agent              # for a session acquire: what clp compress session --agent takes
         self.requires = tuple(requires)
         self.markers = tuple(markers)
         self.min_markers = min_markers
@@ -107,9 +108,9 @@ class Application:
                 f"{len(self.markers)} marker fields ({', '.join(hit)})")
 
     def match_format(self, fmt):
-        """Evidence that clp-detect-logs' bundled-format name is this application's, or None."""
+        """Evidence that clp detect' bundled-format name is this application's, or None."""
         if fmt in self.formats:
-            return f"clp-detect-logs matched its lines against the bundled {fmt} format"
+            return f"clp detect matched its lines against the bundled {fmt} format"
         return None
 
 
@@ -168,7 +169,7 @@ def identify_from_records(roots):
 
 
 def identify_from_format(fmt):
-    """(Application, evidence) for a clp-detect-logs bundled-format name, or (None, None)."""
+    """(Application, evidence) for a clp detect bundled-format name, or (None, None)."""
     for app in APPLICATIONS:
         why = app.match_format(fmt)
         if why:
@@ -215,10 +216,6 @@ def iso_to_epoch(text):
     return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
 
 
-def command(name, *args):
-    return [os.path.join(BIN_DIR, name), *[str(a) for a in args]]
-
-
 def quoted(argv):
     return " ".join(shlex.quote(a) for a in argv)
 
@@ -245,7 +242,7 @@ class Runner:
         if record:
             self.ran.append(argv)
         if not self.quiet:
-            print(f"[clp-analyze] running: {quoted(argv)}", file=sys.stderr, flush=True)
+            print(f"[clp] running: {quoted(argv)}", file=sys.stderr, flush=True)
         if not capture:
             proc = subprocess.run(argv, stdout=sys.stderr, stderr=sys.stderr, env=self.env())
             return proc.returncode, ""
@@ -273,9 +270,9 @@ class Runner:
 def archive_roots(runner, archives_dir):
     """{root field name: records carrying it} for every archive under archives_dir, from its merged
     schema tree. No search runs: the tree is archive metadata."""
-    with tempfile.TemporaryDirectory(prefix="clp-analyze-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="clp-classify-") as tmp:
         out_file = os.path.join(tmp, "field-counts.ndjson")
-        runner.check(command("clp-s-schema-tree", "--field-counts",
+        runner.check(command("schema", "--field-counts",
                              "--field-counts-file", out_file, archives_dir),
                      "reading the archive's field counts", archive=archives_dir)
         roots = {}
@@ -292,9 +289,9 @@ def archive_roots(runner, archives_dir):
 
 
 def detect(runner, paths, extensions=None, recursive=True):
-    """clp-detect-logs' report for these paths, parsed: per-file format, root field names and
+    """clp detect' report for these paths, parsed: per-file format, root field names and
     timestamp key, plus the compress commands it suggests."""
-    argv = command("clp-detect-logs", "--show-lines", "3", "--show-records", "1")
+    argv = command("detect", "--show-lines", "3", "--show-records", "1")
     if extensions:
         argv += ["--extensions", extensions]
     if not recursive:
@@ -316,7 +313,7 @@ def detect(runner, paths, extensions=None, recursive=True):
 
 
 def parse_detect(out):
-    """clp-detect-logs' report as {"files": [...], "suggest": [...]}.
+    """clp detect' report as {"files": [...], "suggest": [...]}.
 
     A file entry carries name, format (its `format:` word), bundled (the bundled text format it
     matched, if any), roots (top-level field names of its JSON records), timestamp and skip.
@@ -350,12 +347,12 @@ def parse_detect(out):
 
 
 def app_of_detected(report):
-    """(Application, evidence) for a clp-detect-logs report: the one application every log file in
+    """(Application, evidence) for a clp detect report: the one application every log file in
     it belongs to, or (None, evidence) when they disagree or none is registered."""
     usable = [f for f in report["files"] if f["format"] not in NOT_LOGS_FORMATS]
     if not usable:
         seen = sorted({f"{f['name']}: {f['format']}" for f in report["files"]})
-        raise AnalyzeError("that target is not logs. clp-detect-logs found nothing it could "
+        raise AnalyzeError("that target is not logs. clp detect found nothing it could "
                            "compress:\n  " + "\n  ".join(seen) +
                            "\n  Logs would be JSON records or text lines; point at those instead.")
     found = {}
@@ -510,7 +507,7 @@ def classify(target, runner, claude_home=None, extensions=None, recursive=True):
             f"folder of log files, a CLP archive directory, a session bundle directory, or a "
             f"session id; with no target at all it lists the sessions it can see.")
 
-    # 4. A log file, or a folder of them: clp-detect-logs reads the records.
+    # 4. A log file, or a folder of them: clp detect reads the records.
     if os.path.isfile(expanded):
         result["form"] = "log-file"
         return _classify_log_file(result, os.path.abspath(expanded), runner, claude_home=claude_home)
@@ -574,10 +571,10 @@ def _classify_log_file(result, path, runner, claude_home=None):
 
 
 def archives_root(runner, requested=None):
-    """The archives root the compression wrappers would use, asked of one of them rather than
+    """The archives root `clp compress` would use, asked of it rather than
     worked out again here -- so the precedence (flag, env, config file, ${TMPDIR:-/tmp}) has one
     implementation."""
-    argv = command("clp-s-compress-folder")
+    argv = command("compress folder")
     if requested:
         argv += ["--archives-root", requested]
     argv.append("--show-archives-root")
@@ -585,7 +582,7 @@ def archives_root(runner, requested=None):
     for line in out.splitlines():
         if line.startswith("Archives root:"):
             return line.split(":", 1)[1].strip()
-    raise AnalyzeError("clp-s-compress-folder --show-archives-root printed no archives root")
+    raise AnalyzeError("clp compress folder --show-archives-root printed no archives root")
 
 
 def bundles_root(requested=None):
@@ -748,7 +745,7 @@ def count_launches(runner, archives_dir):
     """How many records of the session's main log launched an agent or a workflow. This is the
     count a user would otherwise have to know to run: a non-zero answer means the main log records
     only the launches and the rest of the session is in files a bundle collects."""
-    out = runner.check(command("clp-s-search-kql", "--count", archives_dir, LAUNCH_KQL),
+    out = runner.check(command("search", "--count", archives_dir, LAUNCH_KQL),
                        "counting agent and workflow launches", archive=archives_dir)
     total, rows = 0, 0
     for line in out.splitlines():
@@ -764,15 +761,15 @@ def count_launches(runner, archives_dir):
             rows += 1
     if rows == 0:
         raise AnalyzeError("the launch count printed no count row; "
-                           f"ran: {quoted(command('clp-s-search-kql', '--count', archives_dir, LAUNCH_KQL))}")
+                           f"ran: {quoted(command('search', '--count', archives_dir, LAUNCH_KQL))}")
     return total
 
 
 def compress_session_argv(main_log, claude_home, archives_root_value=None, output_dir=None,
                           clp_s=None, agent="claude"):
-    """clp-s-compress-session for one session's main log. --structurize-arrays and
+    """clp compress session for one session's main log. --structurize-arrays and
     --timestamp-key timestamp are that wrapper's own doing; only the location is chosen here."""
-    argv = command("clp-s-compress-session", "--agent", agent, "--session-file", main_log,
+    argv = command("compress session", "--agent", agent, "--session-file", main_log,
                    "--timestamp-key", "timestamp")
     if claude_home and agent == "claude":
         argv += ["--claude-root", os.path.join(claude_home, "projects")]
@@ -786,15 +783,15 @@ def compress_session_argv(main_log, claude_home, archives_root_value=None, outpu
 
 
 def compress_folder_argv(suggested, archives_root_value=None, output_dir=None):
-    """The compress command clp-detect-logs suggested, with this run's archive location added.
+    """The compress command clp detect suggested, with this run's archive location added.
 
     The flags come from the detector's report -- the format, the timestamp key, whether the text
     needs structurizing -- so nothing about a log format is decided here.
     """
-    if not suggested or os.path.basename(suggested[0]) != "clp-s-compress-folder":
-        raise AnalyzeError(f"clp-detect-logs suggested a command this wrapper does not run: "
+    if suggested[:3] != ["clp", "compress", "folder"]:
+        raise AnalyzeError(f"clp detect suggested a command this wrapper does not run: "
                            f"{quoted(suggested)}")
-    argv = command("clp-s-compress-folder", *suggested[1:])
+    argv = command("compress folder", *suggested[3:])
     if output_dir:
         argv += ["--output-dir", output_dir]
     elif archives_root_value:

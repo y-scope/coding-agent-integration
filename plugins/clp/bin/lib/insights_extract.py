@@ -1,13 +1,13 @@
 """
-clp-insights extract - build the report writer's prompt pieces from a
+clp extract - build the report writer's prompt pieces from a
 classification (log-insights skill, step 7).
 
-The classification (`log-shape-cache get`, `log-shape-cache merge`, or
-`log-shape-cluster expand` output, e.g. /tmp/log-shape-classification.json) names
+The classification (`clp shape-cache get`, `clp shape-cache merge`, or
+`clp shape-cluster expand` output, e.g. /tmp/log-shape-classification.json) names
 each template by hash, not by text (see lib/log_shapes.py): `hash` of the full
 template and `prefix_hash` of its first max_chars characters, with its
 category. The text comes from the bootstrap's frequencies file, read from the
-stored archive (`log-shape-cache freqs --archive-ids`): each line carries the
+stored archive (`clp shape-cache freqs --archive-ids`): each line carries the
 template's hash, its full length and its first max_chars characters, so the
 join needs no hashing. When the archive has no stored counts, the text comes
 from the bootstrap's log shapes file instead, and each template is hashed.
@@ -27,7 +27,7 @@ the bootstrap already produced, never recomputed), each truncated to
 result stays one line per template.
 
 Usage:
-  clp-insights extract [options]
+  clp extract [options]
 
 Options:
   --classification-file F   Classification JSON
@@ -51,10 +51,10 @@ Options:
                              (default: /tmp/clp-insights-query-plan.txt)
   --out-drill-plan F        Where to write the "drill" entries the same way,
                              grouped by category; they run only when the user
-                             focuses on their category (clp-insights focus)
+                             focuses on their category (clp focus)
                              (default: /tmp/clp-insights-drill-plan.txt)
   --focus-inbox F           The inbox the plan runner reads focus entries from
-                             (clp-insights run --inbox); emptied here,
+                             (clp run --inbox); emptied here,
                              with the previous run's focus file
                              (--focus-file), so a new analysis starts with no
                              focus (defaults: /tmp/clp-insights-focus-inbox.ndjson,
@@ -82,7 +82,7 @@ summary and use the file paths for the report writer's prompt.
 
 QUERY_PLAN_INVALID counts the plan entries without a valid `match` filter or
 ranking (lib/kql_build.py, lib/classification.py); the numbers follow as
-QUERY_PLAN_INVALID_ENTRIES=. `log-shape-cache` stores no such entry, so it is 0
+QUERY_PLAN_INVALID_ENTRIES=. `clp shape-cache` stores no such entry, so it is 0
 unless the classification file was edited by hand.
 
 Exit codes: 0 ok, 1 input problem.
@@ -199,8 +199,8 @@ def main(argv=None) -> int:
     templates = classification.get("templates", []) if isinstance(classification, dict) else []
     if any(isinstance(t, dict) and "log_shape" in t for t in templates[:1]):
         print(f"error: {args.classification_file} names templates by text ('log_shape'); "
-              "classifications name them by hash -- produce it with `log-shape-cluster expand` "
-              "or `log-shape-cache get`", file=sys.stderr)
+              "classifications name them by hash -- produce it with `clp shape-cluster expand` "
+              "or `clp shape-cache get`", file=sys.stderr)
         return 1
     max_chars = classification.get("max_chars")
     if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:

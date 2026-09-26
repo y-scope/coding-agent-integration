@@ -8,7 +8,7 @@ description: Decompress a local CLP archive directory into a selected output dir
 Use only:
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-decompress ARCHIVES_DIR OUTPUT_DIR
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp decompress ARCHIVES_DIR OUTPUT_DIR
 ```
 
 If installed elsewhere, resolve the same wrapper from that plugin root.
@@ -24,13 +24,13 @@ Rules:
 Examples:
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-decompress \
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp decompress \
   /tmp/session-archive \
   /tmp/session-archive-decompressed
 ```
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-decompress \
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp decompress \
   --ordered \
   /tmp/session-archive \
   /tmp/session-archive-decompressed

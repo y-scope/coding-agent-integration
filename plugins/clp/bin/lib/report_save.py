@@ -1,5 +1,5 @@
 """
-clp-report save - save a finished report where the user asked, as Markdown,
+clp report save - save a finished report where the user asked, as Markdown,
 HTML, PDF, or a page to publish on claude.ai (the last step of both the
 log-insights and claude-code-trajectory skills).
 

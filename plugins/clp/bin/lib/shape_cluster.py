@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""log-shape-cluster.py — merge semantically similar log shapes before classification.
+"""shape_cluster.py — merge semantically similar log shapes before classification.
 
-Invoked via the `log-shape-cluster` bash launcher, which resolves the embedding
+Invoked via the `clp shape-cluster` bash launcher, which resolves the embedding
 server URL and exports it as CLP_SEMANTIC_ENDPOINT. Three subcommands:
 
   fields   Summarize each text field the templates came from: its templates,
@@ -23,7 +23,7 @@ server URL and exports it as CLP_SEMANTIC_ENDPOINT. Three subcommands:
 
 Truncation and de-duplication concern only what is POSTed for embedding. `members`
 and `representative` are always FULL log shape strings; the character limit is
-also the cache fingerprint (truncate_chars is shared with log-shape-cache through
+also the cache fingerprint (truncate_chars is shared with clp shape-cache through
 lib/log_shapes.py), and so is the digest of the applied field rules, printed as
 RULES_DIGEST and computed by the same shared field_rules_digest -- a ruled
 template takes its category from the rule, so the rules are part of the
@@ -51,7 +51,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from log_shapes import (  # noqa: E402
     field_rules_digest, parse_field_rules, prefix_hash, template_hash, truncate_chars)
 
@@ -91,7 +91,7 @@ REQUEST_TIMEOUT_S = _positive_env_int("CLP_SEMANTIC_TIMEOUT_S", 120)
 # Templates are truncated to this many UTF-8 characters before embedding, then
 # de-duplicated, so a long template cannot bloat a request and templates sharing
 # a prefix are only ever embedded once. Configurable per session. The SAME limit
-# is the classification-cache fingerprint (log-shape-cache shares truncate_chars
+# is the classification-cache fingerprint (clp shape-cache shares truncate_chars
 # through lib/log_shapes.py and reads the same env var), so changing it
 # deliberately re-keys the cache. 500, not 512: the embedding model's context is 512 TOKENS
 # including its special tokens, and punctuation-heavy templates (`,<*>,<*>,...`)
@@ -419,7 +419,7 @@ def embed_texts(url, texts, batch_size, max_request_bytes):
 
 
 def load_template_fields(path):
-    """{template hash: {field path: values}} from `log-shape-cache fields`."""
+    """{template hash: {field path: values}} from `clp shape-cache fields`."""
     fields = {}
     try:
         with open(path, encoding="utf-8") as fh:
@@ -441,7 +441,7 @@ def load_field_rules(path):
     """[{"field", "category"}] from a {"field_rules": [...]} JSON file; exit 2
     naming each malformed rule.
 
-    The parse lives in lib/log_shapes.py, which is also where log-shape-cache
+    The parse lives in lib/log_shapes.py, which is also where clp shape-cache
     reads rules and digests them, so the two cannot read the same file
     differently -- the rules are part of the cache key (field_rules_digest)."""
     rules, problems = parse_field_rules(load_json_file(path, "--field-rules"))
@@ -833,14 +833,14 @@ def cmd_expand(args):
     print(f"CATEGORIES={len({t['category'] for t in templates})}")
     # The digest of the rules this classification was built under. `put` stores
     # it with the entry and `diff` compares it, so the key it is stored under
-    # must be one computed with these rules (`log-shape-cache key --field-rules`).
+    # must be one computed with these rules (`clp shape-cache key --field-rules`).
     print(f"RULES_DIGEST={field_rules_digest(field_rules)}")
     print(f"OUTPUT={args.output}")
 
 
 def main():
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-    parser = Parser(prog="log-shape-cluster", description=__doc__,
+    parser = Parser(prog="clp shape-cluster", description=__doc__,
                     formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -865,7 +865,7 @@ def main():
                                 f"(default: {DEFAULT_MAX_REQUEST_BYTES}, or "
                                 f"$CLP_LOG_SHAPE_MAX_REQUEST_BYTES)")
     p_cluster.add_argument("--template-fields", default=None,
-                           help="`log-shape-cache fields` output: the fields each template came from")
+                           help="`clp shape-cache fields` output: the fields each template came from")
     p_cluster.add_argument("--field-rules", default=None,
                            help='{"field_rules": [{"field", "category"}]} JSON: templates whose values sit '
                                 "in ruled fields take the rule's category and are not clustered")
@@ -879,7 +879,7 @@ def main():
     p_fields = sub.add_parser("fields",
                               help="summarize each text field: templates, values, examples")
     p_fields.add_argument("--template-fields", required=True,
-                          help="`log-shape-cache fields` output")
+                          help="`clp shape-cache fields` output")
     p_fields.add_argument("--freqs-file", required=True,
                           help="the bootstrap's FREQS_FILE (most frequent first)")
     p_fields.add_argument("--examples", type=int, default=3)

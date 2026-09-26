@@ -31,7 +31,7 @@ The first two are verifiable and must be. The last two are arguments and must be
 
 **A category is classification output, not data.** In the insights pipeline a model groups templates into categories and ranks them; in the trajectory pipeline the seven categories are a fixed design choice. Either way the *name* and the *ranking* are judgement, while the *record counts within* a category are measured. Report them that way: the count is checkable, the grouping is a claim about what the records mean. A category table presented as though the whole thing were counted is the most easily missed violation of these tiers.
 
-**A score is a policy mapping, not a measurement.** `clp-session score` maps a derived value onto 0–10 through a ladder in the scale file. The value is checkable; the score is only as good as the threshold someone chose, which is why each axis carries a `basis` and why the raw value is always shown beside the score. Never report a score without its value, and never call a score a measurement.
+**A score is a policy mapping, not a measurement.** `clp session score` maps a derived value onto 0–10 through a ladder in the scale file. The value is checkable; the score is only as good as the threshold someone chose, which is why each axis carries a `basis` and why the raw value is always shown beside the score. Never report a score without its value, and never call a score a measurement.
 
 ## Where the tier has to appear
 

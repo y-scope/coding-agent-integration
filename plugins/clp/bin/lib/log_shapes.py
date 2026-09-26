@@ -8,13 +8,13 @@ and the classification files identify each template by two hashes:
 
   hash         sha256 of the full template, which identifies it exactly
   prefix_hash  sha256 of its first max_chars characters, which is what
-               log-shape-cluster embeds and what the cache fingerprint is built
+               clp shape-cluster embeds and what the cache fingerprint is built
                from; templates that differ only past the limit share it
 
 The full text stays in the archive's own dictionary dump (the bootstrap's log
 shapes file); whoever needs it joins on `hash`. The cache database stores, per
 analyzed archive, each template's hash, count, length and first max_chars
-characters (log-shape-cache ingest), which is all the fingerprint and a report
+characters (clp shape-cache ingest), which is all the fingerprint and a report
 read.
 
 The applied FIELD RULES are part of the classification too: a ruled template
@@ -31,7 +31,7 @@ import os
 
 # Templates are capped at this many characters before embedding and
 # fingerprinting. 500 keeps embedded texts under the embedding model's 512-token
-# context (see log-shape-cluster.py). Changing it deliberately re-keys the cache.
+# context (see shape_cluster.py). Changing it deliberately re-keys the cache.
 DEFAULT_MAX_CHARS = 500
 
 
@@ -83,7 +83,7 @@ def app_key(log_shapes, max_chars, rules_digest):
 # --- Field rules --------------------------------------------------------------
 #
 # A field rule is {"field": "<kql path>", "category": "<taxonomy category>"}.
-# `log-shape-cluster fields --propose-rules` writes each one with the ratio and
+# `clp shape-cluster fields --propose-rules` writes each one with the ratio and
 # counts it was derived from ("proposed_by", "matched", "ratio", "templates",
 # "values"); those annotations say WHY the rule exists and change nothing about
 # what it does, so the digest below ignores them, and so does everything else
@@ -136,8 +136,8 @@ def parse_field_rules(doc):
     `rules` is [{"field", "category"}] in the document's own order, with the
     category stripped and the annotations dropped; it is None when the document
     has no rule list at all. `problems` names every malformed rule, so the
-    caller reports them all at once and refuses the file. log-shape-cluster and
-    log-shape-cache both read rules through here, so neither can digest a rule
+    caller reports them all at once and refuses the file. clp shape-cluster and
+    clp shape-cache both read rules through here, so neither can digest a rule
     set the other would read differently."""
     rules = doc.get("field_rules") if isinstance(doc, dict) else None
     if not isinstance(rules, list):

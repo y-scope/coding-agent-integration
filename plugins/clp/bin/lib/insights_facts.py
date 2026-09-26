@@ -1,5 +1,5 @@
 """
-clp-insights facts - compute every number of a log-insights report in
+clp facts - compute every number of a log-insights report in
 code, so the report writer only has to put them into words
 (log-insights skill, step 7).
 
@@ -11,7 +11,7 @@ for a 74-hour log. Nothing here needs judgement, so nothing here is left to it.
 Inputs (all produced earlier in the run):
   --archive-dir DIR      The top-level archive directory. Its
                          .yscope-clp-archive.json gives the time span: the
-                         timeRange clp-s-compress-folder records from clp-s
+                         timeRange clp compress folder records from clp-s
                          when it compresses with --timestamp-key.
   --baseline-results-file F
                          The baseline pool's results (default:
@@ -23,11 +23,11 @@ Inputs (all produced earlier in the run):
                          /tmp/clp-insights-query-results.ndjson). The two are
                          numbered separately, so a query is cited as
                          [baseline #N] or [plan #N].
-  --category-totals F    clp-insights extract's {category: {templates,
+  --category-totals F    clp extract's {category: {templates,
                          records, priority, why}} (default:
                          /tmp/log-shape-category-totals.json, or "none" when
                          frequencies were unavailable)
-  --focus-file F         clp-insights focus's record of the user's focus and
+  --focus-file F         clp focus's record of the user's focus and
                          context (default: /tmp/clp-insights-focus.json; absent
                          when no one was asked). Its section comes first, with
                          the results of the focus entries (origin "focus").
@@ -71,7 +71,7 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 # Provenance.
 #
-# The same four tiers clp-session facts uses, so a reader who has seen one facts
+# The same four tiers clp session facts uses, so a reader who has seen one facts
 # file already knows how to read the other. They do not overlap: a figure is read
 # off the records, or computed from figures that were, or it is an argument about
 # cause, or an argument about how this kind of system behaves.
@@ -104,12 +104,12 @@ TIERS = {
 # the results file recorded neither the command nor the KQL, so there is nothing to
 # rebuild it from. Saying which file is missing what is the reason; "unstated" is
 # not, because it claims a figure cannot be checked while giving no reason at all.
-NO_REASON = ("no reason was recorded for this figure. That is a defect in clp-insights facts, not a "
+NO_REASON = ("no reason was recorded for this figure. That is a defect in clp facts, not a "
              "property of the figure: report it rather than trusting the figure or discarding it.")
 
 NO_QUERY_RECORDED = ("the results file recorded neither a command nor the KQL for this entry, so the "
                      "query that produced the count cannot be rebuilt from it. Re-run the plan with "
-                     "clp-insights run, which records both.")
+                     "clp run, which records both.")
 
 
 def verification_tail(unverifiable):
@@ -141,7 +141,7 @@ def one_command(entry, archive=None):
     if not kql or not where:
         return None
     select = f"--projection {entry['project']}" if entry.get("project") else "--count"
-    return f"clp-s-search-kql {select} {where} '{kql}'"
+    return f"clp search {select} {where} '{kql}'"
 
 
 def load_results(path):
@@ -327,8 +327,8 @@ def time_span(archive_dir):
         except (OSError, json.JSONDecodeError):
             continue
     if meta is None:
-        return ("unavailable. The archive has no .yscope-clp-archive.json, so neither clp-s-compress-folder "
-                "nor clp-s-compress-session compressed it; recompress it with one of them and a timestamp "
+        return ("unavailable. The archive has no .yscope-clp-archive.json, so neither clp compress folder "
+                "nor clp compress session compressed it; recompress it with one of them and a timestamp "
                 "key to record the span."), None
     key = meta.get("timestampKey")
     if not key:
@@ -402,7 +402,7 @@ def main(argv=None) -> int:
     ap.add_argument("--archive-dir", required=True,
                     help="the top-level archive directory; its metadata gives the time span")
     ap.add_argument("--schema-tree-file", default=None,
-                    help="clp-s-schema-tree --json-out file: the facts then name the text fields, "
+                    help="clp schema --json-out file: the facts then name the text fields, "
                          "and every path in it counts as a field")
     ap.add_argument("--top", type=int, default=20)
     ap.add_argument("--out", default="/tmp/clp-insights-facts.md")
@@ -483,7 +483,7 @@ def main(argv=None) -> int:
     w("A percentage in parentheses is always derived, from that line's count over the total records "
       "above, so it takes no marker of its own. In a table the markers are in the column headings. A "
       "`[baseline #N]` or `[plan #N]` names the query that produced the line; the Verification section "
-      "at the end lists those commands, with the plugin's wrappers named by basename - run them with "
+      "at the end lists those commands, with the plugin's `clp` named by basename - run them with "
       "the plugin's `bin/` on $PATH.\n")
     w("A line with no marker is not a figure: it is a heading, a caption, a note on where something "
       "came from, or the user's own words quoted back. The Focus section below is the clearest case - "
@@ -493,7 +493,7 @@ def main(argv=None) -> int:
     w(f"- {MEASURED} Total records: {total:,}" if total else "- Total records: unavailable")
     if total:
         add_check("Total records", MEASURED, f"{total:,}",
-                  f"clp-s-search-kql --count {args.archive_dir} '*'",
+                  f"clp search --count {args.archive_dir} '*'",
                   derivation="a count of every record in the archive, which is also the denominator of "
                              "every share in this file.")
     if totals:
@@ -533,7 +533,7 @@ def main(argv=None) -> int:
       + f". {DOMAIN} Nothing else is a field: the classification's categories exist only in the "
       "analysis, so a query cannot filter on a category name.\n")
     add_check("Fields a KQL query may filter on", MEASURED, names,
-              f"clp-s-schema-tree {args.archive_dir}",
+              f"clp schema {args.archive_dir}",
               derivation="every path the archive's schema tree lists is a field; the roles above are "
                          "this run's classification of them.")
 
@@ -868,7 +868,7 @@ def main(argv=None) -> int:
     if checks:
         w("## Verification - the one command behind each figure")
         w("Copy a command, run it, and compare. These are the commands the query pool ran, with the "
-          "plugin's wrappers named by basename, so run them with the plugin's `bin/` on $PATH. A figure "
+          "plugin's `clp` named by basename, so run them with the plugin's `bin/` on $PATH. A figure "
           "no single command reproduces says so and says what to run instead; a command that only looks "
           "like a check is worse than none, because a reader who runs it and gets a different number "
           "concludes the figure is wrong.\n")

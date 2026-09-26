@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """
-clp-analyze - one door into the analysis flow: which application produced these logs, and
-everything deterministic that has to happen before a model and a user take over.
+clp - one command for analysing logs with CLP. Given a TARGET it is the door into the analysis
+flow: which application produced these logs, and everything deterministic that has to happen
+before a model and a user take over.
 
 Usage:
-  clp-analyze [TARGET] [options]
+  clp [TARGET] [options]        this route: classify the target, prepare it, name the next step
+  clp <SUBCOMMAND> [...]        one step of that flow, or one drill-down, on its own
 
 TARGET is a log file, a folder of log files, a CLP archive directory, a session bundle directory,
 or a Claude Code session id. With no TARGET it lists the sessions it can see and stops, because
-guessing which logs someone meant is not a thing a wrapper should do.
+guessing which logs someone meant is not a thing a command should do.
+
+TARGET is the one argument that is not a subcommand, and the first argument is read as one only
+when it cannot be a subcommand: a name in the table below is always that subcommand, an argument
+holding a '/', a '.' or a '~', naming something that exists, or shaped like a session id is the
+TARGET, and anything else is a mistyped subcommand and is named as one. No subcommand holds any of
+those characters, so `clp searhc` says what it did not understand while `clp ./searhc` is a target.
 
 There is one pipeline -- acquire, structure, categorise, measure, report -- and it runs on logs.
 A Claude Code session is not a different kind of thing from a vLLM worker log; it is logs from a
@@ -26,7 +34,7 @@ then whether that application has a registered optimisation:
                 by being registered here, not by adding a mode.
 
 The application is read from the records, never from the path: an archive's from its merged schema
-tree, a file's from the first 128 KiB that clp-detect-logs reads. A path, a directory layout or a
+tree, a file's from the first 128 KiB that clp detect reads. A path, a directory layout or a
 bundle manifest is only ever used to find records to read. The classification and its evidence are
 printed before any work starts, so no route is ever taken silently.
 
@@ -39,12 +47,12 @@ What it does:
               category pass, the focus questions, the report -- belong to the skill, and are not
               attempted here.
 
-It runs the plugin's existing commands and reimplements none of them: clp-s-list-sessions,
-clp-detect-logs, clp-s-compress-session, clp-s-compress-folder, clp-s-schema-tree,
-clp-s-search-kql and clp-bundle. Every one it runs is printed as a RAN= line.
+It runs its own subcommands and reimplements none of them: `clp list-sessions`, `clp detect`,
+`clp compress session`, `clp compress folder`, `clp schema`, `clp search` and `clp bundle`. Every
+one it runs is printed as a RAN= line.
 
-It is a door into the flow, not a lid on the toolbox. The commands used after a finding --
-clp-s-search-kql, clp-bundle sql|evidence|who, clp-s-schema-tree -- stay first-class, and the DRILL=
+It is a door into the flow, not a lid on the toolbox. The subcommands used after a finding --
+`clp search`, `clp bundle sql|evidence|who`, `clp schema` -- stay first-class, and the DRILL=
 lines name them for the artefacts in hand.
 
 Options:
@@ -56,14 +64,14 @@ Options:
                         the logs, not about which route reads them.
   --claude-home DIR     The Claude home: the directory that HOLDS projects/, tasks/ and
                         file-history/ (default ~/.claude), not projects/ itself.
-  --archives-root DIR   Parent directory for archives. Passed to the compression wrappers, whose
+  --archives-root DIR   Parent directory for archives. Passed to `clp compress`, whose
                         own precedence (this, CLP_S_ARCHIVES_ROOT, the config file,
                         ${TMPDIR:-/tmp}/yscope-clp-archives) decides.
   --output-dir DIR      Exact archive directory, instead of an auto-named one under the root.
   --bundles-root DIR    Parent directory for bundles. Default: this, CLP_S_BUNDLES_ROOT, then
                         ${TMPDIR:-/tmp}/yscope-clp-bundles. A bundle goes in <root>/<session id>.
   --bundle-dir DIR      Exact bundle directory.
-  --extensions EXT,..   Extensions to match in a folder target (default: clp-detect-logs').
+  --extensions EXT,..   Extensions to match in a folder target (default: `clp detect`'s).
   --no-recursive        Search only the top level of a folder target.
   --clp-s PATH          Use this clp-s for this invocation only, as CLP_S_BIN does.
   --force               Prepare again even when the target is already prepared.
@@ -71,7 +79,7 @@ Options:
   --quiet               Do not echo the commands it runs.
   -h, --help            Show this help.
 
-Output is KEY=VALUE on stdout, one per line, like every other wrapper here; the commands' own output
+Output is KEY=VALUE on stdout, one per line, like every other subcommand here; their own output
 is the narration and goes to stderr.
 
   TARGET=            what was given
@@ -101,8 +109,9 @@ import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
+import commands as C  # noqa: E402
 import analyze as A  # noqa: E402
 import bundle as B  # noqa: E402
 
@@ -185,7 +194,7 @@ def list_sessions(runner, args):
     """No target: show what there is and stop. Guessing which logs someone meant is not a thing a
     wrapper should do, so this route never prepares anything."""
     import session_layout_claude as L
-    argv = A.command("clp-s-list-sessions")
+    argv = A.command("list-sessions")
     if args.claude_home:
         argv += ["--claude-root", os.path.join(L.check_claude_home(args.claude_home), "projects")]
     out("TARGET", "")
@@ -194,7 +203,7 @@ def list_sessions(runner, args):
     out("WHY", "no target was given, so nothing was classified and nothing was prepared")
     runner.run(argv, capture=False)
     out("RAN", A.quoted(argv))
-    out("NEXT", f"{os.path.join(A.BIN_DIR, 'clp-analyze')} <session id, log file, folder, archive "
+    out("NEXT", f"{os.path.join(A.BIN_DIR, 'clp')} <session id, log file, folder, archive "
                 f"or bundle>")
     return 0
 
@@ -241,11 +250,11 @@ def prepare_archive(classified, args, runner, prep):
         suggested = classified["detect"]["suggest"]
         if len(suggested) != 1:
             raise A.AnalyzeError(
-                "clp-detect-logs found files that need different compression settings, and one "
+                "clp detect found files that need different compression settings, and one "
                 "archive takes one --timestamp-key, so which of these to make is not this "
                 "command's call:\n  "
                 + "\n  ".join(A.quoted(s) for s in suggested) +
-                "\n  Point clp-analyze at one group's files, or run the commands above and point it "
+                "\n  Point clp at one group's files, or run the commands above and point it "
                 "at each archive.")
         paths = [suggested[0][i + 1] for i, a in enumerate(suggested[0]) if a == "--path"]
         found = A.existing_archive_at(args.output_dir) if args.output_dir \
@@ -288,9 +297,9 @@ def prepare_bundle(classified, args, runner, prep, archive):
                                 "rebuild it from the session to pick that up")
         if not state["catalog"]:
             if args.dry_run:
-                out("PLAN", A.quoted(A.command("clp-bundle", classified["bundle"], "rebuild")))
+                out("PLAN", A.quoted(A.command("bundle", classified["bundle"], "rebuild")))
                 return classified["bundle"]
-            runner.check(A.command("clp-bundle", classified["bundle"], "rebuild",
+            runner.check(A.command("bundle", classified["bundle"], "rebuild",
                                    *(["--clp-s", args.clp_s] if args.clp_s else [])),
                          "rebuilding the bundle's catalog")
             prep.made.append("catalog")
@@ -306,8 +315,8 @@ def prepare_bundle(classified, args, runner, prep, archive):
         # stated as a condition rather than guessed at.
         out("BUNDLE_WHY", "there is no archive yet, so the launch count that decides this has not "
                           "run; on a real run it decides right after the compression above")
-        out("PLAN", A.quoted(A.command("clp-s-search-kql", "--count", "<ARCHIVE>", A.LAUNCH_KQL)))
-        out("PLAN", A.quoted(A.command("clp-bundle", bundle_dir, "build", "--session-id", session_id))
+        out("PLAN", A.quoted(A.command("search", "--count", "<ARCHIVE>", A.LAUNCH_KQL)))
+        out("PLAN", A.quoted(A.command("bundle", bundle_dir, "build", "--session-id", session_id))
             + "   (only if that count is not zero)")
         return None
 
@@ -332,9 +341,9 @@ def prepare_bundle(classified, args, runner, prep, archive):
         out("BUNDLE_WHY", f"{launches} records launched an agent or a workflow; the bundle is there "
                           f"but its catalog is not usable, so only the catalog is made again")
         if args.dry_run:
-            out("PLAN", A.quoted(A.command("clp-bundle", bundle_dir, "rebuild")))
+            out("PLAN", A.quoted(A.command("bundle", bundle_dir, "rebuild")))
             return bundle_dir
-        runner.check(A.command("clp-bundle", bundle_dir, "rebuild",
+        runner.check(A.command("bundle", bundle_dir, "rebuild",
                                *(["--clp-s", args.clp_s] if args.clp_s else [])),
                      "rebuilding the bundle's catalog")
         prep.made.append("catalog")
@@ -347,7 +356,7 @@ def prepare_bundle(classified, args, runner, prep, archive):
                           f"the archive alone.")
         return None
 
-    argv = A.command("clp-bundle", bundle_dir, "build", "--session-id", session_id)
+    argv = A.command("bundle", bundle_dir, "build", "--session-id", session_id)
     if classified.get("claude_home"):
         argv += ["--claude-home", classified["claude_home"]]
     if args.clp_s:
@@ -373,14 +382,14 @@ def hand_off(route, archive, bundle, dry_run=False):
     placeholder = "<ARCHIVE>" if dry_run else ""
     if route == A.SPECIALISED:
         if bundle:
-            out("NEXT", A.quoted(A.command("clp-session", "facts", "--bundle", bundle)))
+            out("NEXT", A.quoted(A.command("session", "facts", "--bundle", bundle)))
         elif archive or placeholder:
-            out("NEXT", A.quoted(A.command("clp-session", "facts", "--archive",
+            out("NEXT", A.quoted(A.command("session", "facts", "--archive",
                                            archive or placeholder)))
         else:
             out("NEXT", "")
     elif archive or placeholder:
-        out("NEXT", A.quoted(A.command("clp-insights", "bootstrap", archive or placeholder)))
+        out("NEXT", A.quoted(A.command("bootstrap", archive or placeholder)))
     else:
         out("NEXT", "")
     if dry_run and not archive:
@@ -391,12 +400,12 @@ def hand_off(route, archive, bundle, dry_run=False):
     out("NEXT_STAGES", "classify, focus and report need a model and a user, so they are the skill's "
                        "and are not attempted here")
     if archive:
-        out("DRILL", A.quoted(A.command("clp-s-search-kql", archive, "<KQL>")))
-        out("DRILL", A.quoted(A.command("clp-s-schema-tree", archive)))
+        out("DRILL", A.quoted(A.command("search", archive, "<KQL>")))
+        out("DRILL", A.quoted(A.command("schema", archive)))
     if bundle:
-        out("DRILL", A.quoted(A.command("clp-bundle", bundle, "sql", "<QUERY>")))
-        out("DRILL", A.quoted(A.command("clp-bundle", bundle, "evidence", "<ID>")))
-        out("DRILL", A.quoted(A.command("clp-bundle", bundle, "who", "--agent-id", "<ID>")))
+        out("DRILL", A.quoted(A.command("bundle", bundle, "sql", "<QUERY>")))
+        out("DRILL", A.quoted(A.command("bundle", bundle, "evidence", "<ID>")))
+        out("DRILL", A.quoted(A.command("bundle", bundle, "who", "--agent-id", "<ID>")))
 
 
 def parse_args(argv):
@@ -418,7 +427,11 @@ def parse_args(argv):
     parser.add_argument("-h", "--help", action="store_true")
     args, rest = parser.parse_known_args(argv)
     if args.help:
+        # One help text for the one command: this route's own options, then every subcommand.
         print(__doc__.strip())
+        print()
+        print(C.table_text())
+        print("\nRun `clp <SUBCOMMAND> --help` for that subcommand's own options.")
         raise SystemExit(0)
     if rest:
         print(f"error: unknown argument: {rest[0]}\n"

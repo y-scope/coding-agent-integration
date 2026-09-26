@@ -1,4 +1,4 @@
-"""clp-bundle build on a small synthetic session, with a stub clp-s.
+"""clp bundle build on a small synthetic session, with a stub clp-s.
 
 The stub is the only engine here: `c` keeps the records of the files it is given, and `s --count` counts
 them, so the tests exercise the build and the catalog, not compression. They are the acceptance checks
@@ -212,7 +212,7 @@ class BuildTest(unittest.TestCase):
     def cli(self, *args, env=None, out=None):
         e = {**os.environ, "CLP_S_BIN": self.stub, **(env or {})}
         e = {k: v for k, v in e.items() if v is not None}     # an env value of None removes the variable
-        p = subprocess.run([os.path.join(BIN, "clp-bundle"), out or self.out, *args], capture_output=True, text=True, env=e)
+        p = subprocess.run([os.path.join(BIN, "clp"), "bundle", out or self.out, *args], capture_output=True, text=True, env=e)
         return p.returncode, p.stdout, p.stderr
 
     def build(self, *extra, **kw):
@@ -435,7 +435,7 @@ class Failures(BuildTest):
 
 
 class Repo(BuildTest):
-    """clp-bundle repo against a real git repository whose commits are made at the fixture's times."""
+    """clp bundle repo against a real git repository whose commits are made at the fixture's times."""
 
     def commit(self, repo, when, subject):
         env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when, "GIT_AUTHOR_NAME": "t",

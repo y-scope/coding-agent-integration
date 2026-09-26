@@ -1,22 +1,22 @@
 """
-clp-insights focus - turn the user's answer to "what should this analysis focus
+clp focus - turn the user's answer to "what should this analysis focus
 on?" into queries for the running plan pool (log-insights skill).
 
 The classifier ranks its categories and writes, besides the core plan that
 runs on every analysis, "drill" entries per category that run only when the
-user focuses on that category (clp-insights extract writes them to
+user focuses on that category (clp extract writes them to
 /tmp/clp-insights-drill-plan.txt). This tool queues the chosen categories' drill
 entries, plus any entries the agent wrote from the user's own words, into the
-plan runner's inbox (clp-insights run --inbox), then closes the inbox so
+plan runner's inbox (clp run --inbox), then closes the inbox so
 the pool finishes. It also records the focus and the user's context in
-/tmp/clp-insights-focus.json, which clp-insights facts puts at the top of the
+/tmp/clp-insights-focus.json, which clp facts puts at the top of the
 facts file for the report writer.
 
 Call it ONCE per analysis: the runner stops reading the inbox at the close
 line, so entries queued by a second call are not run.
 
 Usage:
-  clp-insights focus [--category C]... [--entries-file F] [--everything]
+  clp focus [--category C]... [--entries-file F] [--everything]
                 [--question TEXT] [--context TEXT]
 
 Options:

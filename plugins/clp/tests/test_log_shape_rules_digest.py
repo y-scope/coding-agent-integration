@@ -6,7 +6,7 @@ that a changed rule set cannot reuse a classification built under the old one,
 and that a rule set which only LOOKS different (re-ordered, re-indented, with or
 without the annotations `--propose-rules` writes) still hits the cache.
 
-Nothing here embeds anything: `log-shape-cluster cluster` needs no embedding
+Nothing here embeds anything: `clp shape-cluster cluster` needs no embedding
 server when every template is ruled, which is what the digest-agreement test
 uses.
 """
@@ -19,13 +19,13 @@ import tempfile
 import unittest
 
 BIN = os.path.join(os.path.dirname(__file__), "..", "bin")
-CACHE_BIN = os.path.join(BIN, "log-shape-cache")
-CLUSTER_BIN = os.path.join(BIN, "log-shape-cluster.py")
+CACHE_BIN = [os.path.join(BIN, "clp"), "shape-cache"]
+CLUSTER_BIN = os.path.join(BIN, "lib", "shape_cluster.py")
 sys.path.insert(0, os.path.join(BIN, "lib"))
 from log_shapes import (  # noqa: E402
     NO_FIELD_RULES_DIGEST, app_key, field_rules_digest, normalize_field_rules, parse_field_rules)
 
-# One rule as `log-shape-cluster fields --propose-rules` writes it: the field and
+# One rule as `clp shape-cluster fields --propose-rules` writes it: the field and
 # the category, plus the ratio and counts it was derived from.
 PROPOSED = [
     {"field": "message.content", "category": "free-text-message-content",
@@ -119,7 +119,7 @@ class KeyFoldsInTheRules(unittest.TestCase):
 
 
 class Probe(unittest.TestCase):
-    """`log-shape-cache diff` against a stored entry, through the CLI."""
+    """`clp shape-cache diff` against a stored entry, through the CLI."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -143,7 +143,7 @@ class Probe(unittest.TestCase):
         return self.path(name)
 
     def cache_run(self, *args, stdin=None, check=True):
-        p = subprocess.run([sys.executable, CACHE_BIN, *args], input=stdin, check=False,
+        p = subprocess.run([*CACHE_BIN, *args], input=stdin, check=False,
                            capture_output=True, text=True)
         if check:
             self.assertEqual(p.returncode, 0, p.stderr)
@@ -270,7 +270,7 @@ class ClusterAgreesWithTheCache(unittest.TestCase):
         self.assertEqual(cluster.returncode, 0, cluster.stderr)
         printed = dict(line.split("=", 1) for line in cluster.stdout.splitlines() if "=" in line)
         self.assertEqual(printed["FIELD_RULED"], "1", cluster.stdout)
-        cache = subprocess.run([sys.executable, CACHE_BIN, "rules-digest", "--field-rules", rules_file],
+        cache = subprocess.run([*CACHE_BIN, "rules-digest", "--field-rules", rules_file],
                                check=False, capture_output=True, text=True)
         self.assertEqual(cache.returncode, 0, cache.stderr)
         self.assertEqual(printed["RULES_DIGEST"], cache.stdout.strip())
@@ -282,7 +282,7 @@ class ClusterAgreesWithTheCache(unittest.TestCase):
         self.assertEqual(self.digests_agree(PROPOSED), field_rules_digest(BARE))
 
     def test_no_rules_digests_the_same_in_both(self):
-        p = subprocess.run([sys.executable, CACHE_BIN, "rules-digest"],
+        p = subprocess.run([*CACHE_BIN, "rules-digest"],
                            check=False, capture_output=True, text=True)
         self.assertEqual(p.stdout.strip(), NO_FIELD_RULES_DIGEST)
 
@@ -339,7 +339,7 @@ class OldFormatDiscard(unittest.TestCase):
         db.close()
 
     def diff(self):
-        return subprocess.run([sys.executable, CACHE_BIN, "diff", "--cache-dir", self.cache,
+        return subprocess.run([*CACHE_BIN, "diff", "--cache-dir", self.cache,
                                "--log-shapes-file", self.shapes],
                               check=False, capture_output=True, text=True)
 
@@ -368,9 +368,9 @@ class OldFormatDiscard(unittest.TestCase):
         self.assertEqual((mode, reason), ("NEW", "first-run"))
 
         # And a fresh classification is reused on the run after it.
-        key = subprocess.run([sys.executable, CACHE_BIN, "key", "--log-shapes-file", self.shapes],
+        key = subprocess.run([*CACHE_BIN, "key", "--log-shapes-file", self.shapes],
                              check=True, capture_output=True, text=True).stdout.strip()
-        subprocess.run([sys.executable, CACHE_BIN, "put", "--cache-dir", self.cache, "--key", key],
+        subprocess.run([*CACHE_BIN, "put", "--cache-dir", self.cache, "--key", key],
                        input=json.dumps(classification(TEMPLATES, [])), check=True,
                        capture_output=True, text=True)
         third = self.diff()

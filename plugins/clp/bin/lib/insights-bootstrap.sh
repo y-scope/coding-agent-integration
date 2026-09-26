@@ -11,7 +11,7 @@ source "${CLP_PLUGIN_LIB_DIR}/clp-common.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  clp-insights bootstrap [options] ARCHIVES_DIR
+  clp bootstrap [options] ARCHIVES_DIR
 
 Mechanical bootstrap for the log-insights skill. One call reads the field
 names and per-field value distributions from a sample of records, gets the
@@ -20,7 +20,7 @@ the classification cache — then prints a compact KEY=VALUE summary.
 
 The first time it sees an archive, it dumps and renders the archive's full log
 shape dictionary once and stores each template's hash, count, length and
-first --max-chars characters in the cache database (log-shape-cache ingest).
+first --max-chars characters in the cache database (clp shape-cache ingest).
 An archive never changes, so a later run on the same archive reads those rows
 instead and skips the dump -- unless templates need classifying, whose full
 text only the dump has.
@@ -33,22 +33,22 @@ background and relay the progress lines.
 Options:
   --max-chars N      Character limit the cache fingerprint is computed at
                      (default: 500, or $CLP_LOG_SHAPE_MAX_CHARS). Must match the
-                     --max-chars later passed to log-shape-cluster and
-                     log-shape-cache, or their fingerprints diverge.
+                     --max-chars later passed to clp shape-cluster and
+                     clp shape-cache, or their fingerprints diverge.
   --field-rules F    The field rules this run applies ({"field_rules": [...]},
-                     as log-shape-cluster is given). They are part of the
+                     as clp shape-cluster is given). They are part of the
                      fingerprint -- a ruled template takes the rule's category
                      and never reaches the classifier -- so the cache is probed
                      with them. Without the option, the rules file a previous
                      run left in --out-dir (log-shape-field-rules.json) is used
                      and reported; with neither, the probe runs with no rules,
                      which is its own fingerprint. The rules are derived AFTER
-                     this bootstrap (log-shape-cluster fields --propose-rules),
+                     this bootstrap (clp shape-cluster fields --propose-rules),
                      so the first run of an app has none to probe with: a later
                      run finds the file and reuses the classification, and a run
                      whose rules differ from the cached ones is never UPTODATE.
   --out-dir DIR      Where the intermediate files are written (default: /tmp).
-  --cache-dir DIR    Classification cache dir (default: log-shape-cache default).
+  --cache-dir DIR    Classification cache dir (default: clp shape-cache default).
   --sample-cap N     Max records sampled for the value distributions
                      (default: 20000, or $CLP_BOOTSTRAP_SAMPLE_CAP).
   --dump             Dump the dictionary even when the archive is stored, e.g.
@@ -87,7 +87,7 @@ Summary keys printed on stdout (grep-able):
   SHAPES_SOURCE=      stored (read from the cache database) | dump
   FREQS=              OK | UNAVAILABLE  (UNAVAILABLE: an archive predates the
                       stored per-log-shape counts; FREQS_HINT= says why)
-  CACHE_MODE=         UPTODATE | GROWTH | NEW  (from log-shape-cache diff)
+  CACHE_MODE=         UPTODATE | GROWTH | NEW  (from clp shape-cache diff)
   CACHE_REASON=       why that mode: up-to-date | templates-grown | first-run |
                       rules-changed. rules-changed is a NEW that is NOT a first
                       run: this app IS classified, under field rules that are no
@@ -96,15 +96,15 @@ Summary keys printed on stdout (grep-able):
   APP_KEY= BASE_KEY=  cache keys (BASE_KEY only on GROWTH)
   TO_CLASSIFY=        number of templates that need classifying (0 on UPTODATE)
   MAX_CHARS=          character limit the fingerprint used; pass the same value
-                      to log-shape-cluster and log-shape-cache
+                      to clp shape-cluster and clp shape-cache
   RULES_SOURCE=       flag (--field-rules) | found (left in --out-dir by an
                       earlier run) | none  -- where the rules in the fingerprint
                       came from
   RULES_FILE=         the rules file the probe used (RULES_SOURCE=none: absent)
   RULES_DIGEST=       their canonical digest, the value the key folds in. Pass
-                      the same rules to log-shape-cluster, and store the
+                      the same rules to clp shape-cluster, and store the
                       classification under a key computed with them
-                      (`log-shape-cache key --field-rules`)
+                      (`clp shape-cache key --field-rules`)
   LOG_SHAPES_FILE=    {"log_shape":"..."} NDJSON, the full template text
                       (SHAPES_SOURCE=dump only)
   TO_CLASSIFY_FILE=   the templates to classify (empty on UPTODATE)
@@ -114,7 +114,7 @@ Summary keys printed on stdout (grep-able):
                       MAX_CHARS characters, the whole of it when length is no
                       longer
   TYPE_DRIFT_COUNT=   field paths the archive stores under more than one type
-                      (clp-s-schema-tree --drift, read off the schema tree
+                      (clp schema --drift, read off the schema tree
                       already dumped). 0 means no path drifts, which is an
                       answer; UNAVAILABLE means no tree, with TYPE_DRIFT_HINT=
   TYPE_DRIFT_FILE=    {"path","kql_path","types":[{"type","id","count"}],
@@ -122,7 +122,7 @@ Summary keys printed on stdout (grep-able):
                       scalar and an object type is a query trap: a projection
                       or a NOT predicate written for one shape misses the other
   FIELD_COUNT_GROUPS=       distinct record counts the record root's children
-                            read (clp-s-schema-tree --field-counts): fields
+                            read (clp schema --field-counts): fields
                             reading the same count are carried by the same
                             records, which is how a block that appears together
                             shows itself
@@ -132,7 +132,7 @@ Summary keys printed on stdout (grep-able):
   FIELD_COUNTS_FILE=        {"count","share","fields":[...],"subtree_nodes"}
                             NDJSON, most records first
   RECORD_FAMILY_COUNT=      families in a verified partition of the records
-                            (clp-s-schema-tree --record-families), every pair
+                            (clp schema --record-families), every pair
                             proved disjoint by counting queries, so these shares
                             do partition the records. UNAVAILABLE with
                             RECORD_FAMILY_HINT= when the queries could not run
@@ -209,9 +209,12 @@ done
   || { echo "error: --max-chars must be a positive integer" >&2; exit 2; }
 mkdir -p "$out_dir"
 
-SEARCH="${CLP_PLUGIN_BIN_DIR}/clp-s-search-kql"
-CACHE_BIN="${CLP_PLUGIN_BIN_DIR}/log-shape-cache"
-TREE_BIN="${CLP_PLUGIN_BIN_DIR}/clp-s-schema-tree"
+# The stages this one runs are subcommands of the one command, so each tool is an
+# array: the program and the subcommand it names.
+CLP="${CLP_PLUGIN_BIN_DIR}/clp"
+SEARCH=("$CLP" search)
+CACHE_BIN=("$CLP" shape-cache)
+TREE_BIN=("$CLP" schema)
 cache_args=()
 [[ -n "$cache_dir" ]] && cache_args=(--cache-dir "$cache_dir")
 
@@ -238,7 +241,7 @@ field_counts_file="${out_dir}/clp-insights-field-counts.ndjson"
 record_families_file="${out_dir}/clp-insights-record-families.ndjson"
 structure_file="${out_dir}/clp-insights-structure.txt"
 record_families_out_file="${out_dir}/clp-insights-record-families.txt"
-# Where `log-shape-cluster fields --propose-rules` leaves the rules of a run, and
+# Where `clp shape-cluster fields --propose-rules` leaves the rules of a run, and
 # so where a later run of the same archive finds them.
 default_field_rules_file="${out_dir}/log-shape-field-rules.json"
 
@@ -262,7 +265,7 @@ fi
 rules_args=()
 [[ -n "$field_rules" ]] && rules_args=(--field-rules "$field_rules")
 # Also validates the rules file, here rather than after minutes of dumping.
-rules_digest="$("$CACHE_BIN" rules-digest ${rules_args[@]+"${rules_args[@]}"})" || exit 2
+rules_digest="$("${CACHE_BIN[@]}" rules-digest ${rules_args[@]+"${rules_args[@]}"})" || exit 2
 if [[ "$rules_source" == "found" ]]; then
   echo "[bootstrap] probing the classification cache with the field rules left in ${field_rules}; pass --field-rules to use another file, or delete it to probe with none"
 fi
@@ -270,7 +273,7 @@ fi
 # --- Stored archives ----------------------------------------------------------
 # An archive is immutable. When every archive here was analyzed before, its
 # templates' counts, hashes and prefixes are already in the cache database
-# (log-shape-cache ingest), and the dictionary is not dumped again. The archive
+# (clp shape-cache ingest), and the dictionary is not dumped again. The archive
 # ids are the archives' directory names.
 archive_ids=()
 if looks_like_clp_s_archive_dir "$archives_dir"; then
@@ -285,7 +288,7 @@ fi
 ids_csv="$(IFS=,; printf '%s' "${archive_ids[*]}")"
 stored=0
 if [[ "$force_dump" -eq 0 && -n "$ids_csv" ]] \
-    && "$CACHE_BIN" stored ${cache_args[@]+"${cache_args[@]}"} --max-chars "$max_chars" \
+    && "${CACHE_BIN[@]}" stored ${cache_args[@]+"${cache_args[@]}"} --max-chars "$max_chars" \
          --archive-ids "$ids_csv" > "$count_file" 2>/dev/null; then
   stored=1
 fi
@@ -299,7 +302,7 @@ fi
 # fails it; like the per-log-shape counts, that is reported, never fatal.
 archive_log_shapes=""
 archive_vars=""
-if "$SEARCH" "$archives_dir" 'stats.archives' 2>"$archive_stats_err_file" \
+if "${SEARCH[@]}" "$archives_dir" 'stats.archives' 2>"$archive_stats_err_file" \
      > "$archive_stats_file"; then
   archive_log_shapes="$(grep '^{' "$archive_stats_file" \
     | jq -s 'map(.num_log_shapes // 0) | add' 2>/dev/null || true)"
@@ -401,10 +404,10 @@ run_stage() {
 # --limit stops the search after $sample_cap records, even on huge archives.
 # An empty sample is reported by the emptiness check below.
 describe_sample() {
-  "$SEARCH" "$archives_dir" 'stats.schema_tree' 2>/dev/null > "$tree_raw_file" || true
-  "$TREE_BIN" --tree-file "$tree_raw_file" --json-out "$tree_json_file" "$archives_dir" \
+  "${SEARCH[@]}" "$archives_dir" 'stats.schema_tree' 2>/dev/null > "$tree_raw_file" || true
+  "${TREE_BIN[@]}" --tree-file "$tree_raw_file" --json-out "$tree_json_file" "$archives_dir" \
     > "$tree_summary_file" 2>/dev/null || true
-  "$SEARCH" --limit "$sample_cap" "$archives_dir" '*' 2>/dev/null > "$sample_file" || true
+  "${SEARCH[@]}" --limit "$sample_cap" "$archives_dir" '*' 2>/dev/null > "$sample_file" || true
   [[ -s "$sample_file" ]] || return 0
 
   local sampled_records field dist distinct values
@@ -448,32 +451,32 @@ cat "$dist_file"
 # is rendered once, by ingest, which also stores the archive for next time.
 # On an empty dump, ingest fails and reports it below.
 dump_log_shapes() {
-  "$SEARCH" "$archives_dir" 'stats.log_shapes' 2>"$err_file" > "$shapes_file" || true
-  "$CACHE_BIN" ingest ${cache_args[@]+"${cache_args[@]}"} --max-chars "$max_chars" \
+  "${SEARCH[@]}" "$archives_dir" 'stats.log_shapes' 2>"$err_file" > "$shapes_file" || true
+  "${CACHE_BIN[@]}" ingest ${cache_args[@]+"${cache_args[@]}"} --max-chars "$max_chars" \
     --shapes-file "$shapes_file" --log-shapes-out "$log_shapes_file" > "$ingest_file" 2>"$ingest_err_file" \
     || return 1
   rm -f "$freqs_unavailable_file"
   if grep -qx 'COUNTS=OK' "$ingest_file"; then
-    "$CACHE_BIN" freqs ${cache_args[@]+"${cache_args[@]}"} \
+    "${CACHE_BIN[@]}" freqs ${cache_args[@]+"${cache_args[@]}"} \
       --archive-ids "$(sed -n 's/^ARCHIVE_IDS=//p' "$ingest_file")" > "$freqs_file"
   else
     : > "$freqs_unavailable_file"
   fi
 }
 read_stored_freqs() {
-  "$CACHE_BIN" freqs ${cache_args[@]+"${cache_args[@]}"} --archive-ids "$ids_csv" > "$freqs_file"
+  "${CACHE_BIN[@]}" freqs ${cache_args[@]+"${cache_args[@]}"} --archive-ids "$ids_csv" > "$freqs_file"
 }
 
 # --- 3. Classification-cache probe ---------------------------------------------
 probe_cache_file() {
-  "$CACHE_BIN" diff ${cache_args[@]+"${cache_args[@]}"} ${rules_args[@]+"${rules_args[@]}"} \
+  "${CACHE_BIN[@]}" diff ${cache_args[@]+"${cache_args[@]}"} ${rules_args[@]+"${rules_args[@]}"} \
     --max-chars "$max_chars" --log-shapes-file "$log_shapes_file" > "$diff_file"
 }
 # Exits 3 when templates need classifying: only their prefixes are stored. Its
 # note says so on stderr; the caller prints its own line, and the file probe
 # that follows repeats any cache warning.
 probe_cache_stored() {
-  "$CACHE_BIN" diff ${cache_args[@]+"${cache_args[@]}"} ${rules_args[@]+"${rules_args[@]}"} \
+  "${CACHE_BIN[@]}" diff ${cache_args[@]+"${cache_args[@]}"} ${rules_args[@]+"${rules_args[@]}"} \
     --max-chars "$max_chars" --archive-ids "$ids_csv" > "$diff_file" 2>/dev/null
 }
 
@@ -514,9 +517,9 @@ if [[ "$shapes_source" == "dump" ]]; then
   # shapes per schema-tree node), and the tree summary with per-field values
   # and templates. Both read files already written; neither searches.
   if [[ -s "$tree_raw_file" ]]; then
-    "$CACHE_BIN" fields --shapes-file "$shapes_file" --tree-file "$tree_raw_file" \
+    "${CACHE_BIN[@]}" fields --shapes-file "$shapes_file" --tree-file "$tree_raw_file" \
       > "$template_fields_file" 2>/dev/null || rm -f "$template_fields_file"
-    "$TREE_BIN" --tree-file "$tree_raw_file" --log-shapes-file "$shapes_file" \
+    "${TREE_BIN[@]}" --tree-file "$tree_raw_file" --log-shapes-file "$shapes_file" \
       --json-out "$tree_json_file" "$archives_dir" > "$tree_summary_file" 2>/dev/null || true
   fi
   log_shape_count="$(sed -n 's/^LOG_SHAPE_COUNT=//p' "$ingest_file")"
@@ -548,7 +551,7 @@ type_drift_count="UNAVAILABLE"
 field_count_groups="UNAVAILABLE"
 field_count_note=""
 if [[ -s "$tree_raw_file" ]] \
-    && "$TREE_BIN" --tree-file "$tree_raw_file" \
+    && "${TREE_BIN[@]}" --tree-file "$tree_raw_file" \
          --drift --drift-file "$type_drift_file" \
          --field-counts --field-counts-file "$field_counts_file" \
          "$archives_dir" > "$structure_file" 2>/dev/null; then
@@ -571,7 +574,7 @@ record_family_method=""
 if [[ -s "$tree_raw_file" ]]; then
   families_started="$(date +%s)"
   echo "[bootstrap] partitioning the records into families (counting queries)..."
-  if "$TREE_BIN" --tree-file "$tree_raw_file" \
+  if "${TREE_BIN[@]}" --tree-file "$tree_raw_file" \
        --record-families --record-families-file "$record_families_file" \
        "$archives_dir" > "$record_families_out_file" 2>/dev/null; then
     record_family_count="$(sed -n 's/^RECORD_FAMILY_COUNT=//p' "$record_families_out_file")"
@@ -652,10 +655,10 @@ echo "TO_CLASSIFY_FILE=$to_classify_file"
 
 # Fetch the cache entries the next steps need, so the caller doesn't have to.
 if [[ "$mode" == "UPTODATE" ]]; then
-  "$CACHE_BIN" get "${cache_args[@]}" "$app_key" > "${out_dir}/log-shape-classification.json"
+  "${CACHE_BIN[@]}" get "${cache_args[@]}" "$app_key" > "${out_dir}/log-shape-classification.json"
   echo "CLASSIFICATION_FILE=${out_dir}/log-shape-classification.json"
 elif [[ "$mode" == "GROWTH" && -n "$base_key" ]]; then
-  "$CACHE_BIN" get "${cache_args[@]}" "$base_key" > "${out_dir}/log-shape-base-classification.json"
+  "${CACHE_BIN[@]}" get "${cache_args[@]}" "$base_key" > "${out_dir}/log-shape-base-classification.json"
   echo "BASE_CLASSIFICATION_FILE=${out_dir}/log-shape-base-classification.json"
 fi
 

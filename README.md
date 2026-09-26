@@ -27,11 +27,16 @@ plugins/clp/.claude-plugin/plugin.json
     Claude Code plugin manifest.
 plugins/clp/.codex-plugin/plugin.json
     Codex plugin manifest.
-plugins/clp/bin/
-    Restricted-passthrough bash wrappers for clp-s, plus local helpers
-    (clp-detect-logs, structurize.py, log-shape-cache, log-shape-cluster,
-    clp-insights, clp-report, clp-compress-status,
-    kql-build) that are not clp-s passthroughs.
+plugins/clp/bin/clp
+    The one command the plugin ships: the analysis router, plus every
+    subcommand (compress, search, decompress, schema, bundle, report,
+    shape-cache, ...).
+plugins/clp/bin/lib/
+    Every subcommand's implementation, the subcommand table that names
+    them (commands.py), and the shared clp-common.sh.
+plugins/clp/bin/clp-s
+    The clp-s engine binary, placed here by the installer and gitignored.
+    Not a command anyone types; the subcommands resolve it.
 plugins/clp/skills-claude/
     Claude Code skills: compress, compress-folder, search, analyze-logs,
     decompress.
@@ -79,19 +84,29 @@ claude --plugin-dir ./plugins/clp
 
 See [LOCAL_TESTING.md](LOCAL_TESTING.md) for more on local testing.
 
-## Wrappers
+## The `clp` command
 
-- `bin/clp-s-list-sessions`
-- `bin/clp-s-compress-session`
-- `bin/clp-s-compress-folder`
-- `bin/clp-s-search-kql`
-- `bin/clp-s-decompress`
+`bin/clp` is the only command in the plugin. Its first argument is either a subcommand or a target to analyse:
 
-The wrappers prefer `CLP_S_BIN`, then plugin-local `bin/clp-s`, then plugin-local `.clp-core/bin/clp-s`, then `clp-s` on `PATH`. See [`plugins/clp/README.md`](plugins/clp/README.md) for the full wrapper contract, flag allowlist, and example commands.
+```bash
+./plugins/clp/bin/clp /var/log/vllm        # analyse this log file, folder, archive, bundle or session id
+./plugins/clp/bin/clp compress session     # one step of that flow, on its own
+./plugins/clp/bin/clp                      # usage plus the full subcommand table
+```
+
+The steps of the compress/search/decompress workflow are:
+
+- `bin/clp list-sessions`
+- `bin/clp compress session`
+- `bin/clp compress folder`
+- `bin/clp search`
+- `bin/clp decompress`
+
+These resolve the engine binary in order: `CLP_S_BIN`, then plugin-local `bin/clp-s`, then plugin-local `.clp-core/bin/clp-s`, then `clp-s` on `PATH`. See [`plugins/clp/README.md`](plugins/clp/README.md) for the full contract, flag allowlist, and example commands.
 
 ## Semantic search
 
-`clp-s-search-kql` supports `semantic("query")` in KQL for natural-language similarity search. It requires an embedding server that is **already running** — the plugin never starts one (no Docker, no local model download). The wrapper health-checks the endpoint before running a semantic search; if it is unavailable, the search fails with a clear error.
+`clp search` supports `semantic("query")` in KQL for natural-language similarity search. It requires an embedding server that is **already running** — the plugin never starts one (no Docker, no local model download). `clp search` health-checks the endpoint before running a semantic search; if it is unavailable, the search fails with a clear error.
 
 Endpoint resolution, highest precedence first:
 
@@ -100,27 +115,27 @@ Endpoint resolution, highest precedence first:
 3. the `semantic-endpoint` config file — `~/.config/yscope-clp-plugin/semantic-endpoint`, one URL per line, blank lines and `#comments` ignored (override the path with `CLP_SEMANTIC_ENDPOINT_FILE`)
 4. the built-in remote endpoint — `https://ca-central-semantic-cache.yscope.ai`, used if it passes the health check
 
-An endpoint named by 1–3 that fails its health check is a hard error — the wrapper will not silently fall back to a different host. A server you host yourself (including one on `localhost`) must be named explicitly; it is not auto-detected.
+An endpoint named by 1–3 that fails its health check is a hard error — `clp search` will not silently fall back to a different host. A server you host yourself (including one on `localhost`) must be named explicitly; it is not auto-detected.
 
 ```bash
 echo 'https://embeddings.internal.example.com' \
   > ~/.config/yscope-clp-plugin/semantic-endpoint
 ```
 
-The same endpoint drives `log-shape-cluster`, which embeds log shapes through the server's `/v1/embeddings` endpoint.
+The same endpoint drives `clp shape-cluster`, which embeds log shapes through the server's `/v1/embeddings` endpoint.
 
 Other semantic flags: `--semantic-top-k K`, `--semantic-threshold T`, `--embedding-batch-size N`.
 
 ```bash
-./plugins/clp/bin/clp-s-search-kql /tmp/session-archive \
+./plugins/clp/bin/clp search /tmp/session-archive \
   'semantic("slow database queries") AND level:error'
 ```
 
 ## Contributing
 
-This repo is the source of truth for the plugin payload. Wrappers, skills, plugin manifests, and marketplace manifests are all open for contribution.
+This repo is the source of truth for the plugin payload. The `clp` command and its subcommands, the skills, the plugin manifests, and the marketplace manifests are all open for contribution.
 
-For the full contributor guide — local dev loop (install → edit → ask the agent → reload), Claude Code vs Codex reload asymmetry, where to put a change (wrapper vs skill), and the pre-merge sanity checklist — see [CONTRIBUTING.md](CONTRIBUTING.md).
+For the full contributor guide — local dev loop (install → edit → ask the agent → reload), Claude Code vs Codex reload asymmetry, where to put a change (subcommand vs skill), and the pre-merge sanity checklist — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Releases
 
@@ -128,7 +143,7 @@ This repo follows [Semantic Versioning](https://semver.org/) for the `clp@yscope
 
 1. Bump the `version` field in both plugin manifests (must match). Bump the version in `plugins/clp/.claude-plugin/plugin.json` and `plugins/clp/.codex-plugin/plugin.json` — they must stay in sync.
 2. Update the relevant `SKILL.md` for any behavior change:
-   - KQL/semantic syntax or wrapper flag changes → common `search/SKILL.md`
+   - KQL/semantic syntax or `clp search` flag changes → common `search/SKILL.md`
    - Session-log workflow or agent schema changes → `analyze-logs/` or `codex-trajectory/`
    - Compress/decompress flag changes → corresponding `compress/` or `decompress/` skill
 3. Update `plugins/clp/README.md` if the API surface changed.

@@ -12,7 +12,7 @@ computes a signal vector from the catalog and a few counts on the main log's arc
                            beginning and end, other messages by embeddings from the plugin's built-in
                            semantic endpoint (or one named); if the endpoint fails, the review fails.
 
-Engine calls go through the search wrapper and bundle.py, like the rest of clp-bundle. Stdlib only.
+Engine calls go through the search wrapper and bundle.py, like the rest of clp bundle. Stdlib only.
 """
 
 import glob
@@ -177,7 +177,7 @@ def _load_script(name, path):
 
 def default_endpoint():
     """The plugin's built-in semantic endpoint (the first of DEFAULT_SEMANTIC_ENDPOINTS in clp-common.sh,
-    which log-shape-cluster and semantic search also fall back to)."""
+    which clp shape-cluster and semantic search also fall back to)."""
     with open(os.path.join(BIN_DIR, "lib", "clp-common.sh"), encoding="utf-8") as fh:
         m = re.search(r"DEFAULT_SEMANTIC_ENDPOINTS=\(\s*\"([^\"]+)\"", fh.read())
     if not m:
@@ -188,7 +188,7 @@ def default_endpoint():
 def _search(wrapper, bundle_dir, archive_id, args, missing_ok=None):
     """Search one archive of a bundle. `missing_ok` names an engine message that means "no such column
     in this archive" and gives an empty result instead of an error."""
-    proc = subprocess.run([wrapper, *args[:-1], "--archive-id", archive_id, os.path.join(bundle_dir, "archives"), args[-1]],
+    proc = subprocess.run([*wrapper, *args[:-1], "--archive-id", archive_id, os.path.join(bundle_dir, "archives"), args[-1]],
                           capture_output=True, text=True, encoding="utf-8")
     if proc.returncode != 0:
         if missing_ok and missing_ok in proc.stderr:
@@ -273,9 +273,10 @@ def signals(bundle_dir, wrapper):
         db.close()
     for name, kql in KQL.items():
         s[name] = sum(r.get("count", 0) for r in _search(wrapper, bundle_dir, main, ["--count", kql]))
-    proc = subprocess.run([os.path.join(BIN_DIR, "clp-session"), "turns",
+    proc = subprocess.run([os.path.join(BIN_DIR, "clp"), "session", "turns",
                            "--json", "--top", "0", "--waits", "1",
-                           "--search-wrapper", wrapper, os.path.join(bundle_dir, "archives", main)],
+                           *(["--search-wrapper", wrapper[0]] if len(wrapper) == 1 else []),
+                           os.path.join(bundle_dir, "archives", main)],
                           capture_output=True, text=True, encoding="utf-8")
     t = json.loads(proc.stdout)["total_s"] if proc.returncode == 0 else {}
     s.update(e2e_s=t.get("e2e_s", 0), human_s=t.get("human_s", 0), idle_s=t.get("idle_s", 0),
@@ -316,7 +317,7 @@ def rank(sessions):
 def error_templates(bundles, wrapper):
     """Failed tool calls across bundles, grouped by CLP's template: {template: group}. A group has n,
     sessions, projects and examples ("<session> <uuid>")."""
-    shapes = _load_script("log_shape_cache", os.path.join(BIN_DIR, "log-shape-cache"))
+    shapes = _load_script("shape_cache", os.path.join(BIN_DIR, "lib", "shape_cache.py"))
     groups = {}
     for bundle_dir in bundles:
         db = B.open_catalog(bundle_dir)
@@ -368,8 +369,8 @@ def merge_affix(templates, share=0.6):
 
 def merge_embeddings(templates, endpoint, threshold=0.80):
     """Greedy leader clusters of templates by cosine similarity of their embeddings (the semantic
-    server at `endpoint`), as log-shape-cluster computes them."""
-    cluster = _load_script("log_shape_cluster", os.path.join(BIN_DIR, "log-shape-cluster.py"))
+    server at `endpoint`), as clp shape-cluster computes them."""
+    cluster = _load_script("shape_cluster", os.path.join(BIN_DIR, "lib", "shape_cluster.py"))
     unique, index_of = cluster.dedup_truncated(templates, 500)
     vectors = cluster.embed_texts(cluster.embeddings_url(cluster.resolve_endpoint(endpoint)), unique, 256, 100_000_000)
     sums, members = [], []

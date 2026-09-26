@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-clp-detect-logs - read the start of each log file and report what is there,
+clp detect - read the start of each log file and report what is there,
 so the agent can decide how to compress it (compress-folder skill, step 1).
 Read-only: it reads the first 128 KiB of each file and writes nothing.
 
 Compression used to start with a guess. The agent picked --structurize and
 --timestamp-key from a file's name or by reading the file itself, and a wrong
-guess only surfaced once clp-s-compress-folder had parsed every file: a 9.8 GiB
+guess only surfaced once clp compress folder had parsed every file: a 9.8 GiB
 CockroachDB log named .log was read end to end by structurize.py, which only
 knows vLLM formats, and skipped, although it was JSON with a usable timestamp
 field all along. This tool puts the evidence in front of the agent instead; the
-agent decides, then runs clp-s-compress-folder with the flags it chose.
+agent decides, then runs clp compress folder with the flags it chose.
 
 What it does with each file's first 128 KiB (--read-bytes):
   JSON  It parses JSON objects one after another. Two or more (or one that
@@ -27,15 +27,15 @@ What it does with each file's first 128 KiB (--read-bytes):
         writes a parser (--parser), which is tested here on the lines read.
   skip  Empty, binary (NUL bytes), and gzip/zstd/bzip2/xz/zip-compressed files
         are reported and left out.
-It ends with a suggested clp-s-compress-folder command per group of files that
+It ends with a suggested clp compress folder command per group of files that
 need the same settings, and the files that can't be compressed as they are.
 
 Usage:
-  clp-detect-logs [options] PATH [PATH ...]
+  clp detect [options] PATH [PATH ...]
 
   PATH                A log file or a folder; the report says which each one
                       is. Folders are searched with the same rules as
-                      clp-s-compress-folder --path.
+                      clp compress folder --path.
   --extensions EXT,.. Extensions to match in folders (default:
                       log,jsonl,json,txt,ndjson,out,err; '*' for every file).
                       Files named directly are always included.
@@ -107,7 +107,7 @@ def shorten(text, limit=TEXT_CHARS):
 
 
 def discover(paths, extensions, recursive):
-    """Files to inspect, with the same matching rules as clp-s-compress-folder,
+    """Files to inspect, with the same matching rules as clp compress folder,
     and what each given path is: [(path, "file" | "folder", files found)]."""
     exts = None if extensions == "*" else [e.lower() for e in extensions.split(",")]
     files, inputs = [], []
@@ -418,7 +418,7 @@ def suggest(results, inputs, args):
     compressible = [r["path"] for r in results if not r.get("skip")]
     commands = []
     for (mode, key), files in groups.items():
-        cmd = ["clp-s-compress-folder"]
+        cmd = ["clp", "compress", "folder"]
         if len(inputs) == 1 and inputs[0][1] == "folder" and files == compressible \
                 and len(files) == len(results):
             cmd += ["--path", inputs[0][0]]

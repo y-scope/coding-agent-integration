@@ -1,8 +1,8 @@
 """
-clp-session facts - compute every number of a session-trajectory report in
+clp session facts - compute every number of a session-trajectory report in
 code, so the report writer only has to put them into words.
 
-This is the trajectory twin of clp-insights facts, and it exists for the
+This is the trajectory twin of clp facts, and it exists for the
 same reason: a writer asked to do arithmetic gets it wrong. In a trial the
 analyst put waste at 19% of the input tokens where the measured figure was
 9.1%, because it eyeballed a few big numbers instead of dividing one sum by
@@ -20,13 +20,13 @@ with the one command that reproduces it, so a reader who doubts a number does
 not have to reconstruct a query to settle it. See PROVENANCE below.
 
 Inputs:
-  --bundle DIR      A clp-bundle bundle directory: catalog.sqlite, manifest.json
+  --bundle DIR      A clp bundle bundle directory: catalog.sqlite, manifest.json
                     and archives/. This is the primary input and the only
                     required one. The catalog is opened read-only.
-  --archive DIR     The main log's CLP archive, for clp-session turns. When it
+  --archive DIR     The main log's CLP archive, for clp session turns. When it
                     is omitted it is derived from the catalog's `archives` table:
                     the row with kind='main', at <bundle>/archives/<archive_id>.
-  --turns-file F    A clp-session turns run captured earlier, parsed instead of
+  --turns-file F    A clp session turns run captured earlier, parsed instead of
                     running it again. The skill runs turns once and reuses it.
   --axes            Also compute section 9, the scoring inputs: the raw value
                     behind each of the 20 axes, with the components it came from.
@@ -41,7 +41,7 @@ Inputs:
                     --bundle it validates and measures in the same run.
   --scale F         The scale file --check-scale validates
                     (default: ../scoring-scale.json next to this script's plugin).
-  --waits N         How many WAIT lines to ask clp-session turns for (default 60).
+  --waits N         How many WAIT lines to ask clp session turns for (default 60).
   --top N           How many rows to list in the "top N" tables (default 10).
   --out F           Where to write the facts (default /tmp/clp-session-facts.md).
 
@@ -56,9 +56,9 @@ Where the numbers come from:
   * The catalog, read with sqlite3 directly. Attempts, agents, workflow runs and
     instances, phases, units, events, tool calls, token usage, actions and file
     changes all live there, so they need no subprocess.
-  * clp-session turns, for the per-turn time split. Only wall-clock timestamps
+  * clp session turns, for the per-turn time split. Only wall-clock timestamps
     can be added up; the harness's own turn_duration records nest and cannot.
-  * clp-bundle outcomes and clp-bundle repo, for what the session produced and
+  * clp bundle outcomes and clp bundle repo, for what the session produced and
     which of it the git repository and GitHub actually confirm.
 
 Every subprocess runs under a timeout inside try/except. A section whose input
@@ -99,7 +99,7 @@ from pathlib import Path
 
 # The sibling tools this module runs live one level up, in bin/.
 BIN_DIR = Path(__file__).resolve().parent.parent
-SUBPROCESS_TIMEOUT = 3600  # clp-session turns scans a whole session archive
+SUBPROCESS_TIMEOUT = 3600  # clp session turns scans a whole session archive
 
 
 # ---------------------------------------------------------------------------
@@ -243,11 +243,11 @@ TIERS = {
             "these records at all.",
 }
 
-# How the checks in section 10 are spelled. The plugin's own wrappers are named
-# with no path, so the file never records one machine's install layout; the
-# header says to put the plugin's bin/ on $PATH before running them.
-SQL_TOOL = "clp-bundle"
-CATALOG_NOTE = ("`clp-bundle <bundle> sql` opens catalog.sqlite read-only, so running a check can "
+# How the checks in section 10 are spelled. `clp` is named with no path, so the
+# file never records one machine's install layout; the header says to put the
+# plugin's bin/ on $PATH before running them.
+SQL_TOOL = "clp bundle"
+CATALOG_NOTE = ("`clp bundle <bundle> sql` opens catalog.sqlite read-only, so running a check can "
                 "never change what it is checking.")
 
 # The message-id dedup rule, spelled for a check command: see DEDUP_KEY.
@@ -256,12 +256,12 @@ DEDUP_SQL = "CASE WHEN message_id IS NULL THEN 'row#' || id ELSE 'msg:' || messa
 # What section 10 prints if a figure reaches it with no command and no reason. It
 # names the defect rather than implying the figure is unverifiable: a bare
 # "unstated" would claim a figure cannot be checked while giving no reason at all.
-NO_REASON = ("no reason was recorded for this figure. That is a defect in clp-session facts, not a "
+NO_REASON = ("no reason was recorded for this figure. That is a defect in clp session facts, not a "
              "property of the figure: report it rather than trusting the figure or discarding it.")
 
 
 def sql_check(bundle, query):
-    """One `clp-bundle <bundle> sql "<query>"` command, as a reader would type it."""
+    """One `clp bundle <bundle> sql "<query>"` command, as a reader would type it."""
     return f'{SQL_TOOL} {bundle} sql "{" ".join(str(query).split())}"'
 
 
@@ -403,7 +403,7 @@ def run_tool(argv, env, timeout=SUBPROCESS_TIMEOUT):
 def tool_env(catalog_clp_s):
     """The environment the helpers run in.
 
-    The search wrappers resolve clp-s from $CLP_S_BIN, then from the installed
+    `clp search` resolves clp-s from $CLP_S_BIN, then from the installed
     plugin, then from $PATH. A stale clp-s on $PATH cannot open an archive
     written by a newer one, and the whole turns section is then lost. The
     catalog records the clp-s that built the bundle, so use it when the caller
@@ -416,7 +416,7 @@ def tool_env(catalog_clp_s):
 
 
 # ---------------------------------------------------------------------------
-# clp-session turns output
+# clp session turns output
 # ---------------------------------------------------------------------------
 
 TURNS_HEAD = re.compile(r"^TURNS=(\d+)\s+PROMPTS=(\d+)\s+TOOL_CALLS=(\d+)\s+WITH_TOOL_DURATION=(\d+)")
@@ -467,7 +467,7 @@ def to_int(text, default=None):
 
 
 def parse_turns(text):
-    """clp-session turns stdout as {totals, turns, waits}."""
+    """clp session turns stdout as {totals, turns, waits}."""
     out = {"turns_count": None, "prompts": None, "tool_calls": None,
            "with_tool_duration": None, "minutes": {}, "tokens": {},
            "turns": [], "waits": []}
@@ -632,12 +632,12 @@ def attrs_of(text):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Compute a session-trajectory report's numbers in code.")
-    ap.add_argument("--bundle", help="a clp-bundle bundle directory "
+    ap.add_argument("--bundle", help="a clp bundle bundle directory "
                                      "(not needed for --check-scale on its own)")
     ap.add_argument("--archive", default=None,
                     help="the main log's CLP archive (default: derived from the catalog)")
     ap.add_argument("--turns-file", default=None,
-                    help="a clp-session turns run captured earlier, parsed instead of re-running it")
+                    help="a clp session turns run captured earlier, parsed instead of re-running it")
     ap.add_argument("--axes", action="store_true",
                     help="also compute section 9: each axis's raw value and the components behind it")
     ap.add_argument("--check-scale", action="store_true",
@@ -671,7 +671,7 @@ def main(argv=None) -> int:
     bundle = Path(args.bundle).expanduser().resolve()
     catalog_path = bundle / "catalog.sqlite"
     if not catalog_path.is_file():
-        print(f"error: no catalog at {catalog_path}; --bundle wants a clp-bundle bundle directory",
+        print(f"error: no catalog at {catalog_path}; --bundle wants a clp bundle bundle directory",
               file=sys.stderr)
         return 1
     try:
@@ -689,7 +689,7 @@ def main(argv=None) -> int:
     archive_kinds = {kind: (aid, records) for aid, kind, records
                      in cat.rows("SELECT archive_id, kind, records FROM archives")}
     archive_dir, archive_note = resolve_archive(args.archive, bundle, archive_kinds)
-    # A captured --axes stdout is re-scored later by clp-session score, so it has
+    # A captured --axes stdout is re-scored later by clp session score, so it has
     # to say what it was measured from; without this, provenance is lost the
     # moment the output leaves the pipe.
     keys["BUNDLE"] = str(bundle)
@@ -707,8 +707,8 @@ def main(argv=None) -> int:
     single_note = "not applicable - single-threaded session (the catalog has no agent or workflow nodes)"
 
     w("# Session trajectory facts (computed in code; every figure below is exact)\n")
-    w(wrap("Each section's figures are computed from the bundle's catalog, from clp-session turns, "
-           "or from clp-bundle outcomes/repo, and every count carries the denominator it is a share of. "
+    w(wrap("Each section's figures are computed from the bundle's catalog, from clp session turns, "
+           "or from clp bundle outcomes/repo, and every count carries the denominator it is a share of. "
            "Quote them; do not re-derive them. A figure that could not be computed says so and why."))
     w("")
     w("**What the markers mean.** Every figure carries one, and the four kinds do not overlap:")
@@ -722,7 +722,7 @@ def main(argv=None) -> int:
            "- and asserts nothing about the session."))
     w("")
     w(wrap("Section 10 lists every headline figure again with the one command that reproduces it. "
-           "Those commands name this plugin's own wrappers with no path, so nothing here records one "
+           "Those commands name this plugin's own `clp` with no path, so nothing here records one "
            "machine's install layout: run them with the plugin's `bin/` on $PATH. " + CATALOG_NOTE))
     w("")
 
@@ -730,7 +730,7 @@ def main(argv=None) -> int:
     F["bundle"] = str(bundle)
     if archive_dir is not None:
         F["archive"] = str(archive_dir)
-    F["turns_cmd"] = (f"clp-session turns --top 0 --waits {args.waits} {archive_dir}"
+    F["turns_cmd"] = (f"clp session turns --top 0 --waits {args.waits} {archive_dir}"
                       if archive_dir is not None else None)
 
     section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_note, w, F, keys,
@@ -824,32 +824,32 @@ def load_turns(args, archive_dir, env):
         except OSError as exc:
             return None, f"--turns-file {args.turns_file} could not be read: {exc}"
     if archive_dir is None:
-        return None, "no main-log archive to run clp-session turns against"
-    text, reason = run_tool([str(BIN_DIR / "clp-session"), "turns", "--top", "0",
+        return None, "no main-log archive to run clp session turns against"
+    text, reason = run_tool([str(BIN_DIR / "clp"), "session", "turns", "--top", "0",
                              "--waits", str(args.waits), str(archive_dir)], env)
     if text is None:
         return None, reason
-    return parse_turns(text), f"clp-session turns --top 0 --waits {args.waits} {archive_dir}"
+    return parse_turns(text), f"clp session turns --top 0 --waits {args.waits} {archive_dir}"
 
 
 def load_outcomes(bundle, env):
-    text, reason = run_tool([str(BIN_DIR / "clp-bundle"), str(bundle), "outcomes", "--json"], env)
+    text, reason = run_tool([str(BIN_DIR / "clp"), "bundle", str(bundle), "outcomes", "--json"], env)
     if text is None:
         return None, reason
     try:
-        return json.loads(text), "clp-bundle outcomes --json"
+        return json.loads(text), "clp bundle outcomes --json"
     except ValueError as exc:
-        return None, f"clp-bundle outcomes produced unparseable JSON: {exc}"
+        return None, f"clp bundle outcomes produced unparseable JSON: {exc}"
 
 
 def load_repo(bundle, env):
-    text, reason = run_tool([str(BIN_DIR / "clp-bundle"), str(bundle), "repo", "--json"], env)
+    text, reason = run_tool([str(BIN_DIR / "clp"), "bundle", str(bundle), "repo", "--json"], env)
     if text is None:
         return None, reason
     try:
-        return json.loads(text), "clp-bundle repo --json"
+        return json.loads(text), "clp bundle repo --json"
     except ValueError as exc:
-        return None, f"clp-bundle repo produced unparseable JSON: {exc}"
+        return None, f"clp bundle repo produced unparseable JSON: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -890,18 +890,18 @@ def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_
         F["turns"] = turns["turns_count"]
         keys["TURNS"] = turns["turns_count"]
         w(f"- {MEASURED} Turns: {num(turns['turns_count'])}; human prompts: {num(turns['prompts'])}; "
-          f"tool calls seen by clp-session turns: {num(turns['tool_calls'])}")
+          f"tool calls seen by clp session turns: {num(turns['tool_calls'])}")
         w(f"  - Source: {turns_note}")
         add_check(F, "Turns", MEASURED, num(turns["turns_count"]), F.get("turns_cmd"),
                   note="" if F.get("turns_cmd") else
                   "the turns run was supplied as a file, so the command that produced it is not known "
-                  "here; re-run clp-session turns against the main archive")
+                  "here; re-run clp session turns against the main archive")
     else:
         catalog_turns = cat.one("SELECT COUNT(DISTINCT turn) FROM events WHERE turn IS NOT NULL", default=0)
         F["turns"] = catalog_turns
         keys["TURNS"] = catalog_turns
         w(f"- {MEASURED} Turns: {num(catalog_turns)} distinct turn numbers in the catalog. "
-          f"clp-session turns is UNAVAILABLE: {turns_note}")
+          f"clp session turns is UNAVAILABLE: {turns_note}")
         add_check(F, "Turns", MEASURED, num(catalog_turns),
                   sql_check(F["bundle"], "SELECT COUNT(DISTINCT turn) AS turns FROM events "
                                          "WHERE turn IS NOT NULL"))
@@ -1367,7 +1367,7 @@ def section_time(cat, turns, turns_note, w, F, keys, alerts, top):
     w("## 4. Time")
     if not turns:
         w(f"- UNAVAILABLE: {turns_note}")
-        w("  The per-turn time split comes only from clp-session turns, so none of it can be quoted. "
+        w("  The per-turn time split comes only from clp session turns, so none of it can be quoted. "
           "The catalog-only figures below still hold.")
     else:
         m = turns["minutes"]
@@ -1398,7 +1398,7 @@ def section_time(cat, turns, turns_note, w, F, keys, alerts, top):
                   note="" if F.get("turns_cmd") else "the turns run was supplied as a file")
         w(f"- {DERIVED} Working (tool + model): {(m.get('tool') or 0) + (m.get('model') or 0):.1f} "
           f"minutes, {pct((m.get('tool') or 0) + (m.get('model') or 0), e2e)} of e2e.")
-        w(f"- {MEASURED} Token totals clp-session turns measured on the main thread: "
+        w(f"- {MEASURED} Token totals clp session turns measured on the main thread: "
           f"input {num(turns['tokens'].get('input'))}, output {num(turns['tokens'].get('output'))}, "
           f"cache_read {num(turns['tokens'].get('cache_read'))}, "
           f"cache_write {num(turns['tokens'].get('cache_write'))}")
@@ -1428,7 +1428,7 @@ def section_time(cat, turns, turns_note, w, F, keys, alerts, top):
         other_waits = [x for x in waits if not x["human"]]
         F["waits"] = waits
         F["human_wait_minutes"] = sum(x["minutes"] for x in human_waits)
-        w(f"- {MEASURED} Longest tool waits clp-session turns listed: {num(len(waits))} in all - "
+        w(f"- {MEASURED} Longest tool waits clp session turns listed: {num(len(waits))} in all - "
           f"{num(len(human_waits))} waiting on the person "
           f"({F['human_wait_minutes']:.1f} minutes), {num(len(other_waits))} waiting on a tool "
           f"({sum(x['minutes'] for x in other_waits):.1f} minutes). These are the N longest, not every wait.")
@@ -1591,7 +1591,7 @@ def section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, 
         confirmed_prs = sum(len(p.get("prs") or []) for p in pr_cmds)
         pr_cmds_with_prs = sum(1 for p in pr_cmds if p.get("prs"))
         F["exact_commits"] = exact
-        repo_cmd = f"clp-bundle {F['bundle']} repo --json"
+        repo_cmd = f"clp bundle {F['bundle']} repo --json"
         w(f"- {MEASURED} Repository: `{repo.get('repo')}` (source: {repo_note})")
         w(f"- {MEASURED} **Commits the repository confirms: "
           f"{frac(confirmed_commits, len(commands), 'commit commands')}**, "
@@ -1604,7 +1604,7 @@ def section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, 
           "matched by time, or by time and subject, so they are attributed rather than proven.")
         add_check(F, "Commits the repository confirms", MEASURED,
                   f"{num(confirmed_commits)} of {num(len(commands))} commit commands", repo_cmd,
-                  derivation="a commit command counts as confirmed when clp-bundle repo matched it to a "
+                  derivation="a commit command counts as confirmed when clp bundle repo matched it to a "
                              "commit in the repository by any of `exact`, `time+subject`, `time` or "
                              "`ambiguous`.",
                   trap="most of these are attributed, not proven: only an `exact` match rests on a sha "
@@ -1627,7 +1627,7 @@ def section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, 
         add_check(F, "PRs GitHub confirms", MEASURED, num(confirmed_prs), repo_cmd,
                   derivation="the PRs listed against the session's PR commands, counted once each.",
                   trap="this one asks GitHub, so it needs network and credentials; without them "
-                       "clp-bundle repo reports no PRs, which reads the same as a session that made "
+                       "clp bundle repo reports no PRs, which reads the same as a session that made "
                        "none.")
 
     # -- command output versus the repository
@@ -1704,7 +1704,7 @@ def section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, 
         rows = [g for g in outcomes if (g.get("commit") or [0])[0] or (g.get("pr") or [0])[0]]
         rows.sort(key=lambda g: -((g.get("commit") or [0])[0] + (g.get("pr") or [0])[0]))
         w(f"- {MEASURED} Turns that produced a commit or a PR: {num(len(rows))} of {num(len(outcomes))} "
-          f"groups clp-bundle outcomes reports (source: {outcomes_note}). The busiest:")
+          f"groups clp bundle outcomes reports (source: {outcomes_note}). The busiest:")
         for g in rows[:top]:
             commit, pr = g.get("commit") or [0, 0], g.get("pr") or [0, 0]
             w(f"  - turn {g.get('group')}: {num(g.get('files'))} files, {num(g.get('edits'))} edits, "
@@ -1943,7 +1943,7 @@ def section_human(cat, turns, turns_note, w, F, keys, alerts):
         ask_waits = [x for x in turns["waits"] if x["tool"] == "AskUserQuestion"]
         ask_minutes = sum(x["minutes"] for x in ask_waits)
         F["ask_minutes"] = ask_minutes
-        w(f"- {MEASURED} AskUserQuestion: {num(asks)} calls; the {num(len(ask_waits))} that clp-session "
+        w(f"- {MEASURED} AskUserQuestion: {num(asks)} calls; the {num(len(ask_waits))} that clp session "
           f"turns listed among the longest waits cost {ask_minutes:.1f} minutes "
           f"({pct(ask_minutes, turns['minutes'].get('e2e') or 0)} of e2e). Shorter ones are not listed, "
           "so this is a floor.")
@@ -1963,7 +1963,7 @@ def section_human(cat, turns, turns_note, w, F, keys, alerts):
                   f"{num(len(retries))} of {num(len(turns['turns']))} turns", None,
                   note="the regex runs over the `prompt=` field of each TURN line, and a grep of the "
                        "whole line would also match the tool names and paths on it. Run "
-                       f"`{F.get('turns_cmd') or 'clp-session turns --top 0 <archive>'}` and apply "
+                       f"`{F.get('turns_cmd') or 'clp session turns --top 0 <archive>'}` and apply "
                        "/try again|retry|continue|keep going/i to the prompt text alone.")
     else:
         w(f"- {MEASURED} AskUserQuestion: {num(asks)} calls. Their wait time and the manual-retry count "
@@ -2253,10 +2253,10 @@ def section_axes(w, F):
     model_hours = ((F.get("minutes") or {}).get("model") or 0) / 60.0
     if artifacts is None:
         put("C1", None, "no repository confirmation",
-            "clp-bundle repo was unavailable, so no artifact can be called confirmed")
+            "clp bundle repo was unavailable, so no artifact can be called confirmed")
     elif not model_hours:
         put("C1", None, f"{num(artifacts)} confirmed artifacts, model time unknown",
-            "clp-session turns was unavailable, so there is no model-hour denominator")
+            "clp session turns was unavailable, so there is no model-hour denominator")
     else:
         put("C1", artifacts / model_hours,
             f"{num(artifacts)} repository-confirmed artifacts over {model_hours:.1f} model-hours. "
@@ -2264,9 +2264,9 @@ def section_axes(w, F):
             "never as an absolute",
             because="throughput has to be read against the time the model was actually thinking, not "
                     "against elapsed time that includes waiting on a person",
-            check_note="the artifacts come from `clp-bundle " + bundle +
+            check_note="the artifacts come from `clp bundle " + bundle +
                        " repo --json` and the model-hours from `" +
-                       (turns_cmd or "clp-session turns --top 0 <archive>") +
+                       (turns_cmd or "clp session turns --top 0 <archive>") +
                        "`, whose TOTAL_MIN line carries model=. Each input is one command; the ratio "
                        "is not.")
 
@@ -2275,12 +2275,12 @@ def section_axes(w, F):
         f"{num(F.get('exact_commits'))} of {num(cc)} repository-confirmed commits matched exactly, "
         f"by a sha the command itself printed ({pct(F.get('exact_commits') or 0, cc)})" if cc
         else "no repository-confirmed commits",
-        "clp-bundle repo was unavailable" if cc is None else "the session confirmed no commits",
+        "clp bundle repo was unavailable" if cc is None else "the session confirmed no commits",
         denominator=cc or None,
         because="only an `exact` match rests on a sha the command printed; the rest are attributed by "
                 "time and subject, so this ratio is how much of the delivery claim is proven rather "
                 "than inferred",
-        check=f"clp-bundle {bundle} repo --json | python3 -c \"import json,sys; "
+        check=f"clp bundle {bundle} repo --json | python3 -c \"import json,sys; "
               "c=json.load(sys.stdin)['commits']; "
               "print(sum(1 for x in c if x.get('match')=='exact'), 'exact of', "
               "sum(1 for x in c if (x.get('match') or 'none')!='none'), 'confirmed')\"")
@@ -2308,12 +2308,12 @@ def section_axes(w, F):
         f"human and idle together are {share:.1%} of the {(F.get('minutes') or {}).get('e2e', 0):.1f} "
         f"end-to-end minutes, so {1 - share:.1%} of the session ran without waiting"
         if share is not None else "no time split",
-        "clp-session turns was unavailable, so there is no human/idle split",
+        "clp session turns was unavailable, so there is no human/idle split",
         because="the five time buckets partition end-to-end time without double-counting a second, so "
                 "one minus the waiting share is exactly the part of the session that ran on its own",
         check=turns_cmd,
         check_note="" if turns_cmd else "the turns run was supplied as a file, so the command behind it "
-                                        "is not recorded here; re-run clp-session turns on the main "
+                                        "is not recorded here; re-run clp session turns on the main "
                                         "archive and read its TOTAL_MIN line")
 
     hurt = F.get("units_hurt")
@@ -2335,7 +2335,7 @@ def section_axes(w, F):
     put("D1", per_artifact,
         f"{num(F.get('total_input'))} input tokens over {num(artifacts)} repository-confirmed "
         "artifacts" if per_artifact else "no confirmed artifacts",
-        "clp-bundle repo was unavailable, so there is no confirmed-artifact denominator",
+        "clp bundle repo was unavailable, so there is no confirmed-artifact denominator",
         denominator=artifacts or None,
         because="the bill is in input tokens and the only output anyone can check is what the repository "
                 "confirms, so this is what one confirmed artifact actually cost",
@@ -2371,12 +2371,12 @@ def section_axes(w, F):
         "the catalog records no model for the responses, so neither the token share by model nor "
         "the stall rate to weight it by can be computed")
 
-    # Either half may be missing - the turn share needs clp-session turns and
+    # Either half may be missing - the turn share needs clp session turns and
     # the run share needs workflow runs - so each is described on its own and the
     # axis takes whichever halves exist.
     total_in = F.get("total_input") or 0
     parts, shares = [], []
-    for what, value, why in (("turn", F.get("largest_turn_input"), "clp-session turns was unavailable"),
+    for what, value, why in (("turn", F.get("largest_turn_input"), "clp session turns was unavailable"),
                              ("run", F.get("largest_run_input"), "the session ran no workflows")):
         if value and total_in:
             shares.append(value / total_in)
@@ -2390,7 +2390,7 @@ def section_axes(w, F):
                 "spread evenly: it can be cut by fixing one thing, and it can also be an artefact of one "
                 "deliberate batch, which is why this axis is gated on the declared workload shape",
         check_note="the largest turn comes from `" +
-                   (turns_cmd or "clp-session turns --top 0 <archive>") +
+                   (turns_cmd or "clp session turns --top 0 <archive>") +
                    "` (the largest `tokens_in=` on a TURN line), the largest run from the `Largest "
                    "workflow run by input tokens` check in this section, and the denominator from the "
                    "`Total input tokens` check beside it. Each input is one command; the share is not.")
@@ -2468,7 +2468,7 @@ def section_verification(w, F, axis_rows):
     if not checks:
         return
     w("## 10. Verification - the one command behind each figure")
-    w(wrap("Copy a command, run it, and compare. The commands name this plugin's own wrappers with no "
+    w(wrap("Copy a command, run it, and compare. The commands name this plugin's own `clp` with no "
            "path, so nothing here records one machine's install layout: run them with the plugin's "
            "`bin/` on $PATH. " + CATALOG_NOTE))
     w("")

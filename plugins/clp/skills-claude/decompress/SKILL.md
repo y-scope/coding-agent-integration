@@ -1,7 +1,7 @@
 ---
 name: decompress
 description: Decompress a local CLP archive directory into a selected output directory.
-allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress:*)"]
+allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp:*)"]
 ---
 
 # Decompress
@@ -9,7 +9,7 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress:*)"]
 Use only:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress" ARCHIVES_DIR OUTPUT_DIR
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" decompress ARCHIVES_DIR OUTPUT_DIR
 ```
 
 Rules:
@@ -25,13 +25,13 @@ clpp (clp+ / `--experimental`) archives are decompressed the same way: the wrapp
 Examples:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress" \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" decompress \
   /tmp/session-archive \
   /tmp/session-archive-decompressed
 ```
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-decompress" \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" decompress \
   --ordered \
   /tmp/session-archive \
   /tmp/session-archive-decompressed

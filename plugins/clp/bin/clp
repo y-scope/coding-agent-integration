@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""
+clp - one command for analysing logs with CLP, and for every step of that flow.
+
+`clp <TARGET>` is the analysis router, and every other step is a subcommand:
+`clp search`, `clp session facts`, `clp bundle <dir> sql`, and the rest. The
+table, the implementations' names and the rule that tells a TARGET from a
+subcommand all live in lib/commands.py; each implementation lives in lib/ next
+to it. bin/clp-s is not a command here -- it is the engine binary the wrappers
+resolve.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from commands import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,4 +1,4 @@
-"""clp-bundle against a tiny hand-made catalog and a stub search wrapper."""
+"""clp bundle against a tiny hand-made catalog and a stub search wrapper."""
 
 import json
 import os
@@ -87,7 +87,7 @@ class BundleCommands(unittest.TestCase):
         db.close()
 
     def run_cli(self, *args):
-        p = subprocess.run([os.path.join(BIN, "clp-bundle"), self.dir, "--search-wrapper", self.wrapper, *args],
+        p = subprocess.run([os.path.join(BIN, "clp"), "bundle", self.dir, "--search-wrapper", self.wrapper, *args],
                            capture_output=True, text=True)
         return p.returncode, p.stdout, p.stderr
 

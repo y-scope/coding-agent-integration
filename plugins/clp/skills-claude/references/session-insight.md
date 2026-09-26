@@ -2,7 +2,7 @@
 
 Read this at step 2 of the `analyze-logs` skill's specialised route. It holds the seven categories, the wording of the three questions, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
 
-Every figure quoted anywhere in this pass comes from the facts file that `clp-session facts` writes. Nothing here recomputes a number.
+Every figure quoted anywhere in this pass comes from the facts file that `clp session facts` writes. Nothing here recomputes a number.
 
 ## The seven categories
 
@@ -77,10 +77,11 @@ account for; error or interrupt shapes that do not fit the categories above;
 tool or harness behaviours that recur but are not counted; anything in the
 catalog's launch_error or attrs fields that has no home in the seven.
 
-Useful commands (write paths in full):
-  clp-bundle BUNDLE sql "SELECT ..."   (schema is in session-forensics.md)
-  clp-s-search-kql --unique attachment.type ARCHIVE '*'
-  clp-s-search-kql --unique subtype ARCHIVE '*'
+Useful commands (write every path in full, `clp`'s own included, since this
+agent does not inherit the plugin root):
+  clp bundle BUNDLE sql "SELECT ..."   (schema is in session-forensics.md)
+  clp search --unique attachment.type ARCHIVE '*'
+  clp search --unique subtype ARCHIVE '*'
 
 Return at most THREE proposed extra categories. For each: a name, one sentence
 on what it covers, the count of records or nodes behind it, and one example id
@@ -183,7 +184,7 @@ how many there were.>
 
 ## Scoring
 
-**The script measures; you score.** `clp-session facts --axes` computes each axis's raw value and the components behind it, and assigns nothing. You map each value to 0–10 using a scale file, because a customer's thresholds are their own: what counts as an acceptable stall rate or cache hit rate is a policy decision, not a measurement.
+**The script measures; you score.** `clp session facts --axes` computes each axis's raw value and the components behind it, and assigns nothing. You map each value to 0–10 using a scale file, because a customer's thresholds are their own: what counts as an acceptable stall rate or cache hit rate is a policy decision, not a measurement.
 
 ### Find the scale
 
@@ -194,12 +195,12 @@ Load the first of these that exists, and say in the report which one you used an
 3. `.claude/clp-scoring-scale.json`
 4. `${CLAUDE_PLUGIN_ROOT}/scoring-scale.json` — the shipped default
 
-Validate it before trusting it: `clp-session facts --axes --check-scale --scale FILE` prints `SCALE_OK`, or one `SCALE_PROBLEM=` line per defect (a missing axis, a malformed or non-exhaustive ladder). A customer scale that fails the check is reported to the user as-is; do not fix it silently and do not fall back to the default without saying so.
+Validate it before trusting it: `clp session facts --axes --check-scale --scale FILE` prints `SCALE_OK`, or one `SCALE_PROBLEM=` line per defect (a missing axis, a malformed or non-exhaustive ladder). A customer scale that fails the check is reported to the user as-is; do not fix it silently and do not fall back to the default without saying so.
 
 ### Apply it — with the tool, not by hand
 
 ```bash
-clp-session score --bundle BUNDLE --format table [--scale FILE] [--cohort task_type=… --cohort repo=…]
+clp session score --bundle BUNDLE --format table [--scale FILE] [--cohort task_type=… --cohort repo=…]
 ```
 
 It measures, applies each ladder, computes the group means, writes `/tmp/clp-session-scores.json`, and prints a table. **Do not map a value to a score or average a group yourself** — a ladder lookup and a mean are exactly the arithmetic that goes wrong, and the tool records which rung matched so a reader can check it.
@@ -220,7 +221,7 @@ Some axes are only meaningful under one intent, and the scale gates them on a co
 
 **Ask for it when you score.** Scoring is already opt-in, so one more question on that path is cheap, and guessing the intent from the log is not reliable. If the user's earlier context already makes it clear, use that instead of asking again. If they decline or cannot say, leave it undeclared: an unscored axis with a stated reason is right, and inventing a mode to fill the gap is not.
 
-The raw value is measured and reported either way — `clp-session facts` never applies the gate — so the human-and-idle share stays visible in the Time category even when the axis is not scored. Note also what the gate does **not** do: it accounts for intent, not for quality. The logs cannot tell you whether unattended work was any good, only whether it was delivered.
+The raw value is measured and reported either way — `clp session facts` never applies the gate — so the human-and-idle share stays visible in the Time category even when the axis is not scored. Note also what the gate does **not** do: it accounts for intent, not for quality. The logs cannot tell you whether unattended work was any good, only whether it was delivered.
 
 | Group | Axes | Owner |
 |---|---|---|
@@ -233,7 +234,7 @@ The raw value is measured and reported either way — `clp-session facts` never 
 
 - **Show the raw value next to every score.** The value is the measurement and the score is an interpretation of it against this scale; a reader must be able to disagree with the second without doubting the first.
 - **Say what each score's threshold rests on.** Every axis in the scale carries a `basis` — `definitional`, `mechanism`, `observed` or `judgement` — and a `rationale`. A low score on a `definitional` axis is strong evidence; a low score on a `judgement` axis is a starting threshold someone chose, and a reader is entitled to push back on it. Quote the `rationale` for any axis you build an argument on, and report the `basis_summary` so it is clear how much of the scorecard rests on judgement. Never present a judgement-based score as though it were measured.
-- **Point at calibration when judgement dominates.** If most scored axes are `judgement`, say so and name the fix: `clp-bundle-review --json` over the customer's own sessions gives the percentiles to replace those rungs with, within a cohort. A scorecard built mostly on defaults is a baseline, not a verdict.
+- **Point at calibration when judgement dominates.** If most scored axes are `judgement`, say so and name the fix: `clp bundle-review --json` over the customer's own sessions gives the percentiles to replace those rungs with, within a cohort. A scorecard built mostly on defaults is a baseline, not a verdict.
 - **Report the four group means separately. Never a single composite.** The groups have different owners; averaging them hides which one is at fault. A session whose platform scores low and whose outcome scores higher delivered *despite* its platform, and one number would say the opposite.
 - **`C1` is cohort-relative.** Throughput per model-hour only compares within sessions of similar task shape. Mark it every time.
 - **`A3` and `D3` are the same measurement.** Cache hit rate is both a platform fault and the largest cost lever; the duplication is deliberate. Say so rather than letting it look like an error.
@@ -242,7 +243,7 @@ The raw value is measured and reported either way — `clp-session facts` never 
 
 ## Ask where to save the report
 
-Right after spawning the writer (step 6). One AskUserQuestion, header `Save`, options built from `clp-report save --list-formats`:
+Right after spawning the writer (step 6). One AskUserQuestion, header `Save`, options built from `clp report save --list-formats`:
 
 > **Where should the report go?**
 >

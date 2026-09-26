@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-clp-s-schema-tree - list every field of a clp-s archive from its merged schema
+clp schema - list every field of a clp-s archive from its merged schema
 tree: the KQL path, the type, and how many records carry it.
 
 Usage:
-  clp-s-schema-tree [options] ARCHIVES_DIR
+  clp schema [options] ARCHIVES_DIR
 
 Options:
   --log-shapes-file F   A raw stats.log_shapes dump of the same archive. When its
@@ -61,8 +61,8 @@ Options:
   --max-discriminator-leaves N
                         Leaves a disjunction discriminator may OR together
                         (default: 12; existence method only).
-  --search-wrapper P    Search wrapper (default: clp-s-search-kql next to this
-                        script).
+  --search-wrapper P    Search wrapper: one executable (default: `clp
+                        search`).
 
 Output, one line each:
   TREE_ARCHIVES=N
@@ -236,8 +236,9 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
+import commands as C  # noqa: E402
 from schema_tree import (  # noqa: E402
     CONTAINER_TYPES,
     DEFAULT_MAX_CHILDREN,
@@ -259,7 +260,7 @@ from schema_tree import (  # noqa: E402
 
 def read_trees(wrapper, archives_dir):
     proc = subprocess.run(
-        [wrapper, archives_dir, "stats.schema_tree"],
+        [*wrapper, archives_dir, "stats.schema_tree"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     trees = load_trees(proc.stdout.splitlines())
@@ -376,7 +377,7 @@ def record_counter(wrapper, archives_dir):
     no-row-at-all this used to get."""
     def count_records(kql):
         proc = subprocess.run(
-            [wrapper, "--count", archives_dir, kql],
+            [*wrapper, "--count", archives_dir, kql],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         if proc.returncode != 0:
@@ -398,7 +399,7 @@ def field_values(wrapper, archives_dir, field):
     """A field's distinct values, in the archive's own types, deduplicated
     across archives. None when the query fails."""
     proc = subprocess.run(
-        [wrapper, "--unique", field, archives_dir, "*"],
+        [*wrapper, "--unique", field, archives_dir, "*"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     if proc.returncode != 0:
@@ -630,11 +631,11 @@ def main():
                         default=DEFAULT_MAX_PARTITION_VALUES)
     parser.add_argument("--min-partition-coverage", type=float,
                         default=DEFAULT_MIN_PARTITION_COVERAGE)
-    parser.add_argument(
-        "--search-wrapper",
-        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"),
-    )
+    parser.add_argument("--search-wrapper")
     args = parser.parse_args()
+    # One path, not an argv: a caller replacing the search with its own program gives one
+    # executable. The default is this plugin's own `clp search`, which is two words.
+    args.search_wrapper = [args.search_wrapper] if args.search_wrapper else C.search_argv()
     drift = args.drift or bool(args.drift_file)
     counts_mode = args.field_counts or bool(args.field_counts_file)
     families = args.record_families or bool(args.record_families_file)

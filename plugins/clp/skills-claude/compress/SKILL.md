@@ -1,14 +1,14 @@
 ---
 name: compress
 description: Compress one selected session JSONL file into a searchable CLP archive directory (stable, non-experimental clp-s). Use clpp-compress for clp+/clpp/clp-s --experimental compression with a parsing spec.
-allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions:*)"]
+allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp:*)"]
 ---
 
 # Compress
 
 Compress one selected session JSONL file into a searchable CLP archive using the **stable** (non-experimental) clp-s path.
 
-Use only the plugin wrappers. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
+Use only the plugin's `clp` command. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
 
 **When to use this skill:** plain (non-experimental) compression. If the user mentions clp+, clpp, or clp-s experimental — or wants a parsing spec, log shapes, or decomposed queries — use the `clpp-compress` skill instead.
 
@@ -25,11 +25,11 @@ That covers: list sessions → choose an `IDX` → compress → report stats, th
 ## Quick start
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-list-sessions"
-"${CLAUDE_PLUGIN_ROOT}/bin/clp-s-compress-session" \
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" list-sessions
+"${CLAUDE_PLUGIN_ROOT}/bin/clp" compress session \
   --selection-file /tmp/clp-s-session-selection-...tsv \
   --session-index <IDX> \
   --timestamp-key timestamp
 ```
 
-After compression, report: raw input bytes, archive bytes, compression ratio, file size reduction, time range (the earliest and latest timestamp across every record, also stored as `timeRange` in the metadata), archives dir, selected session, archive metadata. Use the printed top-level `Archives dir` for search/decompress — wrappers resolve the inner `clp-s` archive directory automatically.
+After compression, report: raw input bytes, archive bytes, compression ratio, file size reduction, time range (the earliest and latest timestamp across every record, also stored as `timeRange` in the metadata), archives dir, selected session, archive metadata. Use the printed top-level `Archives dir` for search/decompress — `clp` resolves the inner `clp-s` archive directory automatically.

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-clp-bundle-review - review a directory of session bundles: what went wrong, where, how often.
+clp bundle-review - review a directory of session bundles: what went wrong, where, how often.
 
 Usage:
-  clp-bundle-review DIR [--build] [--claude-home DIR] [--skip ID]... [--clp-s PATH]
+  clp bundle-review DIR [--build] [--claude-home DIR] [--skip ID]... [--clp-s PATH]
                         [--semantic-endpoint URL] [--trend week|day] [--top N] [--json]
 
-DIR holds one bundle per session (clp-bundle BUNDLE build), named by session id. With --build,
+DIR holds one bundle per session (clp bundle BUNDLE build), named by session id. With --build,
 every Claude Code session under --claude-home -- the directory that HOLDS projects/, not projects/
 itself (default ~/.claude) -- gets a current bundle in DIR
 first: a missing one is built, one whose main log has grown is built again, one whose catalog has
@@ -27,7 +27,7 @@ Output, one line each:
 
 Zero-tolerance signals are findings whenever they occur; rate signals are compared with the median
 and 90th percentile of the sessions active enough to rate (at least 5), so "above" means unusual for
-this set of sessions, not for all users. Example ids open with clp-bundle DIR/<session> show|context.
+this set of sessions, not for all users. Example ids open with clp bundle DIR/<session> show|context.
 
 Trends (--trend week|day): the rate signals that the catalog has at event level (tool errors,
 StructuredOutput errors, stalled attempts, failed agents, output tokens per prompt, context per call)
@@ -49,8 +49,9 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
+import commands as C  # noqa: E402
 import bundle as B  # noqa: E402
 import bundle_review as R  # noqa: E402
 import session_layout_claude as L  # noqa: E402
@@ -67,9 +68,11 @@ def main():
     parser.add_argument("--top", type=int, default=20)
     parser.add_argument("--trend", choices=("week", "day"))
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--search-wrapper",
-                        default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"))
+    parser.add_argument("--search-wrapper")
     args = parser.parse_args()
+    # One path, not an argv: a caller replacing the search with its own program gives one
+    # executable. The default is this plugin's own `clp search`, which is two words.
+    args.search_wrapper = [args.search_wrapper] if args.search_wrapper else C.search_argv()
     try:
         build = None
         if args.build:

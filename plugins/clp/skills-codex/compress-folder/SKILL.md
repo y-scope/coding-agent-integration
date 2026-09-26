@@ -13,7 +13,7 @@ Use only the plugin wrappers. Standard plugin root:
 
 If installed elsewhere, resolve the same `bin/` wrappers from that plugin root. Do not call bare `clp-s` or expose arbitrary CLP commands/options.
 
-Compression is two steps with a decision between them: `clp-detect-logs` reads the first 128 KiB of each file and shows you what is there, you decide from that report, and `clp-s-compress-folder` does the work with exactly the flags you chose. Don't read the log files yourself; the report has what you need, already cut to size.
+Compression is two steps with a decision between them: `clp detect` reads the first 128 KiB of each file and shows you what is there, you decide from that report, and `clp compress folder` does the work with exactly the flags you chose. Don't read the log files yourself; the report has what you need, already cut to size.
 
 ## Rules
 
@@ -32,7 +32,7 @@ Compression is two steps with a decision between them: `clp-detect-logs` reads t
 2. **Detect.** Run the detector on the same paths (read-only; it reads the first 128 KiB of each file, so it takes well under a second even on many-GB logs):
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-detect-logs /path/to/logs /path/to/other.log
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp detect /path/to/logs /path/to/other.log
    ```
 
    It first says whether each path is a file or a folder (and how many files a folder matched). Per file it then prints one of:
@@ -54,8 +54,8 @@ Compression is two steps with a decision between them: `clp-detect-logs` reads t
 4. **Compress** with the flags you chose:
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-folder --path /path/to/logs --timestamp-key ts
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-folder --path /path/to/vllm_worker_3.log --structurize
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress folder --path /path/to/logs --timestamp-key ts
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress folder --path /path/to/vllm_worker_3.log --structurize
    ```
 
    `--path` takes a file or a folder and can be repeated; the files found in all of them go into one archive. With `--structurize`, each converted file prints `[structurize] <file>: N records`, a JSON file prints `already JSON, compressed as it is`, and a file that can't be converted is skipped with a warning that gives the reason.
@@ -63,7 +63,7 @@ Compression is two steps with a decision between them: `clp-detect-logs` reads t
    A compression of a multi-GB log takes a minute or more. Run the wrapper in the foreground of its command, with no trailing `&` and no `pgrep`/`ps` wait loop (`pgrep -f` can match the checking command itself and never end). The wrapper prints a `[compress] ...` heartbeat every 30 seconds (`--heartbeat SECONDS`, 0 to silence) with elapsed time, input read, an estimated time left and the archive size so far; relay one line to the user each time. For a state check at any moment:
 
    ```bash
-   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-compress-status <archives-dir>
+   ~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress status <archives-dir>
    ```
 
    It prints `STATE=` (`running`, `done`, `failed`, or `died` when the process vanished without finishing), `PROGRESS_PCT=` and the byte counts, and exits 0 for done, 3 for running, 1 for failed or died.
@@ -103,7 +103,7 @@ def parse_line(line):
 - Save it outside the log folder (e.g. under `/tmp`), then test it. The detector runs it on every whole line of the 128 KiB it reads from each text file and shows the records it returns, still without writing anything:
 
   ```bash
-  ~/.codex/marketplaces/yscope/plugins/clp/bin/clp-detect-logs --parser /tmp/myapp_parser.py /path/to/app.log
+  ~/.codex/marketplaces/yscope/plugins/clp/bin/clp detect --parser /tmp/myapp_parser.py /path/to/app.log
   ```
 
   Fix the parser until `parser:` shows the lines you expect starting a record (continuation lines, such as stack traces, are the rest) and `timestamp:` shows an ISO 8601 or epoch value, then compress with the `SUGGEST` line, which adds `--structurize --parser FILE`.
@@ -113,19 +113,19 @@ def parse_line(line):
 Show archive root:
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-folder --show-archives-root
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress folder --show-archives-root
 ```
 
 Set persistent archive root:
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-folder --set-archives-root ~/clp-archives
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress folder --set-archives-root ~/clp-archives
 ```
 
 Dry run (read-only: prints the plan, converts and compresses nothing):
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-folder \
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress folder \
   --path /path/to/logs \
   --dry-run
 ```
@@ -133,7 +133,7 @@ Dry run (read-only: prints the plan, converts and compresses nothing):
 Compress only top-level `.log` files with a timestamp field:
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-folder \
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress folder \
   --path /var/log/myapp \
   --extensions log \
   --no-recursive \
@@ -143,7 +143,7 @@ Compress only top-level `.log` files with a timestamp field:
 Compress vLLM text logs:
 
 ```bash
-~/.codex/marketplaces/yscope/plugins/clp/bin/clp-s-compress-folder \
+~/.codex/marketplaces/yscope/plugins/clp/bin/clp compress folder \
   --path /var/log/vllm \
   --extensions log,txt \
   --structurize
