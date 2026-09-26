@@ -24,7 +24,10 @@ server URL and exports it as CLP_SEMANTIC_ENDPOINT. Three subcommands:
 Truncation and de-duplication concern only what is POSTed for embedding. `members`
 and `representative` are always FULL log shape strings; the character limit is
 also the cache fingerprint (truncate_chars is shared with log-shape-cache through
-lib/log_shapes.py).
+lib/log_shapes.py), and so is the digest of the applied field rules, printed as
+RULES_DIGEST and computed by the same shared field_rules_digest -- a ruled
+template takes its category from the rule, so the rules are part of the
+classification and part of its key.
 
 Embeddings come from an already-running server; this tool never starts one and
 never downloads a model. Point it at a server with --semantic-endpoint,
@@ -49,7 +52,8 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
-from log_shapes import prefix_hash, template_hash, truncate_chars  # noqa: E402
+from log_shapes import (  # noqa: E402
+    field_rules_digest, parse_field_rules, prefix_hash, template_hash, truncate_chars)
 
 DEFAULT_THRESHOLD = os.environ.get("CLP_LOG_CLUSTER_THRESHOLD", "0.80")
 
@@ -435,26 +439,15 @@ def load_template_fields(path):
 
 def load_field_rules(path):
     """[{"field", "category"}] from a {"field_rules": [...]} JSON file; exit 2
-    naming each malformed rule."""
-    doc = load_json_file(path, "--field-rules")
-    rules = doc.get("field_rules") if isinstance(doc, dict) else None
-    if not isinstance(rules, list):
-        fail(2, f"--field-rules file has no \"field_rules\" list: {path}")
-    problems = []
-    seen = set()
-    for n, rule in enumerate(rules, 1):
-        field = rule.get("field") if isinstance(rule, dict) else None
-        category = rule.get("category") if isinstance(rule, dict) else None
-        if not isinstance(field, str) or not field:
-            problems.append(f"field rule #{n} has no \"field\"")
-        elif field in seen:
-            problems.append(f"field {field!r} has more than one rule")
-        elif not isinstance(category, str) or not category.strip():
-            problems.append(f"field rule #{n} ({field}) has no \"category\"")
-        seen.add(field)
+    naming each malformed rule.
+
+    The parse lives in lib/log_shapes.py, which is also where log-shape-cache
+    reads rules and digests them, so the two cannot read the same file
+    differently -- the rules are part of the cache key (field_rules_digest)."""
+    rules, problems = parse_field_rules(load_json_file(path, "--field-rules"))
     if problems:
-        fail(2, *problems)
-    return [{"field": r["field"], "category": r["category"].strip()} for r in rules]
+        fail(2, *(f"{path}: {problem}" for problem in problems))
+    return rules
 
 
 def ruled_category(fields, rule_of, share):
@@ -693,6 +686,10 @@ def cmd_cluster(args):
         "embedded_count": len(unique_texts),
         "max_chars": args.max_chars,
         "field_rules": field_rules,
+        # Part of the cache fingerprint, alongside max_chars: the rules decide
+        # the ruled templates' categories, so the entry is only reusable for a
+        # run whose rules digest to the same value (lib/log_shapes.py).
+        "rules_digest": field_rules_digest(field_rules),
         "field_ruled": field_ruled,
         "clusters": [
             {"id": c["id"], "representative": c["representative"],
@@ -710,6 +707,7 @@ def cmd_cluster(args):
         print(f"FIELD_RULED={len(field_ruled)}")
     print(f"EMBEDDED={len(unique_texts)}")
     print(f"MAX_CHARS={args.max_chars}")
+    print(f"RULES_DIGEST={result['rules_digest']}")
     print(f"MODEL={MODEL_NAME}")
     print(f"ENDPOINT={url}")
     print(f"THRESHOLD={threshold}")
@@ -833,6 +831,10 @@ def cmd_expand(args):
     if field_ruled:
         print(f"FIELD_RULED={len(field_ruled)}")
     print(f"CATEGORIES={len({t['category'] for t in templates})}")
+    # The digest of the rules this classification was built under. `put` stores
+    # it with the entry and `diff` compares it, so the key it is stored under
+    # must be one computed with these rules (`log-shape-cache key --field-rules`).
+    print(f"RULES_DIGEST={field_rules_digest(field_rules)}")
     print(f"OUTPUT={args.output}")
 
 

@@ -62,7 +62,7 @@ From its `KEY=VALUE` output record:
    - `RECORD_FAMILY_COUNT=` / `RECORD_FAMILY_RESIDUAL=` / `RECORD_FAMILIES_FILE=` / `RECORD_FAMILY_METHOD=` → the records split into kinds, each with an exact count and a KQL predicate. **This is a partition**: the families plus the residual account for every record, so these shares may be read as shares of the whole. `METHOD=value field=<f> coverage=<pct>` split on that field's values and is exact; `METHOD=existence` found no field universal enough and split on field presence, which is approximate — say which you got whenever the residual is big enough to matter. The residual is records the partition does not name; report it rather than rounding it away.
    - `FIELD_COUNT_GROUPS=` / `FIELD_COUNTS_FILE=` → per-field record counts, where fields sharing a count are carried by the same records. **These overlap and must never be summed**: on one real archive the 43 lines total 725%. They tell you which fields travel together, nothing about shares of the whole. Use `RECORD_FAMILY_*` for that.
    - `TYPE_DRIFT_COUNT=` / `TYPE_DRIFT_FILE=` → field paths holding more than one type across records, most records first, each type named and counted. Treat drift on a field you are about to query as a hazard: a filter or projection written for one type silently misses the records carrying the other. On one archive `toolUseResult` is a `ClpString` on a failed tool call and an `Object` on a success, 116 against 4,525, so a query for either shape quietly answers about a subset. Mention drift to the user only where it changes a query or a finding.
-   - `CACHE_MODE=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` / `MAX_CHARS=` → step 4. Pass `MAX_CHARS` through to `log-shape-cluster` and `log-shape-cache` so their fingerprints match.
+   - `CACHE_MODE=` / `CACHE_REASON=` / `APP_KEY=` / `BASE_KEY=` / `TO_CLASSIFY=` / `MAX_CHARS=` → step 4. Pass `MAX_CHARS` through to `log-shape-cluster` and `log-shape-cache` so their fingerprints match. `CACHE_REASON` says why the mode is what it is — `first-run`, `templates-grown`, `up-to-date`, or `rules-changed`. **Never report `rules-changed` as a first run**: the app *is* classified, but under different field rules, so its ruled templates would come back with categories no current rule would give them. Tell the user "the field rules changed, so this is being classified again", which is a different fact from "first time seeing this app" and explains a cost they would otherwise find puzzling.
 
 Close phase 2 in one or two lines: the template count and what it means ("16.5M records reduce to 11,558 message templates"), the record kinds ("the records are 14 kinds; the two biggest are attachments at 34.9% and assistant turns at 26.2%"), and the cache outcome in plain words (reused from an earlier run, N new templates to classify, or a first run for this app). Mention the schema only when the choice was not obvious, frequencies only when they are unavailable, the residual only when it is large enough to matter, and drift only where it will change a query; field names are for your queries, not for the user.
 
@@ -135,7 +135,14 @@ Then validate, expand ids to every member template (by hash, exact by constructi
    # and re-run; do NOT store in that case. On GROWTH add
    # --categories-from /tmp/log-shape-base-classification.json, since the new
    # entries may use the base's categories:
-   "$BIN"/kql-build check-plan /tmp/log-shape-class.json || exit 1
+   # Always pass --drift-file: it catches a filter that will silently answer
+   # about only part of its field, because clp-s stores a node per type and a
+   # scalar filter reaches a path's scalar types but never its Object or
+   # StructuredArray nodes. On one archive `toolUseResult:*` matches 116
+   # records, not the 4,641 that carry the path. An entry fails when the share
+   # it can reach falls below 0.95.
+   "$BIN"/kql-build check-plan /tmp/log-shape-class.json \
+     --drift-file "$TYPE_DRIFT_FILE" || exit 1
    # Exits 2 and writes NOTHING on missing/unknown/duplicate ids — fix the
    # assignments and re-run; do NOT store in that case. On GROWTH add
    # --categories-from /tmp/log-shape-base-classification.json, since the
@@ -151,7 +158,16 @@ Then validate, expand ids to every member template (by hash, exact by constructi
      "$BIN"/log-shape-cache merge < /tmp/log-shape-expanded.json > /tmp/log-shape-classification.json
    fi
    # Store it for the next run (milliseconds; step 7 reads the file above):
-   "$BIN"/log-shape-cache put --key "$APP_KEY" --max-chars "$MAX_CHARS" < /tmp/log-shape-classification.json
+   # Key it with the field rules, NOT with the bootstrap's APP_KEY. A ruled
+   # template takes its category from its rule, so the rules are part of the
+   # classification and belong in the key; APP_KEY was computed before the rules
+   # existed, since they come from `log-shape-cluster fields`, which runs later.
+   # Omit both --field-rules when this run applied none: "no rules" is its own
+   # key and must not be conflated with a rule set.
+   KEY=$("$BIN"/log-shape-cache key --log-shapes-file "$LOG_SHAPES_FILE" \
+     --max-chars "$MAX_CHARS" --field-rules /tmp/log-shape-field-rules.json)
+   "$BIN"/log-shape-cache put --key "$KEY" --max-chars "$MAX_CHARS" \
+     --field-rules /tmp/log-shape-field-rules.json < /tmp/log-shape-classification.json
    ```
 
 After storing, close phase 3 in one line: how many categories you found and that the classification is cached for later runs. The category table waits for the summary in step 7.

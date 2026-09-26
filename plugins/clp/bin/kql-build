@@ -16,6 +16,8 @@ Usage:
         -> severity:"WARNING" AND message:"*SQL txn*"
 
   kql-build check-plan FILE [--categories-from CLASSIFICATION_FILE]
+                            [--drift-file DRIFT_NDJSON]
+                            [--drift-fail-below SHARE]
       Validate every query_plan entry in FILE: a classification JSON object
       with a "query_plan" array, a bare JSON array of entries, or NDJSON with
       one entry per line. Each entry needs a valid "match" filter, a known
@@ -31,8 +33,52 @@ Usage:
         [i] ERROR <label>: <why>  cannot run; <why> says what to fix
         TAXONOMY ERROR <why>      a taxonomy entry lacks its ranking
 
-Exit codes: 0 every entry OK, 1 any entry ERROR (or an empty plan), 2 usage or
-unreadable input.
+      --drift-file also checks every entry's filter fields against the archive's
+      type drift, the NDJSON that `clp-s-schema-tree --drift --drift-file`
+      writes (the insights bootstrap prints its path as TYPE_DRIFT_FILE=).
+      clp-s stores one schema-tree node per type, so a field can hold several
+      types across records, and a filter reaches the union of a path's scalar
+      types but never an Object or an array (lib/plan_drift records the counting
+      queries that establish it). A filter at `toolUseResult` therefore answers
+      about the 116 records holding a string and says nothing about the 4,525
+      holding an object -- silently -- while a filter on `toolUseResult.stderr`
+      answers about the 4,525 and not the 116. Each field is checked against its
+      own drifting path and its drifting ancestors, in both directions:
+        DRIFT_RISK entry=<i> path=<kql_path> at=path|descendant
+          types=ClpString:116,Object:4525 dominant=ClpString:116
+          addressable=2.5%
+                                  at= says which way it was measured, since one
+                                  path has a different reachable share per
+                                  direction: at=path a filter on that path (it
+                                  reaches the scalar types), at=descendant a
+                                  filter below it (it reaches the records where
+                                  the path is structural). addressable is that
+                                  share, dominant its largest reachable type
+        DRIFT_DECLARED entry=<i> ... declared=ClpString addressable=2.5%
+                                  the filter leaf carries "types": ["ClpString"]
+                                  and is for that shape on purpose; the counts
+                                  still show what it excludes
+        DRIFT_DECLARED_UNVERIFIED entry=<i> path=<field> declared=<types>
+          reason=not-in-drift-set
+                                  a declaration on a path that does not drift;
+                                  the file lists only drifting paths, so a typo
+                                  here can be shown but not rejected
+      A path a filter reaches whole is not reported at all: ClpString/VarString
+      is clp-s splitting one string column, Integer/FormattedFloat one number
+      column, and a null answers `field:*` like any other scalar. A DRIFT_RISK
+      warns, and fails when `addressable` is below --drift-fail-below (default
+      0.95), i.e. when the entry would answer about a minority or a bare
+      majority of the path's records. There is no flag to silence it: an entry
+      that legitimately targets one shape declares "types" instead, and a
+      declaration the data cannot support -- a type the path does not hold, or
+      only types a filter at it cannot reach -- is an entry ERROR.
+      Closes with DRIFT_CHECKED=<entries> DRIFT_RISK_COUNT=<n>
+      DRIFT_DECLARED_COUNT=<n> DRIFT_FAIL_COUNT=<n> (the two counts add up to
+      the drift lines printed), or, with no --drift-file,
+      DRIFT_CHECK=SKIPPED reason=no-drift-file so the gap is not read as a pass.
+
+Exit codes: 0 every entry OK, 1 any entry ERROR (or an empty plan, or a
+DRIFT_RISK below --drift-fail-below), 2 usage or unreadable input.
 """
 
 import json
@@ -41,7 +87,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 import kql_build  # noqa: E402
+import plan_drift  # noqa: E402
 from classification import category_names, check_ranked_entry, taxonomy_errors  # noqa: E402
+
+VALUE_OPTIONS = ("--categories-from", "--drift-file", "--drift-fail-below")
 
 
 def usage(stream):
@@ -68,6 +117,38 @@ def load_plan(path):
     raise ValueError("expected a JSON object with 'query_plan', a JSON array, or NDJSON")
 
 
+def parse_check_args(argv):
+    """(plan FILE, --categories-from, --drift-file, --drift-fail-below) for
+    check-plan; raise ValueError on anything else. Each VALUE_OPTIONS flag takes
+    the next argument, in any order, and FILE is the one operand."""
+    path, opts, i = None, {}, 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in VALUE_OPTIONS:
+            if i + 1 >= len(argv):
+                raise ValueError(f"{arg} needs a value")
+            opts[arg] = argv[i + 1]
+            i += 2
+            continue
+        if arg.startswith("-"):
+            raise ValueError(f"unknown option {arg}")
+        if path is not None:
+            raise ValueError("expected one plan FILE")
+        path, i = arg, i + 1
+    if path is None:
+        raise ValueError("expected a plan FILE")
+    raw = opts.get("--drift-fail-below")
+    if raw is not None and "--drift-file" not in opts:
+        raise ValueError("--drift-fail-below needs --drift-file")
+    try:
+        fail_below = plan_drift.DEFAULT_FAIL_BELOW if raw is None else float(raw)
+    except ValueError:
+        raise ValueError(f"--drift-fail-below must be a number, got {raw!r}") from None
+    if not 0 < fail_below <= 1:
+        raise ValueError(f"--drift-fail-below must be in (0, 1], got {fail_below}")
+    return path, opts.get("--categories-from"), opts.get("--drift-file"), fail_below
+
+
 def cmd_render(argv):
     if len(argv) > 1:
         usage(sys.stderr)
@@ -87,21 +168,28 @@ def cmd_render(argv):
 
 
 def cmd_check_plan(argv):
-    extra = []
-    if len(argv) == 3 and argv[1] == "--categories-from":
-        extra = [argv[2]]
-    elif len(argv) != 1:
+    try:
+        plan_path, categories_from, drift_path, fail_below = parse_check_args(argv)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         usage(sys.stderr)
         return 2
     try:
-        plan, taxonomy = load_plan(argv[0])
+        plan, taxonomy = load_plan(plan_path)
         extra_taxonomy = []
-        for path in extra:
-            with open(path, "r", encoding="utf-8") as f:
+        if categories_from:
+            with open(categories_from, "r", encoding="utf-8") as f:
                 extra_taxonomy += json.load(f).get("taxonomy", [])
     except (OSError, ValueError, AttributeError) as exc:
-        print(f"error: failed to read {argv[0]}: {exc}", file=sys.stderr)
+        print(f"error: failed to read {plan_path}: {exc}", file=sys.stderr)
         return 2
+    drift = None
+    if drift_path:
+        try:
+            drift = plan_drift.load_drift(drift_path)
+        except (OSError, ValueError) as exc:
+            print(f"error: failed to read {drift_path}: {exc}", file=sys.stderr)
+            return 2
 
     tax_errors = taxonomy_errors(taxonomy) if taxonomy is not None else []
     for line in tax_errors:
@@ -110,16 +198,35 @@ def cmd_check_plan(argv):
     if taxonomy is not None or extra_taxonomy:
         categories = category_names((taxonomy or []) + extra_taxonomy)
     invalid = 0
+    checked = risks = declared = fails = 0
     for i, entry in enumerate(plan, 1):
         label = entry.get("label", "") if isinstance(entry, dict) else ""
         try:
-            print(f"[{i}] OK {check_ranked_entry(entry, categories)}")
+            kql = check_ranked_entry(entry, categories)
+            lines = []
+            if drift is not None:
+                # Raises like the checks above when a "types" declaration names
+                # a type the path does not hold, so the entry is an ERROR and
+                # nothing it reports is counted.
+                lines, n_risks, n_declared, n_fails = plan_drift.entry_lines(
+                    drift, i, kql_build.filter_fields(entry["match"]), fail_below
+                )
+                checked += 1
+                risks, declared, fails = risks + n_risks, declared + n_declared, fails + n_fails
+            print(f"[{i}] OK {kql}")
+            for line in lines:
+                print(line)
         except kql_build.FilterError as exc:
             invalid += 1
             print(f"[{i}] ERROR {label}: {exc}")
     print(f"PLAN_CHECK entries={len(plan)} ok={len(plan) - invalid} invalid={invalid}"
           + (f" taxonomy_errors={len(tax_errors)}" if tax_errors else ""))
-    return 0 if plan and not invalid and not tax_errors else 1
+    if drift is None:
+        print("DRIFT_CHECK=SKIPPED reason=no-drift-file")
+    else:
+        print(f"DRIFT_CHECKED={checked} DRIFT_RISK_COUNT={risks} "
+              f"DRIFT_DECLARED_COUNT={declared} DRIFT_FAIL_COUNT={fails}")
+    return 0 if plan and not invalid and not tax_errors and not fails else 1
 
 
 def main(argv):

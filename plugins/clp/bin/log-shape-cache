@@ -12,20 +12,40 @@ archive GROWS (new logs add new templates) -- drives an incremental update that
 classifies only the new templates and merges them into the existing entry,
 instead of reclassifying the whole archive.
 
-Cache key (the "app fingerprint") is sha256 of the sorted set of distinct
-log shape strings from the archive's dictionary dump
-(`clp-s-search-kql ARCHIVE 'stats.log_shapes'`, rendered by `normalize`), each
-TRUNCATED to a character limit first (default 500, `--max-chars` /
+Cache key (the "app fingerprint") is sha256 of the applied field rules' digest
+and the sorted set of distinct log shape strings from the archive's dictionary
+dump (`clp-s-search-kql ARCHIVE 'stats.log_shapes'`, rendered by `normalize`),
+each TRUNCATED to a character limit first (default 500, `--max-chars` /
 `$CLP_LOG_SHAPE_MAX_CHARS`) and de-duplicated. Truncation mirrors what
 log-shape-cluster sends to the embedding server, so the key identifies the
-*embedded* vocabulary. Same embedded vocabulary -> same key -> cache hit ->
-classification reused. When it grows, the key changes; `diff` finds the
-previous entry whose truncated template set is a subset of the new one (the
+*embedded* vocabulary. Same embedded vocabulary and same rules -> same key ->
+cache hit -> classification reused. When it grows, the key changes; `diff` finds
+the previous entry whose truncated template set is a subset of the new one (the
 archive grew from it) so only the new templates need classifying.
 
-Storage: one SQLite database, <cache-dir>/cache.sqlite. An entry is one row of
-`entries` (schema, taxonomy, query_plan, max_chars, classified_at, grown_from)
-and one row of `templates` per template. A template is stored by hash, never by
+The FIELD RULES are in the key because they are part of the classification: a
+template whose values sit in a ruled field takes the rule's category and is
+never shown to the classifier, so the same templates under a different rule set
+are a different classification. `diff` and `key` take them with `--field-rules`,
+the file log-shape-cluster is given; the digest is canonical over them (sorted
+by field path, only `field` and `category`, so re-ordering the file or dropping
+the annotations `--propose-rules` adds changes nothing), and having no rules is
+itself a rule set with a digest of its own. Both tools digest rules through
+lib/log_shapes.py, so they cannot drift. An entry classified under other rules
+is never reused, not even as a GROWTH base, and `diff` reports
+`CACHE_REASON=rules-changed` so the caller can say why rather than imply a
+first run.
+
+Storage: one SQLite database, <cache-dir>/cache.sqlite, stamped with a format
+version in `meta`. An entry is one row of `entries` (schema, taxonomy,
+query_plan, max_chars, field_rules, rules_digest, classified_at, grown_from)
+and one row of `templates` per template. Entries written in an older format are
+not migrated -- an entry keyed before the rules were part of the key cannot be
+told apart from one classified with no rules, and nothing records which rules
+produced it -- so they are DISCARDED, once, with a note naming the database and
+the count, and a snapshot of the old database left beside it; those apps are
+classified again on their next run. The stored archives (below) survive the
+discard, so no dictionary is dumped again for it. A template is stored by hash, never by
 text (see lib/log_shapes.py): `hash` of the full template, `prefix_hash` of its
 first max_chars characters, and its `category`. Templates can be hundreds of KB
 each -- CockroachDB logs multi-line Pebble stats tables as single messages --
@@ -55,6 +75,10 @@ A classification, as read from stdin and printed by `get`, is:
                       "category": "errors", "priority": "high",
                       "stage": "core"}],
       "max_chars": 500,                    # limit the prefix hashes and key use
+      "field_rules": [{"field": "t.message", "category": "free-text-t-message"}],
+                                           # the rules applied; [] when none
+      "rules_digest": "<sha256>",          # printed by get: their canonical digest,
+                                           # which is part of app_key
       "classified_at": "2026-08-07T...",   # printed by get
       "grown_from": "<previous app_key>"   # present only when incrementally grown
     }
@@ -95,25 +119,41 @@ Subcommands:
     stored --archive-ids A,B       Exit 0 (printing LOG_SHAPE_COUNT=) when every
                                   archive is stored with counts at --max-chars
                                   or more; exit 1 when it must be ingested.
-    key   --log-shapes-file F        Print the app_key for the given log shapes
-                                  NDJSON file (accepts raw shape lines too).
+    key   --log-shapes-file F [--field-rules R]
+                                  Print the app_key for the given log shapes
+                                  NDJSON file (accepts raw shape lines too),
+                                  under the field rules R -- the key to `put`
+                                  a classification built with R under.
+    rules-digest [--field-rules R] Print the canonical digest of a field rules
+                                  file -- of no rules at all without one, which
+                                  is its own digest. It is what the key folds
+                                  in, and what log-shape-cluster prints as
+                                  RULES_DIGEST; both compute it here.
     count --log-shapes-file F        Print the number of distinct log shapes in the
                                   log shapes file (the archive's log shape
                                   count).
-    diff  --log-shapes-file F        Dynamic-update probe. Prints ONE header line
-                                  then NDJSON template lines ({"log_shape":"..."}):
-                                    UPTODATE\\t<app_key>\\t<count>
+    diff  --log-shapes-file F [--field-rules R]
+                                  Dynamic-update probe. Prints ONE header line
+                                  then NDJSON template lines ({"log_shape":"..."}).
+                                  Every header ends with a <reason>, which says
+                                  why the mode is what it is:
+                                    UPTODATE\\t<app_key>\\t<count>\\tup-to-date
                                         cache is current; no templates to classify.
                                         A template that differs from a cached one
                                         only past the limit takes that one's
                                         category when joined on prefix_hash.
-                                    GROWTH\\t<app_key>\\t<base_key>\\t<count>\\t<new_count>
+                                    GROWTH\\t<app_key>\\t<base_key>\\t<count>\\t<new_count>\\ttemplates-grown
                                         archive grew from <base_key>; the
                                         following <new_count> templates are NEW
                                         and need classifying (then merge).
-                                    NEW\\t<app_key>\\t<count>
+                                    NEW\\t<app_key>\\t<count>\\tfirst-run
                                         no base found; all <count> templates
                                         follow and need classifying.
+                                    NEW\\t<app_key>\\t<count>\\trules-changed
+                                        the same as NEW, but an entry DOES hold
+                                        these templates under other field rules:
+                                        the rule set changed, so it is classified
+                                        again. Not a first run -- say so.
                                   <count> is always the TRUE full template count;
                                   subset matching is done on prefix hashes.
                                   Entries without a valid ranking (stored
@@ -136,16 +176,21 @@ Subcommands:
                                   the result at once while `put` stores it.
     put   --key K                  Store the classification read from stdin
                                   under K, replacing any entry K. Stamps
-                                  `classified_at`. Safe to run in the
-                                  background: readers see the old entry or the
-                                  new one, never a mix.
+                                  `classified_at`, and stores the
+                                  classification's own `field_rules` with the
+                                  digest `diff` compares -- so K must be a key
+                                  computed with those rules (`key
+                                  --field-rules`, or the APP_KEY of a `diff`
+                                  given them). Safe to run in the background:
+                                  readers see the old entry or the new one,
+                                  never a mix.
     forget [KEY] [--archive-ids A,B]
                                   Delete the classification stored under KEY,
                                   and/or the stored archives A,B. Prints what
                                   it removed; deleting nothing is not an error,
                                   so cleanup steps can run it twice.
     list                           List cached entries: key, template count,
-                                  classified_at, grown_from.
+                                  field rule count, classified_at, grown_from.
     show  KEY                      Pretty-print one cached entry.
 
 merge and put refuse (exit 2, nothing written) a query_plan entry without a
@@ -174,7 +219,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from classification import classification_errors, plan_errors, taxonomy_errors  # noqa: E402
 from log_shapes import (  # noqa: E402
-    DEFAULT_MAX_CHARS, app_key, default_max_chars, prefix_hash, template_hash, truncate_chars)
+    DEFAULT_MAX_CHARS, NO_FIELD_RULES_DIGEST, app_key, default_max_chars, field_rules_digest,
+    parse_field_rules, prefix_hash, template_hash, truncate_chars)
 from schema_tree import load_trees, node_fields  # noqa: E402
 
 # Cache keys and template hashes are sha256 hex digests.
@@ -190,8 +236,38 @@ def resolve_max_chars(value):
     return value if value > 0 else 0
 
 
-def app_key_for_log_shapes(log_shapes, max_chars):
-    return app_key(log_shapes, max_chars)
+def app_key_for_log_shapes(log_shapes, max_chars, rules_digest):
+    return app_key(log_shapes, max_chars, rules_digest)
+
+
+def load_field_rules(path):
+    """[{"field", "category"}] from a --field-rules file, or None after
+    reporting why it cannot be used. The parse and the digest are
+    lib/log_shapes.py's, which is where log-shape-cluster reads the same file,
+    so the two always key on the same rules."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+    except OSError as e:
+        print(f"error: cannot read --field-rules file: {e}", file=sys.stderr)
+        return None
+    except json.JSONDecodeError as e:
+        print(f"error: --field-rules file is not valid JSON: {e}", file=sys.stderr)
+        return None
+    rules, problems = parse_field_rules(doc)
+    for problem in problems:
+        print(f"error: {path}: {problem}", file=sys.stderr)
+    return rules
+
+
+def rules_digest_for(args):
+    """The field rules digest the fingerprint uses: of --field-rules when given,
+    else of no rules at all -- which is a digest of its own, never the digest a
+    rule set gets. Returns None after reporting an unusable file."""
+    if not getattr(args, "field_rules", None):
+        return NO_FIELD_RULES_DIGEST
+    rules = load_field_rules(args.field_rules)
+    return None if rules is None else field_rules_digest(rules)
 
 
 def now():
@@ -286,10 +362,26 @@ def default_cache_dir():
 
 # --- Storage -----------------------------------------------------------------
 
-SCHEMA_SQL = """
+# Format of the classification entries. Bumped when a stored entry can no
+# longer be read as what it claims to be -- which is not a migration: the old
+# rows are invalid and are discarded once, with a report (discard_stale_entries).
+#   1  entries keyed on the template set alone
+#   2  the key folds in the field rules digest, stored with the entry
+FORMAT_VERSION = 2
+
+META_SQL = """
+CREATE TABLE IF NOT EXISTS meta (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
+"""
+
+ENTRIES_SQL = """
 CREATE TABLE IF NOT EXISTS entries (
     app_key          TEXT PRIMARY KEY,
     max_chars        INTEGER NOT NULL,
+    rules_digest     TEXT NOT NULL,     -- field_rules_digest of field_rules, part of app_key
+    field_rules      TEXT NOT NULL,     -- JSON array of {"field","category"} (possibly empty)
     schema           TEXT,              -- JSON object, or NULL
     taxonomy         TEXT NOT NULL,     -- JSON array
     query_plan       TEXT NOT NULL,     -- JSON array
@@ -305,6 +397,9 @@ CREATE TABLE IF NOT EXISTS templates (
     PRIMARY KEY (app_key, hash)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS templates_by_prefix ON templates(app_key, prefix_hash);
+"""
+
+ARCHIVES_SQL = """
 CREATE TABLE IF NOT EXISTS archives (
     archive_id   TEXT PRIMARY KEY,      -- the clp-s archive's id (its directory name)
     max_chars    INTEGER NOT NULL,      -- length the stored prefixes were cut to
@@ -322,6 +417,8 @@ CREATE TABLE IF NOT EXISTS archive_shapes (
 );
 """
 
+SCHEMA_SQL = META_SQL + ENTRIES_SQL + ARCHIVES_SQL
+
 # Stored archives nobody has analyzed for this long are dropped on the next
 # ingest; an archive is immutable, so the rows never go stale, only unused.
 ARCHIVE_TTL_DAYS = 30
@@ -335,12 +432,87 @@ def check_key(key):
 
 def connect(cache_dir):
     os.makedirs(cache_dir, exist_ok=True)
-    db = sqlite3.connect(os.path.join(cache_dir, DB_NAME), timeout=120)
+    path = os.path.join(cache_dir, DB_NAME)
+    db = sqlite3.connect(path, timeout=120)
     # WAL lets a background `put` write while `diff`/`get` read.
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA foreign_keys=ON")
     db.executescript(SCHEMA_SQL)
+    check_format(db, path)
     return db
+
+
+def stored_format_version(db):
+    """The format the entries in this database were written in: FORMAT_VERSION
+    for one this build wrote, 1 for one written before the format was stamped,
+    None for a database with no entries at all (its format is whatever we write
+    next)."""
+    row = db.execute("SELECT value FROM meta WHERE key = 'format_version'").fetchone()
+    if row is not None:
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return 1
+    columns = {c[1] for c in db.execute("PRAGMA table_info(entries)")}
+    if "rules_digest" in columns and not db.execute("SELECT 1 FROM entries LIMIT 1").fetchone():
+        return None
+    return 1
+
+
+def check_format(db, path):
+    """Make the database's entries readable as FORMAT_VERSION, or say why they
+    cannot be.
+
+    There is no reading of an older format here: an entry keyed without the
+    field rules digest cannot be told apart from one whose rules happened to be
+    empty, and nothing records which rules produced it, so it is not stale data
+    to migrate but a classification of unknown provenance. It is discarded, once,
+    and the app is classified again on its next run."""
+    version = stored_format_version(db)
+    if version == FORMAT_VERSION:
+        return
+    if version is not None and version > FORMAT_VERSION:
+        raise SystemExit(f"error: {path} was written by a newer plugin (cache format {version}, this "
+                         f"build reads {FORMAT_VERSION}); update the plugin, or point --cache-dir "
+                         f"elsewhere")
+    if version is not None:
+        discard_stale_entries(db, path, version)
+    with db:
+        db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('format_version', ?)",
+                   (str(FORMAT_VERSION),))
+
+
+def discard_stale_entries(db, path, version):
+    """Drop the classification entries written in an older format, reporting the
+    path and the count.
+
+    The stored archives are left alone: their rows are templates an immutable
+    archive holds, which no format change touches, so a re-classification does
+    not have to dump the dictionary again. A snapshot of the whole database goes
+    beside it first (VACUUM INTO, a consistent copy), so nothing a user might
+    want back is only deleted."""
+    n = db.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+    snapshot = None
+    if n:
+        snapshot = f"{path}.format{version}.{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+        try:
+            db.execute("VACUUM INTO ?", (snapshot,))
+        except sqlite3.Error as e:
+            print(f"warning: could not snapshot {path} before discarding its old-format entries: {e}",
+                  file=sys.stderr)
+            snapshot = None
+    with db:
+        db.execute("DROP TABLE IF EXISTS templates")
+        db.execute("DROP TABLE IF EXISTS entries")
+    db.executescript(ENTRIES_SQL)
+    if n:
+        one = n == 1
+        print(f"note: discarded {n} classification{'' if one else 's'} in {path}: "
+              f"{'it was' if one else 'they were'} keyed in cache format {version}, before the field "
+              f"rules were part of the key, so {'its' if one else 'their'} categories cannot be "
+              f"trusted{f' (the old database is kept at {snapshot})' if snapshot else ''}; "
+              f"{'that app is' if one else 'those apps are'} classified again on the next run",
+              file=sys.stderr)
 
 
 def legacy_files(cache_dir):
@@ -360,8 +532,8 @@ def warn_legacy(cache_dir):
 
 def load_entry(db, key):
     row = db.execute(
-        "SELECT max_chars, schema, taxonomy, query_plan, classified_at, plan_updated_at, grown_from "
-        "FROM entries WHERE app_key = ?", (key,)).fetchone()
+        "SELECT max_chars, schema, taxonomy, query_plan, classified_at, plan_updated_at, grown_from, "
+        "rules_digest, field_rules FROM entries WHERE app_key = ?", (key,)).fetchone()
     if row is None:
         return None
     obj = {"app_key": key, "max_chars": row[0]}
@@ -374,6 +546,12 @@ def load_entry(db, key):
         obj["plan_updated_at"] = row[5]
     if row[6]:
         obj["grown_from"] = row[6]
+    # The rules this classification was built under, and their digest, which is
+    # part of app_key. Kept even when empty, so a reader can tell "classified
+    # with no field rules" from "classified before rules existed" (which the
+    # format bump discarded).
+    obj["field_rules"] = json.loads(row[8])
+    obj["rules_digest"] = row[7]
     obj["templates"] = [
         {"hash": h, "prefix_hash": p, "category": c}
         for h, p, c in db.execute(
@@ -385,12 +563,14 @@ def load_entry(db, key):
 def store_entry(db, key, obj, max_chars, classified_at=None):
     """Replace entry `key` with `obj` in one transaction."""
     templates = {t["hash"]: t for t in obj["templates"]}  # the last one for a hash wins
+    rules = obj.get("field_rules") or []
     with db:
         db.execute("DELETE FROM entries WHERE app_key = ?", (key,))
         db.execute(
-            "INSERT INTO entries (app_key, max_chars, schema, taxonomy, query_plan, classified_at, "
-            "plan_updated_at, grown_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (key, max_chars,
+            "INSERT INTO entries (app_key, max_chars, rules_digest, field_rules, schema, taxonomy, "
+            "query_plan, classified_at, plan_updated_at, grown_from) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (key, max_chars, field_rules_digest(rules), json.dumps(rules, ensure_ascii=False),
              json.dumps(obj["schema"], ensure_ascii=False) if "schema" in obj else None,
              json.dumps(obj.get("taxonomy", []), ensure_ascii=False),
              json.dumps(obj.get("query_plan", []), ensure_ascii=False),
@@ -415,6 +595,17 @@ def read_classification(stream):
         if field in obj and not isinstance(obj[field], list):
             print(f"error: '{field}' must be a JSON array", file=sys.stderr)
             return None, 2
+    # The applied field rules are part of the key (see field_rules_digest), so
+    # they are read with the same parse log-shape-cluster wrote them with, and
+    # kept canonical: only the field and the category, which is all the digest
+    # and the categories rest on.
+    if "field_rules" in obj:
+        rules, problems = parse_field_rules(obj)
+        if problems:
+            for problem in problems:
+                print(f"error: field_rules: {problem}", file=sys.stderr)
+            return None, 2
+        obj["field_rules"] = rules
     obj.setdefault("templates", [])
     for i, t in enumerate(obj["templates"], 1):
         if not isinstance(t, dict):
@@ -743,7 +934,21 @@ def cmd_key(args):
     if max_chars == 0:
         print("error: --max-chars must be a positive integer", file=sys.stderr)
         return 2
-    print(app_key_for_log_shapes(log_shapes, max_chars))
+    digest = rules_digest_for(args)
+    if digest is None:
+        return 2
+    print(app_key_for_log_shapes(log_shapes, max_chars, digest))
+    return 0
+
+
+def cmd_rules_digest(args):
+    """Print the digest the fingerprint folds in for these rules (no rules
+    without --field-rules). Callers -- the bootstrap, log-shape-cluster -- report
+    it, so a changed key can be traced to the rules that changed it."""
+    digest = rules_digest_for(args)
+    if digest is None:
+        return 2
+    print(digest)
     return 0
 
 
@@ -821,6 +1026,9 @@ def cmd_diff(args):
     if bool(args.log_shapes_file) == bool(args.archive_ids):
         print("error: give exactly one of --log-shapes-file and --archive-ids", file=sys.stderr)
         return 2
+    digest = rules_digest_for(args)
+    if digest is None:
+        return 2
     warn_legacy(args.cache_dir)
     db = connect(args.cache_dir)
     text_limit = None
@@ -847,21 +1055,34 @@ def cmd_diff(args):
         print("error: no log shape entries found", file=sys.stderr)
         return 1
     log_shapes = by_hash.values()
-    key = app_key_for_log_shapes(log_shapes, max_chars)
+    key = app_key_for_log_shapes(log_shapes, max_chars, digest)
     stale = unranked_keys(db)
     if stale:
         print(f"warning: {len(stale)} cache entr{'y predates' if len(stale) == 1 else 'ies predate'} "
               f"ranked classifications and {'is' if len(stale) == 1 else 'are'} ignored; the app is "
               f"classified again and the entry replaced", file=sys.stderr)
+    # An entry classified under other field rules gave its ruled templates
+    # categories no rule here would give them, so it is not this run's
+    # classification and cannot be reused -- neither as a hit nor as a GROWTH
+    # base. It is worth naming, though: a run that finds one has not met a new
+    # app, it has changed the rules (`rules-changed` below).
+    same_rules, other_rules = set(), set()
+    for entry_key, entry_digest in db.execute("SELECT app_key, rules_digest FROM entries"):
+        (same_rules if entry_digest == digest else other_rules).add(entry_key)
 
-    if key not in stale and db.execute("SELECT 1 FROM entries WHERE app_key = ?", (key,)).fetchone():
-        print(f"UPTODATE\t{key}\t{len(by_hash)}")
+    # The digest is checked as well as the key, not only folded into it: an entry
+    # stored under a key derived with other rules (a `put` given the wrong one)
+    # must not be handed back as this run's classification.
+    if key not in stale and db.execute("SELECT 1 FROM entries WHERE app_key = ? AND rules_digest = ?",
+                                       (key, digest)).fetchone():
+        print(f"UPTODATE\t{key}\t{len(by_hash)}\tup-to-date")
         return 0
     try:
-        exact, best = find_base(db, log_shapes, stale, text_limit)
+        exact, best = find_base(db, log_shapes, stale | other_rules, text_limit)
         if exact:
-            # Same vocabulary stored under another key (another character limit).
-            print(f"UPTODATE\t{exact}\t{len(by_hash)}")
+            # Same vocabulary and rules stored under another key (another
+            # character limit, or a key derived before the rules were known).
+            print(f"UPTODATE\t{exact}\t{len(by_hash)}\tup-to-date")
             return 0
         if text_limit is not None:
             raise NeedsText("templates need classifying")
@@ -873,17 +1094,26 @@ def cmd_diff(args):
         base = {h for (h,) in db.execute("SELECT hash FROM templates WHERE app_key = ?", (best,))}
         new = sorted(lt for h, lt in by_hash.items() if h not in base)
         if new:
-            print(f"GROWTH\t{key}\t{best}\t{len(by_hash)}\t{len(new)}")
+            print(f"GROWTH\t{key}\t{best}\t{len(by_hash)}\t{len(new)}\ttemplates-grown")
             for lt in new:
                 print(json.dumps({"log_shape": lt}, ensure_ascii=False))
             return 0
         # find_base only returns proper subsets, so this is unreachable; never
         # emit a GROWTH that has nothing to classify.
-        print(f"UPTODATE\t{best}\t{len(by_hash)}")
+        print(f"UPTODATE\t{best}\t{len(by_hash)}\tup-to-date")
         return 0
 
-    # No base: first classification of this application.
-    print(f"NEW\t{key}\t{len(by_hash)}")
+    # Nothing to reuse. Either this app was never classified, or it was -- on
+    # these very templates -- under field rules that are no longer the rules,
+    # which is a re-classification and not a first run; say which.
+    reason = "first-run"
+    if other_rules:
+        try:
+            if any(find_base(db, log_shapes, stale | same_rules, text_limit)):
+                reason = "rules-changed"
+        except NeedsText:
+            pass
+    print(f"NEW\t{key}\t{len(by_hash)}\t{reason}")
     for lt in sorted(log_shapes):
         print(json.dumps({"log_shape": lt}, ensure_ascii=False))
     return 0
@@ -927,6 +1157,11 @@ def cmd_merge(args):
             # Keep the base schema if the new classification didn't restate it.
             if "schema" not in new and "schema" in base:
                 new["schema"] = base["schema"]
+            # Same for the field rules: a GROWTH base is only ever an entry whose
+            # rules digest equals this run's (find_base skips the others), so the
+            # base's rules ARE this run's, restated or not.
+            if not new.get("field_rules") and base.get("field_rules"):
+                new["field_rules"] = base["field_rules"]
             new.setdefault("max_chars", base["max_chars"])
             new["grown_from"] = args.base_key
     sys.stdout.write(json.dumps(new, ensure_ascii=False))
@@ -975,14 +1210,14 @@ def cmd_forget(args):
 def cmd_list(args):
     warn_legacy(args.cache_dir)
     rows = connect(args.cache_dir).execute(
-        "SELECT e.app_key, COUNT(t.hash), e.classified_at, e.grown_from FROM entries e "
+        "SELECT e.app_key, COUNT(t.hash), e.classified_at, e.grown_from, e.field_rules FROM entries e "
         "LEFT JOIN templates t ON t.app_key = e.app_key GROUP BY e.app_key ORDER BY e.app_key").fetchall()
     if not rows:
         print(f"(no cached classifications in {args.cache_dir})", file=sys.stderr)
         return 0
-    print(f"{'app_key':<66}  templates  classified_at          grown_from")
-    for key, n, ts, gf in rows:
-        print(f"{key:<66}  {n:>9}  {ts:<20}  {gf[:12] if gf else '-'}")
+    print(f"{'app_key':<66}  templates  rules  classified_at          grown_from")
+    for key, n, ts, gf, rules in rows:
+        print(f"{key:<66}  {n:>9}  {len(json.loads(rules)):>5}  {ts:<20}  {gf[:12] if gf else '-'}")
     return 0
 
 
@@ -1031,6 +1266,9 @@ def main(argv=None):
     pk.add_argument("--log-shapes-file", required=True)
     pk.set_defaults(func=cmd_key)
 
+    prd = sub.add_parser("rules-digest", help="Print the canonical digest of a field rules file.")
+    prd.set_defaults(func=cmd_rules_digest)
+
     pc = sub.add_parser("count", help="Print the number of distinct log shapes in the log shapes file.")
     pc.add_argument("--log-shapes-file", required=True)
     pc.set_defaults(func=cmd_count)
@@ -1040,6 +1278,17 @@ def main(argv=None):
     pd.add_argument("--archive-ids", default=None,
                     help="Comma-separated stored archive ids to probe with instead of a log shapes file.")
     pd.set_defaults(func=cmd_diff)
+
+    # The field rules are part of the fingerprint, so the probe and the key must
+    # be given the rules the run will apply (none is itself a rule set).
+    for subp in (pk, pd, prd):
+        subp.add_argument(
+            "--field-rules",
+            default=None,
+            help='{"field_rules": [{"field", "category"}]} JSON, the rules this run applies (the '
+                 "file log-shape-cluster is given). Their canonical digest is part of the key, so "
+                 "a changed rule set cannot reuse a classification built under the old one.",
+        )
 
     pg = sub.add_parser("get", help="Print a cached classification (exit 1 on miss).")
     pg.add_argument("key")

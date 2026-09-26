@@ -18,10 +18,12 @@ Fixed, in this order. A Claude Code session has a fixed record structure, so the
 | 6 | Human loop | How often did a person have to step in? | human interrupts, denials, blocking-question minutes |
 | 7 | Rework | How much work was done more than once? | logical units retried, stalled attempts |
 
-Two distinctions the categories depend on, both of which the facts file makes explicit — carry them into the report:
+Four distinctions the categories depend on, all of which the facts file makes explicit — carry them into the report:
 
 - **Runtime interrupts are not human interrupts.** Interrupts on the main thread are the person; interrupts in workflow-agent logs are the runtime's no-progress kill. A session with 654 interrupts may have had exactly 2 from the human.
 - **Agent minutes are not wall-clock minutes.** Attempts run in parallel and workflows are pipelined, so summed attempt time routinely exceeds the session's span. Never present it as elapsed.
+- **One API response can be recorded in several logs, so the per-kind token column does not add up to the total.** A subagent's response is written to its own transcript *and* to the main log, and a fork starts from a copy of its parent's transcript, so the same response reappears in every descendant's log — on one real session a single response had token rows in three agent transcripts plus the main log, and the worst multiplicity was six. The bundle-wide total therefore counts each response once, keyed on its `message_id`, while each per-kind row stays that log's own honest accounting. **Quote the bundle total for "what the session cost" and a per-kind row for "what this agent cost", and never sum the column.** If someone adds it up and gets a larger number, that difference is the duplication, not an error — the facts file states it and the size of it. The correction was 0.15% on that session, but it scales with how much forking happened, so do not carry that figure to another session as though it were typical.
+- **Tokens are the measurement; money is not.** The logs carry a `totalCostUSD` field and the scoring ignores it deliberately: it is derived from an assumed unit price rather than what was billed, and it is not always refreshed, so it goes stale. **Do not quote a currency figure in the report, even when asked what the session cost** — give tokens, and say that converting them needs the reader's own rates, plan and provider. If the user wants money, that is a calculation they own; offer the token figures it would rest on rather than a number the log cannot support.
 
 ## Ask what the user already knows
 
@@ -104,6 +106,16 @@ Extra categories found: EXTRAS
 Rules:
 - Every figure must appear in the facts file. You may not compute, estimate,
   infer or round a number that is not there. No arithmetic of any kind.
+- Never quote a currency figure, even if asked what the session cost. Cost is in
+  tokens: the log's totalCostUSD comes from an assumed unit price, not from what
+  was billed, and is not always refreshed. Say that converting needs the
+  reader's own rates.
+- Never add up the per-kind token column. One API response can be recorded in
+  several logs, because a fork inherits its parent's transcript, so the bundle
+  total counts each response once and is smaller than those rows summed. Quote
+  the bundle total for the session and a per-kind row for one agent. The facts
+  file states the difference and why; if a reader adds the column up and gets
+  more, that gap is the duplication and not an error.
 - Lead with the focus. The other categories follow in the fixed order:
   reliability, cost, time, outcomes, harness faults, human loop, rework.
 - Treat the user's context as a claim to check against the records, not as
@@ -145,8 +157,12 @@ what it means, and one example id to open. A category with nothing notable gets
 one line saying so.>
 
 ## What the logs cannot tell you
-<Quality of the work. Whether the outcome was right. Anything needing external
-data — review acceptance, revert rate, post-merge CI. Always present.>
+<Quality of the work. Whether the outcome was right. What it cost in money, as
+opposed to tokens. Anything needing external data — review acceptance, revert
+rate, post-merge CI. Always present. Add here any caveat the facts file raised
+about its own figures: notably, when many token-bearing records carry no
+`message_id` the bundle total may still double-count, and the facts file says
+how many there were.>
 
 ## Query log
 <Each check that ran, its result, and each that failed or matched nothing.>
