@@ -18,7 +18,9 @@ Options:
                           Default: all
   --source-root DIR       Root directory for the selected single agent.
                           Requires --agent claude or --agent codex.
-  --claude-root DIR       Claude Code session root.
+  --claude-root DIR       Claude Code session root: the projects/ directory
+                          itself, not the Claude home above it (the bundle
+                          tools' --claude-home wants that one).
                           Default: ~/.claude/projects
   --codex-root DIR        Codex session root.
                           Default: ${CODEX_HOME:-~/.codex}/sessions
@@ -74,6 +76,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --claude-root)
       [[ $# -ge 2 ]] || { echo "error: --claude-root requires a value" >&2; exit 2; }
+      check_claude_root "$2" --claude-root || exit $?
       claude_root="$2"
       shift 2
       ;;

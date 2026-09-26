@@ -508,3 +508,147 @@ check_semantic_endpoint() {
     return 1
   fi
 }
+
+# --- why a clp-s invocation failed ---------------------------------------------
+# clp-s has no version flag: every build answers `--version` with "Command
+# unspecified" and exit 0, so a version string cannot be read and must not be
+# guessed from `--help` either -- builds that reject `--count` at run time still
+# list it. The only honest test is to ask the binary to do the thing and read what
+# it says, so these functions probe behaviour and never parse a version.
+
+# A field name no archive can hold. Counting it opens the archive and exercises
+# the aggregation path, then returns in milliseconds because no schema matches.
+CLP_S_PROBE_FIELD='__clp_s_capability_probe__'
+
+# clp_s_probe BINARY ARCHIVE_DIR -> ok | no-count | archive-too-new | unknown
+clp_s_probe() {
+  local bin="$1" archive="$2" out rc=0
+  out="$("$bin" s --count "$archive" "${CLP_S_PROBE_FIELD}:*" 2>&1)" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    printf 'ok\n'
+    return 0
+  fi
+  case "$out" in
+    *"Aggregations are only supported"*) printf 'no-count\n' ;;
+    *"Failed to open archive"*|*"Error code: 18"*) printf 'archive-too-new\n' ;;
+    *) printf 'unknown\n' ;;
+  esac
+}
+
+# Every clp-s this plugin knows how to find, most preferred first, deduplicated.
+# Deliberately only the locations resolve_clp_s already consults: no vendor or
+# home-relative install path is assumed, so a machine that has just one build
+# yields just that one and the caller suggests nothing.
+clp_s_candidates() {
+  local script_dir plugin_root candidate real seen=""
+  script_dir="${CLP_PLUGIN_BIN_DIR:-}"
+  if [[ -z "$script_dir" ]]; then
+    script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+  fi
+  plugin_root="$(cd -- "${script_dir}/.." && pwd -P)"
+  for candidate in "${CLP_S_BIN:-}" "${script_dir}/clp-s" \
+                   "${plugin_root}/.clp-core/bin/clp-s" \
+                   $(type -a -P clp-s 2>/dev/null || true); do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    real="$(cd -- "$(dirname -- "$candidate")" 2>/dev/null && pwd -P)/$(basename -- "$candidate")" || continue
+    case ":${seen}:" in *":${real}:"*) continue ;; esac
+    seen="${seen}:${real}"
+    printf '%s\n' "$real"
+  done
+}
+
+# clp_s_cause_from_stderr TEXT -> a cause sentence, or nothing
+# The failing call's own stderr names the capability that actually blocked it,
+# where the probe can only report whatever it happens to trip over first. Kept in
+# step with CLP_S_FAILURE_SIGNS in lib/bundle.py, the twin for direct callers.
+clp_s_cause_from_stderr() {
+  case "$1" in
+    *"Failed to open archive"*|*"Error code: 18"*)
+      printf 'it cannot open this archive'"'"'s format, which a newer clp-s wrote\n' ;;
+    *"Aggregations are only supported"*)
+      printf 'it aggregates only through the reducer output handler, so it predates the standalone --count this plugin relies on\n' ;;
+  esac
+}
+
+# diagnose_clp_s_failure BINARY [ARCHIVE_DIR] [WHAT] [STDERR_FILE]
+# Explain a failed invocation when the binary is the reason, and say nothing when
+# it is not -- a malformed query must never be blamed on the build. Only ever
+# called after a failure, so the success path pays nothing.
+diagnose_clp_s_failure() {
+  local bin="$1" archive="${2:-}" what="${3:-that query}" err_file="${4:-}" verdict alt cause=""
+  [[ -n "$bin" ]] || return 0
+  if [[ -n "$err_file" && -r "$err_file" ]]; then
+    cause="$(clp_s_cause_from_stderr "$(cat "$err_file")")"
+  fi
+  if [[ -z "$archive" || ! -e "$archive" ]]; then
+    # No archive to probe (a compress run, say): still name the binary, since
+    # otherwise nothing in the output says which one ran.
+    echo "note: that was clp-s at $bin. Point at another build with CLP_S_BIN=/path/to/clp-s." >&2
+    return 0
+  fi
+  verdict="$(clp_s_probe "$bin" "$archive")"
+  # A recognised stderr means the binary is at fault whatever the probe thinks.
+  [[ -n "$cause" || "$verdict" != "ok" ]] || return 0
+  {
+    # The verdict describes the probe, not the caller's query, so it is stated as
+    # evidence about the binary. Naming the probe's missing feature as if it were
+    # the caller's would mislead whenever the two differ -- a plain search failing
+    # on a build that also cannot count is not a counting problem.
+    echo "error: the clp-s in use cannot run ${what} -- the binary is the problem, not the query."
+    echo "  binary:   $bin"
+    if [[ -n "$cause" ]]; then
+      echo "  cause:    $cause."
+    else
+      echo "  evidence: a probe needing only to open the archive and count nothing failed too."
+      case "$verdict" in
+        no-count)
+          echo "  cause:    it aggregates only through the reducer output handler, so it predates"
+          echo "            the standalone --count this plugin relies on." ;;
+        archive-too-new)
+          echo "  cause:    it cannot open $archive;"
+          echo "            a newer clp-s wrote it." ;;
+        *)
+          echo "  cause:    the probe failed for a reason this wrapper does not recognise." ;;
+      esac
+    fi
+    echo "  Point at another build with CLP_S_BIN=/path/to/clp-s."
+    while read -r alt; do
+      [[ "$alt" != "$bin" ]] || continue
+      if [[ "$(clp_s_probe "$alt" "$archive")" == "ok" ]]; then
+        echo "  This clp-s on this machine can: $alt"
+        break
+      fi
+    done < <(clp_s_candidates)
+  } >&2
+}
+
+# explain_zero_match BINARY ARCHIVE_DIR KQL
+# On a zero result, ask the archive whether its own structure explains it: a filter
+# written at an Object or array path can never match, and a path that is not in the
+# tree at all is a typo. Only ever called after a zero, so a query that matched
+# pays nothing; silent when the structure does not explain it, because then the
+# zero is a fact about the data and not a mistake.
+explain_zero_match() {
+  local bin="$1" dir="$2" kql="$3" helper
+  helper="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/explain_zero.py"
+  [[ -f "$helper" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  "$bin" s --experimental "$dir" stats.schema_tree 2>/dev/null \
+    | python3 "$helper" "$kql" >&2 || true
+}
+
+# check_claude_root VALUE [FLAG]
+# The mirror of bundle.py's check_claude_home. --claude-root wants projects/
+# itself, while the bundle tools' --claude-home wants the directory above it; one
+# level out finds no sessions and reads as an empty machine, so the wrong level is
+# named with its correction instead of failing quietly.
+check_claude_root() {
+  local value="${1%/}" flag="${2:---claude-root}"
+  [[ -n "$value" ]] || return 0
+  if [[ "$(basename -- "$value")" != "projects" && -d "${value}/projects" ]]; then
+    echo "error: $flag wants the projects directory itself, not the Claude home above it." >&2
+    echo "  You passed $1; pass ${value}/projects." >&2
+    return 2
+  fi
+  return 0
+}
