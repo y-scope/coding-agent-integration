@@ -291,6 +291,22 @@ clp_archive_metadata_file() {
   printf '%s/.yscope-clp-archive.json\n' "$archives_dir"
 }
 
+# The directory these helpers live in, for the functions in this file that call
+# one of the python modules beside it. Sourced wrappers set it from their own
+# $BASH_SOURCE before sourcing; this covers a direct source of this file.
+# shellcheck disable=SC2034  # consumed by sourced wrappers
+: "${CLP_PLUGIN_LIB_DIR:=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+
+# require_python3: every JSON document, every reduction of one, and every
+# subcommand implemented in bin/lib is python, so a wrapper that calls one checks
+# here first rather than failing mid-run with `python3: command not found`.
+# Return: 0 present, 127 absent.
+require_python3() {
+  command -v python3 >/dev/null 2>&1 && return 0
+  echo "error: python3 is required to run the plugin's helpers" >&2
+  return 127
+}
+
 # archive_time_range_json STATS_FILE: the earliest and latest timestamp across
 # every archive `clp-s c --timestamp-key K --print-archive-stats` reported into
 # STATS_FILE, as {beginMs, endMs, begin, end}; null when no record had the key.
@@ -299,23 +315,14 @@ clp_archive_metadata_file() {
 # key reports 0 for both ends, so it is left out. Fails when STATS_FILE is not
 # the stats JSON.
 archive_time_range_json() {
-  local stats_file="$1"
-  jq -s -c '
-    [.[] | select(.begin_timestamp != 0 or .end_timestamp != 0)]
-    | if length == 0 then null else
-        {beginMs: (map(.begin_timestamp) | min), endMs: (map(.end_timestamp) | max)}
-        | .begin = (.beginMs / 1000 | floor | todate)
-        | .end = (.endMs / 1000 | floor | todate)
-      end' "$stats_file"
+  python3 "${CLP_PLUGIN_LIB_DIR}/archive_json.py" time-range --stats "$1"
 }
 
 # print_time_range TIMESTAMP_KEY TIME_RANGE_JSON: the "Time range:" line a
 # compression wrapper prints for archive_time_range_json's result.
 print_time_range() {
-  local timestamp_key="$1" time_range_json="$2"
-  echo "Time range: $(jq -r --arg key "$timestamp_key" \
-    'if . == null then "none (no record has the timestamp key \($key))" else "\(.begin) to \(.end)" end' \
-    <<<"$time_range_json")"
+  python3 "${CLP_PLUGIN_LIB_DIR}/archive_json.py" time-range-text \
+    --key "$1" --range "$2"
 }
 
 looks_like_clp_s_archive_dir() {
@@ -403,13 +410,8 @@ print_archive_metadata_summary() {
   [[ -f "$metadata_file" ]] || return 0
 
   echo "Archive metadata: $metadata_file"
-  if command -v jq >/dev/null 2>&1; then
-    jq -r '
-      "Archive source agent: " + (.agent // "unknown"),
-      "Archive source session: " + (.session.file // "unknown"),
-      "Archive source root: " + (.sourceRoot // "unknown")
-    ' "$metadata_file" 2>/dev/null || true
-  fi
+  python3 "${CLP_PLUGIN_LIB_DIR}/archive_json.py" metadata-summary \
+    --file "$metadata_file" 2>/dev/null || true
 }
 
 is_broad_output_dir() {
