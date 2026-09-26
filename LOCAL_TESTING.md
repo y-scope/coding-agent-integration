@@ -15,9 +15,8 @@ This file does not cover installer testing. The installer and deploy tooling liv
 Install or have available:
 
 - `bash`
-- `jq`
 - `shellcheck`
-- `python3` — required by `bin/clp` itself, by `clp detect`, and by `clp compress folder --structurize`, which runs each text file through `bin/lib/structurize.py`.
+- `python3` — required by every subcommand: `bin/clp` itself is a python script, the compress wrappers write the archive metadata with it, the bootstrap reads the archive stats and the sample with it, and `--structurize` runs each text file through `bin/lib/structurize.py`. No other JSON tool is needed.
 - `clp-s` on `PATH` for compression and search. If `clp-s` is not on `PATH`, set `CLP_S_BIN=/path/to/clp-s` to point the subcommands at a specific binary. The Folder + Log shape smoke test needs **clp-core 0.13+** (shapes API) for `stats.log_shapes`; the session smoke tests work on older builds too.
 
 The plugin also reads marketplace manifests from this repository's `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`, both of which point to `./plugins/clp`.
@@ -169,7 +168,8 @@ ARCHIVE="$(ls -dt "$FOLDER_DIR"/folder-* | head -1)"
 # The wrapper adds the required --experimental flag automatically.
 ./plugins/clp/bin/clp search "$ARCHIVE" 'stats.log_shapes' 2>/dev/null \
   | ./plugins/clp/bin/clp shape-cache normalize > /tmp/smoke-log-shapes.ndjson
-jq -s 'length' /tmp/smoke-log-shapes.ndjson
+python3 -c 'import sys; print(sum(1 for line in open(sys.argv[1]) if line.strip()))' \
+  /tmp/smoke-log-shapes.ndjson
 ```
 
 Exercise the classification cache. On a fresh cache dir `diff` reports `NEW` and lists every template. Storing a classification under that key flips the same input to `UPTODATE`; an archive that has since grown reports `GROWTH` and lists only the newly-added templates:
@@ -185,8 +185,15 @@ LC=(./plugins/clp/bin/clp shape-cache)   # a subcommand is two words, so an arra
 # stand-in is one cluster holding every template, labeled "other"; the real
 # `expand` turns it into a classification that names templates by hash.
 stand_in() {   # usage: stand_in LOG_SHAPES_NDJSON > classification.json
-  jq -s '{max_chars:500, clusters:[{id:"c1", representative:.[0].log_shape,
-          members:[.[].log_shape], count:length}]}' "$1" > /tmp/smoke-clusters.json
+  python3 - "$1" <<'PY'
+import json, sys
+shapes = [json.loads(line)["log_shape"]
+          for line in open(sys.argv[1]) if line.strip()]
+with open("/tmp/smoke-clusters.json", "w", encoding="utf-8") as handle:
+    json.dump({"max_chars": 500,
+               "clusters": [{"id": "c1", "representative": shapes[0],
+                             "members": shapes, "count": len(shapes)}]}, handle)
+PY
   echo '{"schema":{"message":"message"},"taxonomy":[{"category":"other","description":"smoke","priority":"low","why":"smoke"}],
          "assignments":[{"id":"c1","category":"other"}],
          "query_plan":[{"label":"All","match":{"field":"message","exists":true},"method":"count",
@@ -265,7 +272,9 @@ Note that the message field is a CLP-string: `message:term` returns 0 by design.
 ```bash
 ./plugins/clp/bin/clp search "$ARCHIVE" 'level:WARNING' 2>/dev/null | grep -c '^{'
 ./plugins/clp/bin/clp search --projection message "$ARCHIVE" '*' 2>/dev/null \
-  | jq -r '.message' | grep -c 'SomeStaticText'
+  | python3 -c 'import json, sys
+for line in sys.stdin:
+    if line.startswith("{"): print(json.loads(line)["message"])' | grep -c 'SomeStaticText'
 ```
 
 ### Cleanup

@@ -8,7 +8,7 @@ allowed-tools:
   - "Monitor"
   - "TaskStop"
   - "Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp:*)"
-  - "Bash(jq:*)"
+  - "Bash(python3:*)"
   - "Bash(grep:*)"
   - "Bash(sort:*)"
   - "Bash(uniq:*)"

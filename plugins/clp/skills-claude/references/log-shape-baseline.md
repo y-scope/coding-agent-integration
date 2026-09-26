@@ -8,7 +8,14 @@ Read this only when needed: the bootstrap misbehaves (empty dump, missing freque
 - The search wrapper adds the required `--experimental` flag automatically and rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently return nothing for it).
 - You **cannot** filter a stats query by substring (`stats.log_shapes:foo` is not valid); it always dumps the whole dictionary. Filter downstream:
   ```bash
-  jq -r 'select(.log_shape|test("failed";"i")) | .log_shape' /tmp/log-shape-freqs.ndjson
+  python3 - failed /tmp/log-shape-freqs.ndjson <<'PY'
+  import json, re, sys
+  pattern = re.compile(sys.argv[1], re.I)
+  for line in open(sys.argv[2]):
+      log_shape = json.loads(line)["log_shape"]
+      if pattern.search(log_shape):
+          print(log_shape)
+  PY
   ```
 - Per-template frequencies come from those stored counts, with no scan of the records. The bootstrap writes them to `/tmp/log-shape-freqs.ndjson` (`{"count":N,"hash":"...","length":N,"log_shape":"..."}`, most frequent first). Its `log_shape` is the template's first `MAX_CHARS` characters, all of it when `length` is no longer: the bootstrap stores that much per template in the cache database, so a later analysis of the same archive reads the counts back instead of dumping the dictionary. The full text is in `/tmp/log-shapes.ndjson` when the bootstrap dumped the dictionary (`SHAPES_SOURCE=dump`; `--dump` forces it). By hand, from a dump:
   ```bash
@@ -40,18 +47,26 @@ Always quote the wildcard value — `field:"*value*"` not `field:*value*`. The `
 
 `--count` counts inside the engine, so use it for every "how many records match X" question, including filters that match most of the archive (e.g. all INFO records); there is no need to count a rare complement and subtract. `--unique FIELD` lists a field's distinct values but still scans the matching records. See `shared-search.md` for both.
 
-Avoid `grep`/`jq` over a full record scan: it is O(records), and messages can be large, while KQL search runs inside the engine. A keyword alternation is not a reason to grep; OR the wildcards in one query:
+Avoid `grep` over a full record scan: it is O(records), and messages can be large, while KQL search runs inside the engine. A keyword alternation is not a reason to grep; OR the wildcards in one query:
 
 ```bash
 "$CLP" search --projection <timestamp>,<severity>,$MSG "$ARCHIVE" \
   '<message>:"*foo*" OR <message>:"*bar*" OR <message>:"*baz*"'
 ```
 
-Fall back to project + grep/jq only when the distinctive text needs real regex features KQL wildcards can't express (anchors, character classes, backreferences):
+Fall back to project + a filter only when the distinctive text needs real regex features KQL wildcards can't express (anchors, character classes, backreferences):
 
 ```bash
 "$CLP" search --projection <timestamp>,<severity>,$MSG "$ARCHIVE" '*' \
-  | jq -rc --arg f "$MSG" 'select(.[$f]|test("DistinctiveStaticText";"i"))'
+  | python3 - "$MSG" <<'PY'
+  import json, re, sys
+  pattern = re.compile("DistinctiveStaticText", re.I)
+  for line in sys.stdin:
+      if line.startswith("{"):
+          value = str(json.loads(line).get(sys.argv[1], ""))
+          if pattern.search(value):
+              print(line, end="")
+  PY
 ```
 
 Narrow with a working scalar field first when you can — `<severity>:` and `<logger>:` are also searchable, and combine with the message wildcard in one compound query:
@@ -65,16 +80,42 @@ Rules of thumb: pick the rarest distinctive static text (never a variable or a s
 
 ## Analysis patterns
 
-- **Count per template (all templates):** `head -20 /tmp/log-shape-freqs.ndjson`, or `jq -r 'select(.log_shape|test("error";"i")) | "\(.count)\t\(.log_shape)"' /tmp/log-shape-freqs.ndjson` for a subset.
+- **Count per template (all templates):** `head -20 /tmp/log-shape-freqs.ndjson`, or filter a subset in python:
+  ```bash
+  python3 - error /tmp/log-shape-freqs.ndjson <<'PY'
+  import json, re, sys
+  pattern = re.compile(sys.argv[1], re.I)
+  for line in open(sys.argv[2]):
+      record = json.loads(line)
+      if pattern.search(record["log_shape"]):
+          print(f'{record["count"]}\t{record["log_shape"]}')
+  PY
+  ```
 - **Count for a group of templates:** sum `count` over the templates matching the group's static text. This is O(distinct templates), not a record scan, so prefer it to `--count` whenever the group is defined by message text alone:
   ```bash
-  jq -s '[.[] | select(.log_shape | test("compact|flush|memtable|ingest";"i")) | .count] | add' /tmp/log-shape-freqs.ndjson
+  python3 - 'compact|flush|memtable|ingest' /tmp/log-shape-freqs.ndjson <<'PY'
+  import json, re, sys
+  pattern = re.compile(sys.argv[1], re.I)
+  total = 0
+  for line in open(sys.argv[2]):
+      record = json.loads(line)
+      if pattern.search(record["log_shape"]):
+          total += record["count"]
+  print(total)
+  PY
   ```
 - **Time span:** `timeRange` in the archive's `.yscope-clp-archive.json` (`begin`/`end`, the earliest and latest timestamp across every record, recorded at compression). When it is absent or null, the span is unavailable; never estimate it from fetched records.
 - **Scoped semantic:** `"${CLAUDE_PLUGIN_ROOT}/bin/clp" search ARCHIVE 'semantic("...") AND <severity>:<value>'`
-- **Filter the baseline with jq:**
+- **Filter the baseline by template text:**
   ```bash
-  jq -r 'select(.log_shape|test("error|fail|exception";"i")).log_shape' /tmp/log-shape-freqs.ndjson
+  python3 - 'error|fail|exception' /tmp/log-shape-freqs.ndjson <<'PY'
+  import json, re, sys
+  pattern = re.compile(sys.argv[1], re.I)
+  for line in open(sys.argv[2]):
+      log_shape = json.loads(line)["log_shape"]
+      if pattern.search(log_shape):
+          print(log_shape)
+  PY
   ```
 
 ## When to still use semantic search

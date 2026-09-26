@@ -64,7 +64,7 @@ SUBCOMMANDS = {
                         "structurized into columns"),
             "folder": ("compress-folder.sh",
                        "log files and folders of log files, at the format `clp detect` found"),
-            "status": ("compress-status.sh",
+            "status": ("compress_status.py",
                        "the state of a `clp compress folder` run: running, done, failed or died"),
         }), "compress logs into an archive, or report a running compression"),
     "search": ("search.sh",

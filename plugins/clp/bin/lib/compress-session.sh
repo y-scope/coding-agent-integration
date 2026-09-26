@@ -9,6 +9,9 @@ CLP_PLUGIN_BIN_DIR="$(cd -- "${CLP_PLUGIN_LIB_DIR}/.." && pwd -P)"
 # shellcheck disable=SC1091
 source "${CLP_PLUGIN_LIB_DIR}/clp-common.sh"
 
+# Every JSON document this run writes is built by a python helper.
+require_python3 || exit $?
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -537,61 +540,33 @@ reduction_percent="$(awk -v raw="$total_bytes" -v reduction="$reduction_bytes" '
 clp_archive_dir="$(resolve_clp_s_archive_dir "$output_dir" 2>/dev/null || true)"
 
 metadata_file="$(clp_archive_metadata_file "$output_dir")"
-command_json="$(printf '%s\n' "${cmd[@]}" | jq -R . | jq -s .)"
-jq -n \
-  --arg schemaVersion "1" \
-  --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --arg plugin "yscope-clp" \
-  --arg agent "$agent" \
-  --arg sourceRoot "$source_root" \
-  --arg archiveRoot "${resolved_archives_root:-}" \
-  --arg archiveRootSource "${archives_root_source:-output-dir}" \
-  --arg archiveDir "$output_dir" \
-  --arg clpArchiveDir "$clp_archive_dir" \
-  --arg timestampKey "$timestamp_key" \
-  --argjson timeRange "$time_range_json" \
-  --arg selectionFile "$selection_file" \
-  --arg sessionIndex "$session_index" \
-  --arg sessionFile "$session_file" \
-  --arg sessionId "$selected_session_id" \
-  --arg sessionSha256 "$session_sha256" \
-  --argjson inputBytes "$total_bytes" \
-  --argjson archiveBytes "$archive_bytes" \
-  --argjson reductionBytes "$reduction_bytes" \
-  --arg compressionRatio "$compression_ratio" \
-  --arg reductionPercent "$reduction_percent" \
-  --argjson command "$command_json" \
-  '{
-    schemaVersion: ($schemaVersion | tonumber),
-    createdAt: $createdAt,
-    plugin: $plugin,
-    agent: $agent,
-    sourceRoot: $sourceRoot,
-    archiveRoot: (if $archiveRoot == "" then null else $archiveRoot end),
-    archiveRootSource: $archiveRootSource,
-    archiveDir: $archiveDir,
-    clpArchiveDir: (if $clpArchiveDir == "" then null else $clpArchiveDir end),
-    timestampKey: (if $timestampKey == "" then null else $timestampKey end),
-    timeRange: $timeRange,
-    selection: {
-      file: (if $selectionFile == "" then null else $selectionFile end),
-      index: (if $sessionIndex == "" then null else ($sessionIndex | tonumber) end)
-    },
-    session: {
-      file: $sessionFile,
-      id: $sessionId,
-      sha256: $sessionSha256,
-      bytes: $inputBytes
-    },
-    compression: {
-      rawBytes: $inputBytes,
-      archiveBytes: $archiveBytes,
-      ratio: $compressionRatio,
-      reductionBytes: $reductionBytes,
-      reductionPercent: $reductionPercent
-    },
-    command: $command
-  }' > "$metadata_file"
+session_args=(
+  session-metadata
+  --out "$metadata_file"
+  --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  --agent "$agent"
+  --source-root "$source_root"
+  --archive-root "${resolved_archives_root:-}"
+  --archive-root-source "${archives_root_source:-output-dir}"
+  --archive-dir "$output_dir"
+  --clp-archive-dir "$clp_archive_dir"
+  --timestamp-key "$timestamp_key"
+  --time-range "$time_range_json"
+  --selection-file "$selection_file"
+  --session-index "$session_index"
+  --session-file "$session_file"
+  --session-id "$selected_session_id"
+  --session-sha256 "$session_sha256"
+  --input-bytes "$total_bytes"
+  --archive-bytes "$archive_bytes"
+  --reduction-bytes "$reduction_bytes"
+  --compression-ratio "$compression_ratio"
+  --reduction-percent "$reduction_percent"
+)
+for arg in "${cmd[@]}"; do
+  session_args+=(--command="$arg")
+done
+python3 "${CLP_PLUGIN_LIB_DIR}/archive_json.py" "${session_args[@]}"
 
 echo "Raw input bytes: $total_bytes"
 echo "Archive bytes: $archive_bytes"

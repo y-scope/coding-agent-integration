@@ -77,8 +77,6 @@ Methods, as defined by the classification contract (KQL is the rendered
                  matching lines are counted. The wrapper rewrites a column
                  clp-s cannot project (one inside an array, or an object);
                  its notes are recorded as projection_notes.
-  project+jq     wrapper --projection P ARCHIVES_DIR KQL | jq -c JQ; output
-                 lines are counted.
   semantic       wrapper --projection P ARCHIVES_DIR KQL; the match carries
                  the semantic node itself.
 
@@ -264,8 +262,6 @@ def build_stages(entry, kql, wrapper, archive):
     stages = [search]
     if method == "project+grep" and entry.get("grep"):
         stages.append(["grep", "-Ei", entry["grep"]])
-    elif method == "project+jq":
-        stages.append(["jq", "-c", entry.get("jq") or "."])
     return stages
 
 
@@ -297,7 +293,7 @@ def run_entry(entry, index, n, args, total, lines, run=None):
         "total_records": total,
         "ran_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     }
-    for key in ("match", "project", "grep", "jq", "origin", "category", "priority", "stage"):
+    for key in ("match", "project", "grep", "origin", "category", "priority", "stage"):
         if entry.get(key):
             result[key] = entry[key]
 

@@ -44,7 +44,7 @@ LEAF_OPS = ("eq", "contains", "prefix", "exists", "gt", "gte", "lt", "lte")
 # The leaf key that declares which types of a drifting field a filter is for.
 TYPES_KEY = "types"
 COMPARISONS = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
-METHODS = ("count", "project+grep", "project+jq", "semantic")
+METHODS = ("count", "project+grep", "semantic")
 
 # Characters that end or restructure an unquoted key. Keys come from the
 # discovered schema (dotted paths such as attr.durationMillis), so reject
@@ -340,7 +340,11 @@ def check_entry(entry):
         raise FilterError(f"unknown method {method!r} (expected one of {', '.join(METHODS)})")
     if method == "semantic" and not _has_semantic(entry["match"]):
         raise FilterError("method is semantic but match has no semantic node")
-    for key in ("label", "project", "grep", "jq"):
+    if "jq" in entry:
+        raise FilterError(
+            "plan entry has a removed 'jq' program; write the filter as 'match' instead"
+        )
+    for key in ("label", "project", "grep"):
         if key in entry and not isinstance(entry[key], str):
             raise FilterError(f"{key!r} must be a string")
     return kql
