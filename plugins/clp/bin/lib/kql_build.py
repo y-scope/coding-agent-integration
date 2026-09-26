@@ -30,12 +30,19 @@ A semantic node must be scoped: some enclosing "all" must also hold a child
 without any semantic node, so the semantic match is always ANDed with a
 concrete filter. It may not appear under "not".
 
+A field node may also carry {"types": ["ClpString"]} (or one name), declaring
+which of a drifting field's types the filter is written for. It does not change
+the KQL; it tells `check-plan --drift-file` that the records of the other types
+are excluded on purpose (lib/plan_drift).
+
 Stdlib only, like the other log-shape-* helpers.
 """
 
 import re
 
 LEAF_OPS = ("eq", "contains", "prefix", "exists", "gt", "gte", "lt", "lte")
+# The leaf key that declares which types of a drifting field a filter is for.
+TYPES_KEY = "types"
 COMPARISONS = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
 METHODS = ("count", "project+grep", "project+jq", "semantic")
 
@@ -160,7 +167,7 @@ def _kind(node, path):
             f"or field (got {', '.join(sorted(node)) or 'nothing'})"
         )
     kind = kinds[0]
-    allowed = {"leaf": {"field", *LEAF_OPS}}.get(kind, {kind})
+    allowed = {"leaf": {"field", TYPES_KEY, *LEAF_OPS}}.get(kind, {kind})
     extra = sorted(set(node) - allowed)
     if extra:
         raise FilterError(f"{path}: unexpected key(s) {', '.join(extra)} in a {kind} node")
@@ -180,8 +187,66 @@ def _has_semantic(node):
     return False
 
 
+def _declared_types(node, path):
+    """The clp-s type names a leaf declares with "types" -- the shapes of a
+    drifting field this filter is written for. A tuple, empty when the leaf
+    declares nothing. The names are not checked against any archive here;
+    check-plan --drift-file does that against the drift file."""
+    if TYPES_KEY not in node:
+        return ()
+    value = node[TYPES_KEY]
+    names = [value] if isinstance(value, str) else value
+    if not isinstance(names, list) or not names:
+        raise FilterError(
+            f"{path}: {TYPES_KEY} must be a clp-s type name or a non-empty list of them"
+        )
+    for i, name in enumerate(names):
+        _text(name, f"{path}.{TYPES_KEY}[{i}]", "each declared type")
+    return tuple(dict.fromkeys(names))
+
+
+def _collect_leaves(node, out, path):
+    if not isinstance(node, dict):
+        return
+    if "field" in node:
+        out.append((node, path))
+        return
+    if "not" in node:
+        _collect_leaves(node["not"], out, f"{path}.not")
+        return
+    for key in ("all", "any"):
+        if isinstance(node.get(key), list):
+            for i, child in enumerate(node[key]):
+                _collect_leaves(child, out, f"{path}.{key}[{i}]")
+
+
+def filter_fields(node):
+    """[(field, declared_types)] for every field a filter targets, in the order
+    they appear. A field that several leaves target is listed once, and counts
+    as declared only when every one of those leaves declares a type: an
+    undeclared leaf on the same field is at risk whatever its siblings say.
+
+    Call it on a filter render() accepted; it raises FilterError on the same
+    malformed "types" that render() rejects."""
+    leaves = []
+    _collect_leaves(node, leaves, "match")
+    declared, undeclared = {}, set()
+    for leaf, path in leaves:
+        field = leaf["field"]
+        names = _declared_types(leaf, path)
+        declared.setdefault(field, [])
+        declared[field] += [n for n in names if n not in declared[field]]
+        if not names:
+            undeclared.add(field)
+    return [
+        (field, () if field in undeclared else tuple(names))
+        for field, names in declared.items()
+    ]
+
+
 def _render_leaf(node, path):
     field = _field(node, path)
+    _declared_types(node, path)
     ops = [op for op in LEAF_OPS if op in node]
     if len(ops) != 1:
         raise FilterError(f"{path}: a field node needs exactly one of {', '.join(LEAF_OPS)}")

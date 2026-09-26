@@ -217,8 +217,16 @@ jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_pl
 #    announce the retry to the user and re-run the subagent once with the
 #    error lines appended to its prompt. On GROWTH the new entries may use
 #    the base's categories, so pass the base classification too:
-"${CLAUDE_PLUGIN_ROOT}/bin/kql-build" check-plan /tmp/log-shape-class.json || exit 1     # NEW
+#    Always pass --drift-file: it catches a filter that will silently answer
+#    about only part of its field, because clp-s stores a node per type and a
+#    scalar filter reaches a path's scalar types but never its Object or
+#    StructuredArray nodes. On one archive `toolUseResult:*` matches 116
+#    records, not the 4,641 that carry the path. An entry fails when the share
+#    it can reach falls below 0.95.
 "${CLAUDE_PLUGIN_ROOT}/bin/kql-build" check-plan /tmp/log-shape-class.json \
+  --drift-file "$TYPE_DRIFT_FILE" || exit 1                                              # NEW
+"${CLAUDE_PLUGIN_ROOT}/bin/kql-build" check-plan /tmp/log-shape-class.json \
+  --drift-file "$TYPE_DRIFT_FILE" \
   --categories-from /tmp/log-shape-base-classification.json || exit 1                    # GROWTH
 
 # 3. Expand id-based assignments to every member template, by hash. Exits 2
@@ -253,12 +261,20 @@ else
 fi
 ```
 
-Then store it for the next run, as a separate background Bash call (`run_in_background`, no trailing `&`), and go straight on to step 7 without waiting. Use APP_KEY and MAX_CHARS from the bootstrap; `--max-chars` must match the bootstrap's, or the stored fingerprint won't match the next run:
+Then store it for the next run, as a separate background Bash call (`run_in_background`, no trailing `&`), and go straight on to step 7 without waiting.
+
+**Key it with the field rules, not with the bootstrap's `APP_KEY`.** A ruled template takes its category from its rule, so the rules are part of the classification and belong in the key. The bootstrap computed `APP_KEY` before the rules existed — they come from `log-shape-cluster fields`, which runs later — so storing under it would file this classification as though no rules had applied. Re-key first, passing the same rules file you gave `cluster`, and use the same `--max-chars` as the bootstrap or the fingerprint will not match next run:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/log-shape-cache" put --key "$APP_KEY" --max-chars "$MAX_CHARS" \
+KEY=$("${CLAUDE_PLUGIN_ROOT}/bin/log-shape-cache" key \
+  --log-shapes-file "$LOG_SHAPES_FILE" --max-chars "$MAX_CHARS" \
+  --field-rules /tmp/log-shape-field-rules.json)
+"${CLAUDE_PLUGIN_ROOT}/bin/log-shape-cache" put --key "$KEY" --max-chars "$MAX_CHARS" \
+  --field-rules /tmp/log-shape-field-rules.json \
   < /tmp/log-shape-classification.json
 ```
+
+Omit both `--field-rules` when this run applied no rules; "no rules" is its own key and must not be conflated with a rule set. Sanity-check that the key you store under matches what the clusterer used: `expand` prints `RULES_DIGEST=`, and it must equal the digest in the key you just computed.
 
 When it finishes, mention in your next message that the classification is cached for later runs; it needs no message of its own. If it fails, report the error; this run's report does not depend on it.
 

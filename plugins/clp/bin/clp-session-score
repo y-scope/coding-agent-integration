@@ -45,6 +45,13 @@ either mode. If it reports defects they are printed verbatim, no JSON is
 written, and the exit code is 2. A customer scale that does not validate is
 never quietly swapped for the default: the caller has to see the problem.
 
+An axis the scale gives a `min_denominator` is not rated when its denominator
+falls below it: a rate over a handful of observations is noise whatever ladder
+reads it, so it goes to `unscored` with `"insufficient_data": true` and the two
+counts, rather than being rated on a sample too small to mean anything. That is
+a third reason an axis can be unscored, distinct from an unmeasurable one and
+from a gated one, and all three leave their group's mean resting on fewer axes.
+
 An axis the scale marks `gated_by` is scored only when the cohort declares the
 intent it needs: C4 autonomy means "how far a session meant to run unattended
 got without a person", so in a supervised session it is left unscored rather
@@ -83,7 +90,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 VERSION = "1.0.0"
-SCHEMA_VERSION = "1.2.0"   # 1.1.0 added basis/rationale/anchors; 1.2.0 adds gated (policy) unscoring
+SCHEMA_VERSION = "1.3.0"   # 1.1.0 basis/rationale/anchors; 1.2.0 gated unscoring; 1.3.0 min_denominator
 
 # The scale says what each threshold rests on. These are the short forms for the
 # table; the full word and the rationale are in the JSON. A scorecard resting
@@ -116,6 +123,7 @@ def scale_candidates():
 AXIS_HEAD = re.compile(r"^AXIS (\S+) group=(\S+) value=(\S+)(.*)$")
 AXIS_TAIL = re.compile(r'\s(components|reason)="(.*)"\s*$', re.S)
 AXIS_UNIT = re.compile(r"\bunit=(\S+)")
+AXIS_DEN = re.compile(r"\bdenominator=(\d+)\b")
 ALERT_LINE = re.compile(r"^ALERT=([^:\s]+):(\S+) value=(\S+) threshold=(\S+)\s*$")
 SCALE_LINE = re.compile(r"^(SCALE_OK|SCALE_PROBLEM=)")
 
@@ -148,9 +156,13 @@ def parse_axes_output(text):
                     reason = tail.group(2)
                 rest = rest[: tail.start()]
             unit = AXIS_UNIT.search(rest)
+            den = AXIS_DEN.search(rest)
             out["axes"].append({"id": axis_id, "group": group,
                                 "value": None if raw == "n/a" else as_number(raw),
                                 "unit": unit.group(1) if unit else None,
+                                # How many observations the rate rests on. None
+                                # where the divisor is not a count of things.
+                                "denominator": int(den.group(1)) if den else None,
                                 "components": components, "reason": reason})
             continue
         if "=" in line:
@@ -320,6 +332,24 @@ def check_cohort_values(pairs, scale):
     return problems
 
 
+def denominator_verdict(spec, denominator):
+    """(rate it?, reason) for an axis's minimum denominator.
+
+    A rate over a handful of observations is noise whatever ladder reads it, so
+    below the floor the axis is not rated at all. This is the project's own
+    convention: clp-bundle-review refuses to rate a signal on fewer than five
+    sessions. An axis that publishes no denominator is not a rate over countable
+    observations, so no floor applies to it.
+    """
+    floor = spec.get("min_denominator")
+    if floor is None or denominator is None:
+        return True, None
+    if denominator >= floor:
+        return True, None
+    return False, (f"rated over only {denominator} observations, below the {floor} this axis needs; "
+                   "a rate on that few is noise, so it is left unscored rather than rated")
+
+
 def gate_verdict(spec, cohort):
     """(scored?, reason) for an axis's gate. (True, None) when there is no gate.
 
@@ -374,6 +404,15 @@ def score_session(measured, scale, scale_path, scale_source, bundle, facts_file,
                              "reason": gate_reason, "gated": True,
                              "cohort_key": (spec.get("gated_by") or {}).get("cohort_key")})
             continue
+        # Scope first, then whether the number can be carried at all: an axis out
+        # of scope here would not be worth rating however many observations it had.
+        enough, thin_reason = denominator_verdict(spec, axis.get("denominator"))
+        if not enough:
+            unscored.append({"id": axis["id"], "group": axis["group"], "label": label,
+                             "reason": thin_reason, "insufficient_data": True,
+                             "denominator": axis.get("denominator"),
+                             "min_denominator": spec.get("min_denominator")})
+            continue
         rung = match_rung(spec, axis["value"])
         if rung is None:
             unscored.append({"id": axis["id"], "group": axis["group"], "label": label,
@@ -389,6 +428,7 @@ def score_session(measured, scale, scale_path, scale_source, bundle, facts_file,
             "direction": spec.get("direction"),
             "score": int(rung["score"]),
             "rung": rung,
+            "denominator": axis.get("denominator"),
             "cohort_relative": bool(spec.get("cohort_relative")),
             # Carried through from the scale so a score never travels without
             # the justification for the threshold that produced it.
@@ -507,8 +547,13 @@ def print_table(doc):
     if doc["unscored"]:
         print()
         for axis in doc["unscored"]:
-            gate = f" - gated on {axis['cohort_key']}" if axis.get("gated") else ""
-            print(f"UNSCORED {axis['id']} {axis['label']} ({axis['group']}){gate}")
+            if axis.get("gated"):
+                why = f" - gated on {axis['cohort_key']}"
+            elif axis.get("insufficient_data"):
+                why = f" - too few observations (n={axis['denominator']} < {axis['min_denominator']})"
+            else:
+                why = ""
+            print(f"UNSCORED {axis['id']} {axis['label']} ({axis['group']}){why}")
             for line in wrap_reason(axis["reason"]):
                 print(f"         {line}")
     if doc["alerts"]:

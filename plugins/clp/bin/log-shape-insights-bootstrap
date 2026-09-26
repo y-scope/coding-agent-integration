@@ -32,6 +32,18 @@ Options:
                      (default: 500, or $CLP_LOG_SHAPE_MAX_CHARS). Must match the
                      --max-chars later passed to log-shape-cluster and
                      log-shape-cache, or their fingerprints diverge.
+  --field-rules F    The field rules this run applies ({"field_rules": [...]},
+                     as log-shape-cluster is given). They are part of the
+                     fingerprint -- a ruled template takes the rule's category
+                     and never reaches the classifier -- so the cache is probed
+                     with them. Without the option, the rules file a previous
+                     run left in --out-dir (log-shape-field-rules.json) is used
+                     and reported; with neither, the probe runs with no rules,
+                     which is its own fingerprint. The rules are derived AFTER
+                     this bootstrap (log-shape-cluster fields --propose-rules),
+                     so the first run of an app has none to probe with: a later
+                     run finds the file and reuses the classification, and a run
+                     whose rules differ from the cached ones is never UPTODATE.
   --out-dir DIR      Where the intermediate files are written (default: /tmp).
   --cache-dir DIR    Classification cache dir (default: log-shape-cache default).
   --sample-cap N     Max records sampled for the value distributions
@@ -73,10 +85,23 @@ Summary keys printed on stdout (grep-able):
   FREQS=              OK | UNAVAILABLE  (UNAVAILABLE: an archive predates the
                       stored per-log-shape counts; FREQS_HINT= says why)
   CACHE_MODE=         UPTODATE | GROWTH | NEW  (from log-shape-cache diff)
+  CACHE_REASON=       why that mode: up-to-date | templates-grown | first-run |
+                      rules-changed. rules-changed is a NEW that is NOT a first
+                      run: this app IS classified, under field rules that are no
+                      longer the rules, so it is classified again -- tell the
+                      user that, not that the app is new
   APP_KEY= BASE_KEY=  cache keys (BASE_KEY only on GROWTH)
   TO_CLASSIFY=        number of templates that need classifying (0 on UPTODATE)
   MAX_CHARS=          character limit the fingerprint used; pass the same value
                       to log-shape-cluster and log-shape-cache
+  RULES_SOURCE=       flag (--field-rules) | found (left in --out-dir by an
+                      earlier run) | none  -- where the rules in the fingerprint
+                      came from
+  RULES_FILE=         the rules file the probe used (RULES_SOURCE=none: absent)
+  RULES_DIGEST=       their canonical digest, the value the key folds in. Pass
+                      the same rules to log-shape-cluster, and store the
+                      classification under a key computed with them
+                      (`log-shape-cache key --field-rules`)
   LOG_SHAPES_FILE=    {"log_shape":"..."} NDJSON, the full template text
                       (SHAPES_SOURCE=dump only)
   TO_CLASSIFY_FILE=   the templates to classify (empty on UPTODATE)
@@ -137,6 +162,7 @@ EOF
 max_chars="${CLP_LOG_SHAPE_MAX_CHARS:-500}"
 out_dir="/tmp"
 cache_dir=""
+field_rules=""
 sample_cap="${CLP_BOOTSTRAP_SAMPLE_CAP:-20000}"
 heartbeat=30
 force_dump=0
@@ -153,6 +179,9 @@ while [[ $# -gt 0 ]]; do
     --cache-dir)
       [[ $# -ge 2 ]] || { echo "error: --cache-dir requires a value" >&2; exit 2; }
       cache_dir="$2"; shift 2 ;;
+    --field-rules)
+      [[ $# -ge 2 ]] || { echo "error: --field-rules requires a value" >&2; exit 2; }
+      field_rules="$2"; shift 2 ;;
     --sample-cap)
       [[ $# -ge 2 ]] || { echo "error: --sample-cap requires a value" >&2; exit 2; }
       sample_cap="$2"; shift 2 ;;
@@ -206,6 +235,34 @@ field_counts_file="${out_dir}/log-shape-field-counts.ndjson"
 record_families_file="${out_dir}/log-shape-record-families.ndjson"
 structure_file="${out_dir}/log-shape-structure.txt"
 record_families_out_file="${out_dir}/log-shape-record-families.txt"
+# Where `log-shape-cluster fields --propose-rules` leaves the rules of a run, and
+# so where a later run of the same archive finds them.
+default_field_rules_file="${out_dir}/log-shape-field-rules.json"
+
+# --- Field rules in the fingerprint -------------------------------------------
+# The rules are part of the classification: a template whose values sit in a
+# ruled field takes the rule's category and is never clustered or classified. So
+# they are part of the cache key, and the probe below is given them. They are
+# derived after this bootstrap runs (from its own TEMPLATE_FIELDS_FILE), which
+# leaves the ordering: the FIRST run of an app probes with no rules, and a later
+# one probes with the rules the earlier run wrote here. Whatever the rules turn
+# out to be, an entry classified under different ones is never reported
+# UPTODATE -- the digest is in the key, so at worst the app is classified again.
+rules_source="none"
+if [[ -n "$field_rules" ]]; then
+  [[ -f "$field_rules" ]] || { echo "error: --field-rules file not found: $field_rules" >&2; exit 2; }
+  rules_source="flag"
+elif [[ -f "$default_field_rules_file" ]]; then
+  field_rules="$default_field_rules_file"
+  rules_source="found"
+fi
+rules_args=()
+[[ -n "$field_rules" ]] && rules_args=(--field-rules "$field_rules")
+# Also validates the rules file, here rather than after minutes of dumping.
+rules_digest="$("$CACHE_BIN" rules-digest ${rules_args[@]+"${rules_args[@]}"})" || exit 2
+if [[ "$rules_source" == "found" ]]; then
+  echo "[bootstrap] probing the classification cache with the field rules left in ${field_rules}; pass --field-rules to use another file, or delete it to probe with none"
+fi
 
 # --- Stored archives ----------------------------------------------------------
 # An archive is immutable. When every archive here was analyzed before, its
@@ -406,14 +463,14 @@ read_stored_freqs() {
 
 # --- 3. Classification-cache probe ---------------------------------------------
 probe_cache_file() {
-  "$CACHE_BIN" diff ${cache_args[@]+"${cache_args[@]}"} \
+  "$CACHE_BIN" diff ${cache_args[@]+"${cache_args[@]}"} ${rules_args[@]+"${rules_args[@]}"} \
     --max-chars "$max_chars" --log-shapes-file "$log_shapes_file" > "$diff_file"
 }
 # Exits 3 when templates need classifying: only their prefixes are stored. Its
 # note says so on stderr; the caller prints its own line, and the file probe
 # that follows repeats any cache warning.
 probe_cache_stored() {
-  "$CACHE_BIN" diff ${cache_args[@]+"${cache_args[@]}"} \
+  "$CACHE_BIN" diff ${cache_args[@]+"${cache_args[@]}"} ${rules_args[@]+"${rules_args[@]}"} \
     --max-chars "$max_chars" --archive-ids "$ids_csv" > "$diff_file" 2>/dev/null
 }
 
@@ -466,8 +523,13 @@ fi
 header="$(head -1 "$diff_file")"
 mode="$(printf '%s' "$header" | cut -f1)"
 app_key="$(printf '%s' "$header" | cut -f2)"
+# The reason is the header's LAST field, whichever mode it is.
+reason="$(printf '%s' "$header" | awk -F'\t' '{print $NF}')"
 base_key=""
 [[ "$mode" == "GROWTH" ]] && base_key="$(printf '%s' "$header" | cut -f3)"
+if [[ "$reason" == "rules-changed" ]]; then
+  echo "[bootstrap] this app IS classified, but under different field rules, so it is classified again — not a first run"
+fi
 # grep exits 1 when there is nothing to classify — the normal UPTODATE case.
 grep '^{' "$diff_file" > "$to_classify_file" || true
 to_classify="$(grep -c '^{' "$to_classify_file" || true)"
@@ -574,10 +636,14 @@ else
   echo "FREQS_HINT=the archive was compressed by a clp-s build that does not store per-log-shape counts; recompress it with the current plugin"
 fi
 echo "CACHE_MODE=$mode"
+echo "CACHE_REASON=$reason"
 echo "APP_KEY=$app_key"
 echo "BASE_KEY=$base_key"
 echo "TO_CLASSIFY=$to_classify"
 echo "MAX_CHARS=$max_chars"
+echo "RULES_SOURCE=$rules_source"
+[[ -n "$field_rules" ]] && echo "RULES_FILE=$field_rules"
+echo "RULES_DIGEST=$rules_digest"
 [[ "$shapes_source" == "dump" ]] && echo "LOG_SHAPES_FILE=$log_shapes_file"
 echo "TO_CLASSIFY_FILE=$to_classify_file"
 
