@@ -21,6 +21,10 @@ Options:
                       idle (default: 10); shorter gaps count as other.
   --human-tools LIST  Comma-separated tools that wait on the person (default:
                       AskUserQuestion,ExitPlanMode).
+  --calls             Also print one CALL line per model response, in time order: its
+                      turn and the tokens the API reported for it. Input is the context
+                      sent with that call, so the series shows the context growing and
+                      a compaction resetting it.
   --json              Print one JSON object instead of the lines below.
   --search-wrapper P  Search wrapper (default: clp-s-search-kql next to this
                       script).
@@ -33,9 +37,17 @@ split into human wait, tool, model, idle and other, with no second counted twice
 Output, one line each:
   TURNS=N PROMPTS=N TOOL_CALLS=N WITH_TOOL_DURATION=N
   TOTAL_MIN e2e=… human=… tool=… model=… idle=… other=…
+  TOTAL_TOKENS input=N output=N cache_read=N cache_write=N
   TURN n start=YYYY-MM-DD HH:MM e2e=… human=… tool=… model=… idle=… other=…
-       calls=N errors=N longest=<tool> <minutes> prompt="…"     (minutes, UTC)
+       calls=N errors=N tokens_in=N tokens_out=N longest=<tool> <minutes> prompt="…"
+       (minutes, UTC; tokens_in counts input, cache read and cache write together)
   WAIT <tool> <minutes> at=YYYY-MM-DD HH:MM [human]
+  CALL YYYY-MM-DD HH:MM:SS turn=n input=N output=N cache_read=N cache_write=N   (with --calls)
+
+Tokens are the usage the API reported for the main thread's model responses, each response
+counted once (its records repeat its usage). Input is counted on every call, so a long
+conversation's input total far exceeds its context size. Agents' tokens are not included: a
+bundle's catalog has them per agent (clp-bundle).
 
 Why: the harness's own turn_duration records nest inside each other and can be
 negative, so their durations cannot be added up or attributed. Wall-clock time here
@@ -54,6 +66,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "li
 from session_turns import (  # noqa: E402
     HUMAN_WAIT_TOOLS,
     IDLE_SECONDS,
+    TOKEN_FIELDS,
     breakdown,
     collect,
     longest_waits,
@@ -108,6 +121,7 @@ def main():
     parser.add_argument("--waits", type=int, default=8)
     parser.add_argument("--idle-minutes", type=float, default=IDLE_SECONDS / 60)
     parser.add_argument("--human-tools", default=",".join(HUMAN_WAIT_TOOLS))
+    parser.add_argument("--calls", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
         "--search-wrapper",
@@ -137,11 +151,20 @@ def main():
 
     keys = ("e2e_s", "human_s", "tool_s", "model_s", "idle_s", "other_s")
     total = {k: sum(t[k] for t in turns) for k in keys}
+    tokens = {name: sum(t["tokens"][name] for t in turns) for name, _ in TOKEN_FIELDS}
     shown = [t for t in turns if t["e2e_s"] >= args.min_minutes * 60]
     shown.sort(key=lambda t: -t["e2e_s"])
     if args.top > 0:
         shown = shown[:args.top]
     with_duration = sum(1 for t in session["tools"] if t["duration_ms"] is not None)
+    calls = []
+    if args.calls:
+        import bisect
+        starts = [t["start"] for t in turns]
+        for ended, usage in sorted(session["responses"], key=lambda r: r[0]):
+            index = bisect.bisect_right(starts, ended)
+            calls.append({"at": ended, "turn": turns[index - 1]["index"] if index else None,
+                          **{name: usage[name] for name, _ in TOKEN_FIELDS}})
 
     if args.json:
         def row(t):
@@ -150,7 +173,8 @@ def main():
         print(json.dumps({
             "turns": len(turns), "prompts": len(session["prompts"]),
             "tool_calls": len(session["tools"]), "with_tool_duration": with_duration,
-            "total_s": total, "longest_turns": [row(t) for t in shown],
+            "total_s": total, "total_tokens": tokens, "longest_turns": [row(t) for t in shown],
+            **({"calls": [{**c, "at": c["at"].isoformat()} for c in calls]} if args.calls else {}),
             "longest_waits": [{"tool": t["name"], "seconds": w, "at": stamp(t["emitted"]),
                                "human": t["name"] in human_tools} for t, w in waits],
         }, indent=1))
@@ -159,15 +183,21 @@ def main():
     print(f"TURNS={len(turns)} PROMPTS={len(session['prompts'])} "
           f"TOOL_CALLS={len(session['tools'])} WITH_TOOL_DURATION={with_duration}")
     print("TOTAL_MIN " + " ".join(f"{k[:-2]}={minutes(total[k])}".replace("e2e=", "e2e=") for k in keys))
+    print("TOTAL_TOKENS " + " ".join(f"{name}={tokens[name]}" for name, _ in TOKEN_FIELDS))
     for t in shown:
         longest = f"{t['longest_wait'][0]} {minutes(t['longest_wait'][1])}" if t["longest_wait"] else "-"
         print(f"TURN {t['index']} start={stamp(t['start'])} "
               + " ".join(f"{k[:-2]}={minutes(t[k])}" for k in keys)
-              + f" calls={t['tool_calls']} errors={t['errors']} longest={longest} "
+              + f" calls={t['tool_calls']} errors={t['errors']} "
+              + f"tokens_in={t['tokens']['input'] + t['tokens']['cache_read'] + t['tokens']['cache_write']} "
+              + f"tokens_out={t['tokens']['output']} longest={longest} "
               + f"prompt={json.dumps(t['prompt'], ensure_ascii=False)}")
     for tool, seconds in waits:
         flag = " human" if tool["name"] in human_tools else ""
         print(f"WAIT {tool['name']} {minutes(seconds)} at={stamp(tool['emitted'])}{flag}")
+    for c in calls:
+        print(f"CALL {c['at'].strftime('%Y-%m-%d %H:%M:%S')} turn={c['turn'] if c['turn'] else '-'} "
+              + " ".join(f"{name}={c[name]}" for name, _ in TOKEN_FIELDS))
     return 0
 
 

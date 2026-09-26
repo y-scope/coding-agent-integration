@@ -116,6 +116,10 @@ def cmd_show(args, db):
     print(f"STATUS {n.get('status', '-')} cause={n.get('cause', '-')} attempts={n.get('attempts', '-')} "
           f"tool_calls={n.get('tool_calls', '-')} errors={n.get('errors', '-')}")
     print(f"TIME {n.get('start', '-')} -> {n.get('end', '-')} minutes={minutes(node)}")
+    if n.get("tokens_input") is not None:
+        print(f"TOKENS input={n['tokens_input']} output={n['tokens_output']} cache_read={n['tokens_cache_read']} "
+              f"cache_write={n['tokens_cache_write']}" + (f" runtime_reported={n['attrs']['runtime_tokens']}"
+                                                          if n["attrs"].get("runtime_tokens") is not None else ""))
     ctx = " ".join(f"{k}={n[k]}" for k in ("run_id", "task_id", "instance", "phase") if n.get(k))
     if n.get("unit"):
         ctx += f" unit={n['unit']['id']}"

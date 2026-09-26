@@ -106,19 +106,25 @@ Subagent prompt template (fill in `ARCHIVE`, `PLUGIN_BIN`, `GOAL`, and `BUNDLE` 
    transcript, workflow runs and journals). Answer structure in SQL first, then fetch evidence:
    - PLUGIN_BIN/clp-bundle BUNDLE sql "SELECT ..." (read-only) over the catalog:
      nodes(id, kind, label, agent_id, run_id, task_id, instance, phase, start, end, status, cause,
-     attempts, tool_calls, errors, tokens, attrs JSON); kind is main, agent (direct or nested),
+     attempts, tool_calls, errors, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write,
+     attrs JSON); tokens_* are the usage the API reported (each response counted once; input is counted
+     on every call); a run's attrs.runtime_tokens is the workflow runtime's own, smaller figure; kind is main, agent (direct or nested),
      run (a workflow's definition), workflow (one launch of it; a resume is another, id ending ~2),
      phase, unit (a logical workflow agent), attempt (one try of a unit), launch_error. Attempt
      status: ok, failed (cause api-503, api-400, timeout), stalled-retried (no outcome, later
      retried), unresolved. Agent status: completed, failed, no-notification.
      edges(src, dst, kind: launch, result, contains, executes, ran, resume, phase_order; tool_use_id).
      events(uuid, kind, pos, agent_id, ts, type, turn, human, interrupt, is_error, ref_agent_id,
-     ref_task_id) with event_tools(event -> events.id, tool_use_id, role use|result, name, is_error):
-     one row per user or assistant record, no text.
+     ref_task_id, message_id, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write) with
+     event_tools(event -> events.id, tool_use_id, role use|result, name, is_error): one row per user or
+     assistant record, no text. tokens_* are set on one record per model response only, so a sum counts
+     each call once; tokens_input is the context sent with that call.
    - Starter SQL:
      failures by cause: select kind, status, cause, count(*) n from nodes where kind in ('agent','attempt') group by 1,2,3 order by n desc
      workflow runs by wasted attempts: select r.label, r.status, count(*) attempts, sum(a.status != 'ok') not_ok from nodes a join nodes r on r.id = 'run:' || a.run_id where a.kind = 'attempt' group by a.run_id order by not_ok desc
      longest agents: select id, label, status, round((julianday(end) - julianday(start)) * 1440, 1) minutes from nodes where kind = 'agent' order by minutes desc limit 5
+     tokens by agent: select id, label, tokens_input, tokens_output from nodes where kind in ('agent','run') order by tokens_input desc limit 10
+     context over time for one agent: select ts, tokens_input context, tokens_output from events where agent_id = 'ID' and tokens_input is not null order by ts
      last tool before each stall: select coalesce((select t.name from events e join event_tools t on t.event = e.id and t.role = 'use' where e.agent_id = n.agent_id order by e.ts desc, e.id desc limit 1), '(none)') last_tool, count(*) n from nodes n where n.kind = 'attempt' and n.status = 'stalled-retried' group by 1 order by n desc
    - Evidence: PLUGIN_BIN/clp-bundle BUNDLE show ID (catalog row, parents, children, archive and
      query) and evidence ID (its records, time-ordered; a run's evidence is its runtime log, with
@@ -168,7 +174,7 @@ run the health check below, report what stands out with numbers, then offer the 
 
 | Signal | Command | Read it as |
 | --- | --- | --- |
-| Where time went | `clp-s-session-turns ARCHIVE` | Model, human wait, tool, idle per turn; the longest waits |
+| Where time went, and tokens | `clp-s-session-turns ARCHIVE` | Model, human wait, tool, idle per turn; the longest waits; tokens in total and per turn (as the API reported them, each response counted once) |
 | Tool errors | `clp-s-search-kql --count ARCHIVE 'message.content.is_error:true'` | Failed tool calls on the main thread |
 | API errors | `clp-s-search-kql --count ARCHIVE 'isApiErrorMessage:true'` | Provider or gateway failures |
 | Interrupts | `clp-s-search-kql --count ARCHIVE 'message.content.text:"[Request interrupted*"'` | The user (or the runtime) stopped a response |
@@ -187,7 +193,7 @@ run the health check below, report what stands out with numbers, then offer the 
 | Where the time went | `clp-s-session-turns` | The longest turn, its longest wait, that tool call and its output |
 | What failed, and whether it recovered | Error counts; error messages grouped by CLP's template: `clp-s-search-kql --experimental --projection 'uuid,shape(toolUseResult)' ARCHIVE 'message.content.is_error:true'` (every failed tool call carries its error as the top-level string `toolUseResult`; `shape()` cannot reach the text inside `message.content`) | One template's records: keep each record's `uuid` from that projection (exact), or filter with the template's literal text and `*` for each variable, as in `shape(toolUseResult): "Error: Exit code*"` (a superset: a typed `%int%` matches nothing); then the records just before and after |
 | Whether effort was wasted | Repeated templates (the same command shape many times) | Each occurrence and what followed it |
-| What it cost | `message.usage.*_tokens` on assistant records; compactions | The heaviest turns or agents |
+| What it cost | `clp-s-session-turns` (TOTAL_TOKENS, and tokens per turn); for a bundle, `tokens_*` on nodes | The heaviest turns or agents; `clp-s-session-turns --calls` or the events' `tokens_input` for the context per call (a sharp drop is a compaction) |
 | What it produced | `type:"pr-link"` records; edits (`toolUseResult.structuredPatch`, `toolUseResult.filePath`) | The turn or agent that made a PR, the edits and test runs before it |
 | How often the human stepped in | Prompts, interrupts, denials, `AskUserQuestion` waits | The prompt and what preceded it |
 | Which agents did what, and why they failed | Bundle catalog SQL | `clp-bundle show`, `evidence`, then back with `who --uuid` |

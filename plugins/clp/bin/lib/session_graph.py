@@ -25,6 +25,8 @@ or before it started. Stdlib only.
 
 import json
 import re
+
+from session_turns import TOKEN_FIELDS, final_usage, usage_of
 from collections import Counter, defaultdict
 from datetime import datetime
 
@@ -83,13 +85,21 @@ def ending_cause(record):
 
 
 def transcript_span(records):
-    """(first ts, last ts, records, tool calls, errors, ending cause) of an agent transcript. Reads the
+    """(first ts, last ts, records, tool calls, errors, ending cause, tokens) of an agent transcript; tokens
+    are its responses' usage, each response counted once (session_turns.response_tokens). Reads the
     records once, so they can be a stream."""
     first = last = final = None
     count = calls = errors = 0
+    usage = {}
     for r in records:
         count += 1
         final = r
+        m = r.get("message")
+        if (r.get("type") == "assistant" and isinstance(m, dict) and isinstance(m.get("id"), str)
+                and m.get("model") != "<synthetic>" and m.get("id") != "<synthetic>"):
+            u = usage_of(m)
+            if u is not None:
+                usage[m["id"]] = final_usage(usage.get(m["id"]), u)
         t = parse_ts(r.get("timestamp"))
         if t:
             first = t if first is None or t < first else first
@@ -100,7 +110,13 @@ def transcript_span(records):
                 if isinstance(b, dict):
                     calls += b.get("type") == "tool_use"
                     errors += bool(b.get("is_error"))
-    return first, last, count, calls, errors, ending_cause(final)
+    tokens = {name: sum(u[name] for u in usage.values()) for name, _ in TOKEN_FIELDS}
+    return first, last, count, calls, errors, ending_cause(final), tokens
+
+
+def add_tokens(*parts):
+    """The sum of token dicts."""
+    return {name: sum(p[name] for p in parts) for name, _ in TOKEN_FIELDS}
 
 
 class Graph:
@@ -136,6 +152,7 @@ def _scan_main(records, g, launches, notified):
     """Launches, their results and the completion notifications in the main log."""
     first = last = None
     prompts = []
+    usage = {}
     for r in records:
         t = parse_ts(r.get("timestamp"))
         if t:
@@ -143,6 +160,10 @@ def _scan_main(records, g, launches, notified):
             last = t if last is None or t > last else last
         m = r.get("message")
         if r.get("type") == "assistant" and isinstance(m, dict):
+            if isinstance(m.get("id"), str) and m.get("model") != "<synthetic>" and m.get("id") != "<synthetic>":
+                u = usage_of(m)
+                if u is not None:
+                    usage[m["id"]] = final_usage(usage.get(m["id"]), u)
             for b in m.get("content") or []:
                 if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in ("Agent", "Workflow"):
                     launches[b["id"]] = {"at": t, "name": b["name"], "input": b.get("input") or {}, "owner": "main"}
@@ -155,7 +176,8 @@ def _scan_main(records, g, launches, notified):
                 prompts.append(t)
         for txt in _texts(r):
             _note(txt, t, notified)
-    g.node("main", "main", start=iso(first), end=iso(last), prompts=[iso(p) for p in prompts if p])
+    g.node("main", "main", start=iso(first), end=iso(last), prompts=[iso(p) for p in prompts if p],
+           tokens={name: sum(u[name] for u in usage.values()) for name, _ in TOKEN_FIELDS})
 
 
 def _record_result(launch, tool_use_result, block):
@@ -209,10 +231,10 @@ def build_graph(session):
     for aid, m in metas.items():
         if m["workflow_dir"]:
             continue
-        first, last, records, calls, errors, cause = spans[aid]
+        first, last, records, calls, errors, cause, tokens = spans[aid]
         g.node(f"agent:{aid}", "agent", label=m.get("description"), agent_type=m.get("agentType"),
                depth=m.get("spawnDepth"), start=iso(first), end=iso(last), records=records, tool_calls=calls,
-               errors=errors, cause=cause)
+               errors=errors, cause=cause, tokens=tokens)
         if m.get("parentAgentId"):
             g.edge(f"agent:{m['parentAgentId']}", f"agent:{aid}", "launch", first, via="parentAgentId",
                    tool_use_id=m.get("toolUseId"))
@@ -259,6 +281,7 @@ def build_graph(session):
             status = d.get("status") if k == len(instances) - 1 else notified.get(inst["task"], (None, None))[1]
             g.node(nid, "workflow", label=d.get("workflowName"), run_id=run, task_id=inst["task"], instance=k + 1,
                    resumed_from=inst["resumed_from"], status=status, attempts=len(mine),
+                   tokens=add_tokens(*(spans[a][6] for a in mine)),
                    start=iso(min(starts)) if starts else iso(inst["at"]),
                    end=iso(max(ends)) if ends else iso(inst["at"]))
             g.edge(nid, f"run:{run}", "executes")
@@ -272,7 +295,8 @@ def build_graph(session):
         inst_nodes = [g.nodes[i] for i in ids]
         g.node(f"run:{run}", "run", label=d.get("workflowName"), run_id=run, status=d.get("status"),
                instances=len(instances), agent_count=d.get("agentCount"), attempts=len(attempts),
-               run_duration_ms=d.get("durationMs"), tokens=d.get("totalTokens"), tool_calls=d.get("totalToolCalls"),
+               run_duration_ms=d.get("durationMs"), runtime_tokens=d.get("totalTokens"), tool_calls=d.get("totalToolCalls"),
+               tokens=add_tokens(*(spans[a][6] for a in attempts)),
                stall_lines=sum("[stall]" in l for l in logs), failure_lines=sum("failed" in l for l in logs),
                start=min((n["start"] for n in inst_nodes if n["start"]), default=None),
                end=max((n["end"] for n in inst_nodes if n["end"]), default=None))
@@ -304,10 +328,10 @@ def build_graph(session):
                    end=iso(last), outcomes=[final.get(a) for a in group], stall_retries=stalls)
             g.edge(f"phase:{run}:{pi}" if pi else f"run:{run}", uid, "contains", phase_known=bool(pi))
             for a in group:
-                f_, l_, records, calls, errors, cause = spans[a]
+                f_, l_, records, calls, errors, cause, tokens = spans[a]
                 g.node(f"attempt:{a}", "attempt", agent_type=metas[a].get("agentType"), start=iso(f_), end=iso(l_),
                        records=records, tool_calls=calls, errors=errors, outcome=final.get(a), cause=cause,
-                       instance=instance_of_attempt[a])
+                       instance=instance_of_attempt[a], tokens=tokens)
                 g.edge(uid, f"attempt:{a}", "contains")
     g.wf_json = wf_json
     return g

@@ -21,8 +21,11 @@ import struct
 import subprocess
 from datetime import datetime
 
-# The catalog's layout. A catalog of another layout is refused, and rebuilt from its bundle.
-LAYOUT = 2
+# The catalog's layout. A catalog of another layout is refused, and rebuilt from its bundle
+# (`clp-bundle BUNDLE rebuild`) when the bundle's manifest layout is current.
+LAYOUT = 3
+# The layout of manifest.json, archives/ and files/. A bundle of another layout is made again (`build --force`).
+MANIFEST_LAYOUT = 2
 
 SCHEMA = """
 CREATE TABLE bundle(k TEXT PRIMARY KEY, v TEXT);
@@ -35,9 +38,14 @@ CREATE TABLE sources(path TEXT PRIMARY KEY, kind TEXT, bytes INTEGER, sha256 TEX
                      first_pos INTEGER, records INTEGER, nul_bytes INTEGER, damaged_lines INTEGER);
 CREATE TABLE agents(agent_id TEXT PRIMARY KEY, run_id TEXT, agent_type TEXT, description TEXT,
                     depth INTEGER, parent_agent_id TEXT, tool_use_id TEXT, is_fork INTEGER, model TEXT);
+-- tokens_*: the usage the API reported for the node's model responses, each response counted once: the
+-- main thread's own, an agent's or attempt's transcript, a workflow instance's or run's attempts summed.
+-- Input is counted on every call. The workflow runtime's own figure, which is closer to the final context
+-- size, is attrs.runtime_tokens on run nodes.
 CREATE TABLE nodes(id TEXT PRIMARY KEY, kind TEXT, label TEXT, agent_id TEXT, run_id TEXT, task_id TEXT,
                    instance TEXT, phase TEXT, start TEXT, end TEXT, status TEXT, cause TEXT, attempts INTEGER,
-                   tool_calls INTEGER, errors INTEGER, tokens INTEGER, attrs TEXT);
+                   tool_calls INTEGER, errors INTEGER, tokens_input INTEGER, tokens_output INTEGER,
+                   tokens_cache_read INTEGER, tokens_cache_write INTEGER, attrs TEXT);
 CREATE TABLE edges(src TEXT, dst TEXT, kind TEXT, at TEXT, via TEXT, inferred INTEGER, tool_use_id TEXT);
 CREATE INDEX edges_src ON edges(src);
 CREATE INDEX edges_dst ON edges(dst);
@@ -51,9 +59,13 @@ CREATE INDEX nodes_agent ON nodes(agent_id);
 -- rows. bundle.events_skipped_<kind> and events_unlisted_<kind> count them.
 -- pos is the record's position in the archive of its kind. A uuid can repeat: Claude Code rewrites a
 -- session's first records, with the same uuid and changed fields, when the session is reopened.
+-- message_id groups the records of one model response. tokens_* is that response's final usage, set on one
+-- of its records only (the one that carries it), so summing a column counts each response once; input is
+-- the context sent with that call, so it shows the context growing and a compaction resetting it.
 CREATE TABLE events(id INTEGER PRIMARY KEY, uuid TEXT NOT NULL, kind TEXT, pos INTEGER, agent_id TEXT, ts TEXT,
                     type TEXT, turn INTEGER, human INTEGER, interrupt INTEGER, is_error INTEGER,
-                    ref_agent_id TEXT, ref_task_id TEXT);
+                    ref_agent_id TEXT, ref_task_id TEXT, message_id TEXT, tokens_input INTEGER,
+                    tokens_output INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER);
 -- The tool calls and results inside an event: a tool_use block (role 'use', with the tool's name) or a
 -- tool_result block (role 'result', with its error flag). Join the two on tool_use_id to pair them.
 CREATE TABLE event_tools(event INTEGER, tool_use_id TEXT, role TEXT, name TEXT, is_error INTEGER);
@@ -62,6 +74,7 @@ CREATE INDEX events_agent ON events(agent_id, ts);
 CREATE INDEX events_turn ON events(turn) WHERE turn IS NOT NULL;
 CREATE INDEX events_ref_agent ON events(ref_agent_id) WHERE ref_agent_id IS NOT NULL;
 CREATE INDEX events_ref_task ON events(ref_task_id) WHERE ref_task_id IS NOT NULL;
+CREATE INDEX events_calls ON events(agent_id, ts) WHERE tokens_input IS NOT NULL;
 CREATE INDEX event_tools_event ON event_tools(event);
 CREATE INDEX event_tools_use ON event_tools(tool_use_id);
 CREATE INDEX event_tools_name ON event_tools(name) WHERE name IS NOT NULL;

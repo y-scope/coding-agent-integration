@@ -11,6 +11,12 @@ what the session was waiting on, with no second counted twice:
   idle        a stretch with no event at all that lasts at least idle_seconds
   other       the rest: short gaps between events
 
+Each turn also gets the tokens its model responses used, as the API reported them (input, output,
+cache read, cache write). A response is written as several records (one per content block) that share
+its message id and repeat its usage, and the first may carry a preliminary figure (output 0, no cache
+fields), so a response is counted once, with its final usage: the one with the most output that carries
+the cache fields. That choice needs no record order, so it holds for search results too.
+
 Where two of these overlap (parallel tool calls, a tool running while the model
 streams), the time goes to the first in the order above.
 
@@ -40,6 +46,51 @@ INJECTED_PREFIXES = (
 )
 
 IDLE_SECONDS = 600
+
+# (name used here, field of message.usage)
+TOKEN_FIELDS = (("input", "input_tokens"), ("output", "output_tokens"),
+                ("cache_read", "cache_read_input_tokens"), ("cache_write", "cache_creation_input_tokens"))
+
+
+def usage_of(message):
+    """{name: tokens} from an assistant message's usage, or None when it has none. "final" ranks it
+    among the records of one response (see final_usage)."""
+    usage = message.get("usage") if isinstance(message, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    out = {"final": (usage.get("output_tokens") or 0, usage.get("cache_read_input_tokens") is not None)}
+    for name, field in TOKEN_FIELDS:
+        value = usage.get(field)
+        out[name] = value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+    return out
+
+
+def final_usage(current, candidate):
+    """The final one of two usages of the same response: the most output, then the one with cache fields."""
+    if current is None or candidate["final"] > current["final"]:
+        return candidate
+    return current
+
+
+def response_tokens(records):
+    """Token totals over the model responses among `records` (in any order), counting each response once
+    with its final usage. Synthetic records (the harness's own) are skipped."""
+    last = {}
+    for record in records:
+        message = record.get("message") if isinstance(record, dict) else None
+        if record.get("type") != "assistant" or not isinstance(message, dict):
+            continue
+        message_id = message.get("id")
+        if not isinstance(message_id, str) or message_id == "<synthetic>" or message.get("model") == "<synthetic>":
+            continue
+        usage = usage_of(message)
+        if usage is not None:
+            last[message_id] = final_usage(last.get(message_id), usage)
+    total = {name: 0 for name, _ in TOKEN_FIELDS}
+    for usage in last.values():
+        for name in total:
+            total[name] += usage[name]
+    return total
 
 
 def parse_ts(value):
@@ -115,7 +166,7 @@ def collect(records):
             for block in message.get("content") or []:
                 if isinstance(block, dict) and block.get("type") in ("thinking", "text", "tool_use"):
                     blocks.append((block["type"], block.get("name"), block.get("id")))
-            items.append((ts, 1, "assistant", (message_id, blocks)))
+            items.append((ts, 1, "assistant", (message_id, blocks, usage_of(message))))
         elif role == "user":
             text, results = _user_parts(record, message)
             if text is None and not results:
@@ -128,12 +179,15 @@ def collect(records):
     pending_inputs = []
     for ts, _, kind, data in items:
         if kind == "assistant":
-            message_id, blocks = data
+            message_id, blocks, usage = data
             round_ = rounds.get(message_id)
             if round_ is None:
-                round_ = {"inputs": pending_inputs, "outputs": []}
+                round_ = {"inputs": pending_inputs, "outputs": [], "usage": None, "last": ts}
                 pending_inputs = []
                 rounds[message_id] = round_
+            round_["last"] = ts
+            if usage is not None:
+                round_["usage"] = final_usage(round_["usage"], usage)
             for block_type, name, tool_id in blocks:
                 round_["outputs"].append(ts)
                 activity.append(ts)
@@ -156,6 +210,7 @@ def collect(records):
             if is_human_prompt(record, text):
                 prompts.append((ts, text))
 
+    responses = [(round_["last"], round_["usage"]) for round_ in rounds.values() if round_["usage"] is not None]
     for round_ in rounds.values():
         outputs, inputs = round_["outputs"], round_["inputs"]
         if not outputs or not inputs:
@@ -166,7 +221,8 @@ def collect(records):
             gens.append((max(before), max(outputs)))
     prompts.sort(key=lambda p: p[0])
     activity.sort()
-    return {"prompts": prompts, "gens": gens, "tools": list(tools.values()), "activity": activity}
+    return {"prompts": prompts, "gens": gens, "tools": list(tools.values()), "activity": activity,
+            "responses": responses}
 
 
 def _merge(intervals):
@@ -207,7 +263,8 @@ def _clip(intervals, start, end):
 
 def breakdown(session, human_tools=HUMAN_WAIT_TOOLS, idle_seconds=IDLE_SECONDS):
     """One dict per turn: start, end, e2e_s, human_s, tool_s, model_s, idle_s, other_s,
-    tool_calls, errors, longest_wait (tool name, seconds) and prompt. The five time parts
+    tool_calls, errors, longest_wait (tool name, seconds), prompt, and tokens ({input, output,
+    cache_read, cache_write} of the responses that ended in the turn). The five time parts
     add up to e2e_s."""
     prompts, activity = session["prompts"], session["activity"]
     waits = []
@@ -241,8 +298,13 @@ def breakdown(session, human_tools=HUMAN_WAIT_TOOLS, idle_seconds=IDLE_SECONDS):
         calls = [t for t in session["tools"] if in_window(t["emitted"])]
         longest = max(((t, w) for t, w in waits if in_window(t["emitted"])),
                       key=lambda tw: tw[1], default=None)
+        tokens = {name: 0 for name, _ in TOKEN_FIELDS}
+        for ended, usage in session.get("responses", []):
+            if in_window(ended):
+                for name in tokens:
+                    tokens[name] += usage[name]
         turns.append({
-            "index": len(turns) + 1, "start": start, "end": end, "e2e_s": e2e, **parts,
+            "index": len(turns) + 1, "start": start, "end": end, "e2e_s": e2e, **parts, "tokens": tokens,
             "tool_calls": len(calls), "errors": sum(1 for t in calls if t["is_error"]),
             "longest_wait": (longest[0]["name"], longest[1]) if longest else None,
             "prompt": " ".join(text.split())[:80],
