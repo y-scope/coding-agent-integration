@@ -23,7 +23,7 @@ from datetime import datetime
 
 # The catalog's layout. A catalog of another layout is refused, and rebuilt from its bundle
 # (`clp-bundle BUNDLE rebuild`) when the bundle's manifest layout is current.
-LAYOUT = 3
+LAYOUT = 4
 # The layout of manifest.json, archives/ and files/. A bundle of another layout is made again (`build --force`).
 MANIFEST_LAYOUT = 2
 
@@ -68,7 +68,11 @@ CREATE TABLE events(id INTEGER PRIMARY KEY, uuid TEXT NOT NULL, kind TEXT, pos I
                     tokens_output INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER);
 -- The tool calls and results inside an event: a tool_use block (role 'use', with the tool's name) or a
 -- tool_result block (role 'result', with its error flag). Join the two on tool_use_id to pair them.
-CREATE TABLE event_tools(event INTEGER, tool_use_id TEXT, role TEXT, name TEXT, is_error INTEGER);
+-- For a tool call (role 'use'), hashes of its input, never the input: input_hash of the whole input
+-- (canonical JSON), file_hash of the file it reads or changes (file_path, notebook_path), read_hash of a
+-- read's file and range (file_path, offset, limit). They let SQL find identical calls and re-reads.
+CREATE TABLE event_tools(event INTEGER, tool_use_id TEXT, role TEXT, name TEXT, is_error INTEGER,
+                         input_hash TEXT, file_hash TEXT, read_hash TEXT);
 CREATE INDEX events_uuid ON events(uuid);
 CREATE INDEX events_agent ON events(agent_id, ts);
 CREATE INDEX events_turn ON events(turn) WHERE turn IS NOT NULL;

@@ -243,6 +243,7 @@ projects points at the harness or provider; one tied to a single repository poin
 - **Overhead:** harness-injected records (hook results, reminders) as a share of all records, found by
   counting templates; compactions per hour.
 - **Waiting on the human:** long `AskUserQuestion` waits, idle share, denials.
+- **Wasted calls** (rare in practice; checked strictly so they are not noise): a failed tool call retried at once with identical input, and a file re-read when nothing in the session could have changed it since. Literal loops of identical calls were almost absent across 71,203 calls, so do not report repetition as a loop without evidence.
 
 Report each finding with its count, its rate against the session's own totals, and one example
 (`uuid` or node id) someone can open, and say whether it is a harness, provider, model, task or

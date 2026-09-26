@@ -283,6 +283,19 @@ def _texts(message):
     return []
 
 
+def _hash(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+
+
+def _input_hashes(name, tool_input):
+    """(input_hash, file_hash, read_hash) of a tool call's input; the catalog keeps hashes, not text."""
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    path = tool_input.get("file_path") or tool_input.get("notebook_path")
+    path = path if isinstance(path, str) else None
+    read = [path, tool_input.get("offset"), tool_input.get("limit")] if name == "Read" and path else None
+    return _hash(tool_input), _hash(path) if path else None, _hash(read) if read else None
+
+
 def _event(kind, pos, r):
     """(event row, tool rows) for a record with a uuid; the row is None when the record carries nothing
     to join on (hook and reminder attachments, system rows)."""
@@ -298,11 +311,11 @@ def _event(kind, pos, r):
         if not isinstance(blk, dict):
             continue
         if blk.get("type") == "tool_use":
-            tools.append((blk.get("id"), "use", blk.get("name"), None))
+            tools.append((blk.get("id"), "use", blk.get("name"), None, *_input_hashes(blk.get("name"), blk.get("input"))))
         elif blk.get("type") == "tool_result":
             err = int(bool(blk.get("is_error")))
             is_error |= err
-            tools.append((blk.get("tool_use_id"), "result", None, err))
+            tools.append((blk.get("tool_use_id"), "result", None, err, None, None, None))
     ts = r.get("timestamp")
     usage = None
     if r.get("type") == "assistant" and isinstance(message.get("id"), str) and message.get("model") != "<synthetic>":
@@ -357,7 +370,7 @@ def _write_events(db, positioned):
                 "ref_task_id", "message_id", "tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_write"]
         for r, tools in rows:
             cur = db.execute(f"INSERT INTO events({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [r[c] for c in cols])
-            db.executemany("INSERT INTO event_tools VALUES(?,?,?,?,?)", [(cur.lastrowid, *t) for t in tools])
+            db.executemany("INSERT INTO event_tools VALUES(?,?,?,?,?,?,?,?)", [(cur.lastrowid, *t) for t in tools])
         if rows or unlisted or no_uuid:
             counts[kind] = (len(rows), unlisted, no_uuid)
         db.execute("INSERT INTO bundle VALUES(?,?)", (f"events_unlisted_{kind}", str(unlisted)))

@@ -17,6 +17,7 @@ from test_bundle_build import BuildTest, SID, make_session  # noqa: E402
 def session(name, **values):
     base = {k: 0 for k in R.SQL}
     base.update({k: 0 for k in R.KQL})
+    base.update(identical_retries=0, redundant_reads=0)
     base.update(session=name, project="p", examples={}, e2e_s=0, human_s=0, idle_s=0, hours=0)
     base.update(values)
     return base
@@ -37,6 +38,38 @@ class Rank(unittest.TestCase):
         self.assertEqual([a["session"] for a in rate["above"]], ["s9"])
         few = next(r for r in R.rank(s[:3])["rates"] if r["signal"] == "tool error rate")
         self.assertIsNone(few["median"])                      # fewer than MIN_RATED sessions: no baseline
+
+
+class CallPatterns(unittest.TestCase):
+    """identical_retries and redundant_reads must not fire when anything could explain the repeat."""
+
+    def catalog(self, calls):
+        import sqlite3
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.executescript(B.SCHEMA)
+        for i, (agent, ts, name, inp, fh, rh, failed) in enumerate(calls):
+            cur = db.execute("INSERT INTO events(uuid, kind, pos, agent_id, ts, type) VALUES(?,?,?,?,?,?)",
+                             (f"u{i}", "workflow-agent" if agent else "main", i, agent, f"2026-01-01T10:00:{i:02d}.000", "assistant"))
+            db.execute("INSERT INTO event_tools VALUES(?,?,?,?,?,?,?,?)", (cur.lastrowid, f"t{i}", "use", name, None, inp, fh, rh))
+            db.execute("INSERT INTO event_tools VALUES(?,?,?,?,?,?,?,?)", (cur.lastrowid, f"t{i}", "result", None, int(failed), None, None, None))
+        return db
+
+    def test_an_identical_retry_after_a_failure_counts_and_a_changed_one_does_not(self):
+        db = self.catalog([(None, 0, "Bash", "h1", None, None, True), (None, 1, "Bash", "h1", None, None, False),
+                           (None, 2, "Bash", "h2", None, None, True), (None, 3, "Bash", "h3", None, None, False)])
+        self.assertEqual(R.call_patterns(db)["identical_retries"], (1, ["u1"]))
+
+    def test_a_re_read_counts_only_when_nothing_could_have_changed_the_file(self):
+        read = lambda agent: (agent, 0, "Read", "r", "f", "rf", False)
+        db = self.catalog([read(None), read(None)])                                         # plain re-read
+        self.assertEqual(R.call_patterns(db)["redundant_reads"][0], 1)
+        db = self.catalog([read(None), ("a2", 0, "Bash", "b", None, None, False), read(None)])  # a parallel agent's command
+        self.assertEqual(R.call_patterns(db)["redundant_reads"][0], 0)
+        db = self.catalog([read(None), ("a2", 0, "Edit", "e", "f", None, False), read(None)])   # another agent edited it
+        self.assertEqual(R.call_patterns(db)["redundant_reads"][0], 0)
+        db = self.catalog([read(None), (None, 0, "Read", "r2", "f", "rg", False), read(None)])  # another range in between
+        self.assertEqual(R.call_patterns(db)["redundant_reads"][0], 1)
 
 
 class ErrorGroups(unittest.TestCase):
