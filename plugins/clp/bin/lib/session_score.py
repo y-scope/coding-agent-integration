@@ -89,8 +89,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 VERSION = "1.0.0"
-SCHEMA_VERSION = "1.4.0"   # 1.2.0 gated unscoring; 1.3.0 min_denominator; 1.3.1 deduped bundle totals;
-                           # 1.4.0 provenance names the invocation, not the old script names
+SCHEMA_VERSION = "1.5.0"   # 1.2.0 gated unscoring; 1.3.0 min_denominator; 1.3.1 deduped bundle totals;
+                           # 1.4.0 provenance names the invocation, not the old script names;
+                           # 1.5.0 each axis carries the one command that reproduces its measurement
 
 # The scale says what each threshold rests on. These are the short forms for the
 # table; the full word and the rationale are in the JSON. A scorecard resting
@@ -127,14 +128,23 @@ AXIS_UNIT = re.compile(r"\bunit=(\S+)")
 AXIS_DEN = re.compile(r"\bdenominator=(\d+)\b")
 ALERT_LINE = re.compile(r"^ALERT=([^:\s]+):(\S+) value=(\S+) threshold=(\S+)\s*$")
 SCALE_LINE = re.compile(r"^(SCALE_OK|SCALE_PROBLEM=)")
+# An axis's provenance line. The rest of it is the shell command that reproduces
+# the axis, which carries `=` signs of its own, so it is recognised by name here
+# rather than left to the key parser to mistake for a headline figure.
+CHECK_LINE = re.compile(r"^AXIS_(CHECK|NO_SINGLE_CHECK) (\S+) (.*)$")
 
 
 def parse_axes_output(text):
-    """clp-session facts --axes stdout as {keys, axes, alerts, scale_lines}."""
-    out = {"keys": {}, "axes": [], "alerts": [], "scale_lines": []}
+    """clp-session facts --axes stdout as {keys, axes, alerts, scale_lines, checks}."""
+    out = {"keys": {}, "axes": [], "alerts": [], "scale_lines": [], "checks": {}}
     for line in text.splitlines():
         line = line.rstrip()
         if not line:
+            continue
+        check = CHECK_LINE.match(line)
+        if check:
+            out["checks"][check.group(2)] = {
+                "single_command": check.group(1) == "CHECK", "detail": check.group(3)}
             continue
         if SCALE_LINE.match(line):
             out["scale_lines"].append(line)
@@ -441,6 +451,12 @@ def score_session(measured, scale, scale_path, scale_source, bundle, facts_file,
         if spec.get("anchors"):
             scored["anchors"] = spec["anchors"]
         scored["components"] = axis["components"]
+        # A score that travels without the command behind its measurement invites
+        # exactly the question nobody can then answer.
+        provenance = measured.get("checks", {}).get(axis["id"])
+        if provenance:
+            key = "check" if provenance["single_command"] else "check_unavailable"
+            scored[key] = provenance["detail"]
         axes.append(scored)
 
     groups = []

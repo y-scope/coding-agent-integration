@@ -10,6 +10,15 @@ another. Nothing here needs judgement, so nothing here is left to it. Every
 figure a trajectory report can quote is computed below, carries its own
 denominator, and is written out as a fact the writer only has to phrase.
 
+Every figure also carries its provenance, because a reader cannot otherwise
+tell four different kinds of claim apart: [M] a number counted or summed off
+the records, [D] arithmetic over such numbers, [I] a claim about what caused
+these records, and [K] a claim about how this kind of system behaves. The first
+two are checkable and each one says how; the last two are arguments and are
+labelled as arguments. Section 10 lists every headline figure and every axis
+with the one command that reproduces it, so a reader who doubts a number does
+not have to reconstruct a query to settle it. See PROVENANCE below.
+
 Inputs:
   --bundle DIR      A clp-bundle bundle directory: catalog.sqlite, manifest.json
                     and archives/. This is the primary input and the only
@@ -204,6 +213,72 @@ ALERTS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Provenance.
+#
+# Four kinds of claim, chosen so that nothing belongs to two of them. The first
+# two can be checked and so they must be; the last two cannot, and saying so is
+# the whole point of marking them.
+#
+# The markers are three characters at the front of the line rather than a column
+# in a table, because a column would push the figures off a narrow screen and a
+# reader scanning for "is this measured" wants it where the eye already is.
+# ---------------------------------------------------------------------------
+
+MEASURED = "[M]"
+DERIVED = "[D]"
+INFERENCE = "[I]"
+DOMAIN = "[K]"
+
+TIERS = {
+    MEASURED: "measured - read straight off the records: a count, a sum, a field value. One "
+              "query reproduces it.",
+    DERIVED: "derived - arithmetic over measured values: a share, a rate, a per-unit figure. The "
+             "line names its inputs; section 10 gives the formula, the reason that formula answers "
+             "the question, and the trap where the derivation has one.",
+    INFERENCE: "inference - a claim about what caused these records or what they mean. Not "
+               "reproducible: it is an argument from the figures, and a reader can reject it "
+               "without disputing a number.",
+    DOMAIN: "domain knowledge - a claim about how this kind of system behaves, not taken from "
+            "these records at all.",
+}
+
+# How the checks in section 10 are spelled. The plugin's own wrappers are named
+# with no path, so the file never records one machine's install layout; the
+# header says to put the plugin's bin/ on $PATH before running them.
+SQL_TOOL = "clp-bundle"
+CATALOG_NOTE = ("`clp-bundle <bundle> sql` opens catalog.sqlite read-only, so running a check can "
+                "never change what it is checking.")
+
+# The message-id dedup rule, spelled for a check command: see DEDUP_KEY.
+DEDUP_SQL = "CASE WHEN message_id IS NULL THEN 'row#' || id ELSE 'msg:' || message_id END"
+
+# What section 10 prints if a figure reaches it with no command and no reason. It
+# names the defect rather than implying the figure is unverifiable: a bare
+# "unstated" would claim a figure cannot be checked while giving no reason at all.
+NO_REASON = ("no reason was recorded for this figure. That is a defect in clp-session facts, not a "
+             "property of the figure: report it rather than trusting the figure or discarding it.")
+
+
+def sql_check(bundle, query):
+    """One `clp-bundle <bundle> sql "<query>"` command, as a reader would type it."""
+    return f'{SQL_TOOL} {bundle} sql "{" ".join(str(query).split())}"'
+
+
+def add_check(F, name, tier, value, command=None, derivation="", trap="", note=""):
+    """Register one headline figure's provenance for section 10.
+
+    `command` is the single command that reproduces the figure. It is left out
+    only where no single command can, and then `note` says what a reader has to
+    run instead - a figure whose check is a command that does not actually
+    produce the number is worse than a figure with no check, because it invites
+    a reader to conclude the number is wrong.
+    """
+    F.setdefault("checks", []).append({
+        "name": name, "tier": tier, "value": value, "command": command,
+        "derivation": derivation, "trap": trap, "note": note})
+
+
 # Tool names that do a dedicated search, for B2. Reaching for Bash instead of
 # these is the behaviour the axis is looking for.
 SEARCH_TOOLS = ("Grep", "Glob", "Search", "SearchFiles", "CodeSearch")
@@ -211,8 +286,14 @@ SEARCH_TOOLS = ("Grep", "Glob", "Search", "SearchFiles", "CodeSearch")
 # Section 7's manual-retry heuristic. It is a heuristic and is labelled as one.
 RETRY_PROMPT = re.compile(r"try again|retry|continue|keep going", re.I)
 
-# Section 6 / axis A4: which launch rejections are the caller's own fault.
-CONFIG_REJECTION = re.compile(r"invalid|parse error|syntax|unexpected token|unterminated|schema|config", re.I)
+# Section 6 / axis A4: which launch rejections are the caller's own fault. The
+# terms are listed once and both the regex and the check's SQL are built from
+# them, so the check can never drift from the measurement it claims to check.
+CONFIG_TERMS = ("invalid", "parse error", "syntax", "unexpected token", "unterminated",
+                "schema", "config")
+CONFIG_REJECTION = re.compile("|".join(CONFIG_TERMS), re.I)
+# SQLite's LIKE is case-insensitive over ASCII, which is what the regex's re.I does here.
+CONFIG_LIKE = " OR ".join(f"json_extract(attrs,'$.error') LIKE '%{term}%'" for term in CONFIG_TERMS)
 
 
 # ---------------------------------------------------------------------------
@@ -630,8 +711,27 @@ def main(argv=None) -> int:
            "or from clp-bundle outcomes/repo, and every count carries the denominator it is a share of. "
            "Quote them; do not re-derive them. A figure that could not be computed says so and why."))
     w("")
+    w("**What the markers mean.** Every figure carries one, and the four kinds do not overlap:")
+    w("")
+    for marker in (MEASURED, DERIVED, INFERENCE, DOMAIN):
+        w(f"- `{marker}` {TIERS[marker]}")
+    w("")
+    w(wrap("A percentage in parentheses is always derived, from the two counts printed beside it, so "
+           "it takes no marker of its own. In a table the markers are in the column headings. A line "
+           "with no marker is orientation - a heading, a source note, or an instruction to the writer "
+           "- and asserts nothing about the session."))
+    w("")
+    w(wrap("Section 10 lists every headline figure again with the one command that reproduces it. "
+           "Those commands name this plugin's own wrappers with no path, so nothing here records one "
+           "machine's install layout: run them with the plugin's `bin/` on $PATH. " + CATALOG_NOTE))
+    w("")
 
-    F = {}   # every figure section 9 needs, computed once here
+    F = {"checks": []}   # every figure section 9 needs, computed once here
+    F["bundle"] = str(bundle)
+    if archive_dir is not None:
+        F["archive"] = str(archive_dir)
+    F["turns_cmd"] = (f"clp-session turns --top 0 --waits {args.waits} {archive_dir}"
+                      if archive_dir is not None else None)
 
     section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_note, w, F, keys,
                     alerts, totals)
@@ -654,6 +754,7 @@ def main(argv=None) -> int:
             fire(alerts, "cost:token-concentration-high", worst)
 
     axis_rows = section_axes(w, F) if args.axes else None
+    section_verification(w, F, axis_rows)
     # --check-scale never feeds a score back into the run: it only reports on the
     # file, so a broken scale is loud instead of silently mis-scoring a session.
     scale_problems = check_scale(args.scale) if args.check_scale else None
@@ -678,6 +779,15 @@ def main(argv=None) -> int:
         else:
             den = f' denominator={row["denominator"]}' if row.get("denominator") else ""
             print(f'{head} unit={row["unit"]}{den} components="{quoted(row["components"])}"')
+    # The check goes on a line of its own rather than in a field of the AXIS line:
+    # a command holds double quotes, and `components="..."` has to stay the last
+    # field for a consumer that reads it. One command per line is also what a
+    # reader wants to copy.
+    for row in axis_rows or []:
+        if row.get("check"):
+            print(f"AXIS_CHECK {row['id']} {row['check']}")
+        elif row["value"] is not None:
+            print(f"AXIS_NO_SINGLE_CHECK {row['id']} {quoted(row.get('check_note') or NO_REASON)}")
     for slug, value, test in dict.fromkeys(alerts):
         print(f"ALERT={slug} value={value} threshold={test}")
     if scale_problems is not None:
@@ -758,24 +868,43 @@ def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_
     F["wall_clock_hours"] = hours
     keys["WALL_CLOCK_HOURS"] = f"{hours:.1f}" if hours is not None else "n/a"
 
-    w(f"- Session id: `{session_id}`")
-    w(f"- Bundle built: {cat.meta('built_at') or 'unrecorded'}; working directory "
+    span_sql = sql_check(F["bundle"], "SELECT MIN(ts) AS first_record, MAX(ts) AS last_record, "
+                                      "ROUND((julianday(MAX(ts))-julianday(MIN(ts)))*24.0,1) AS "
+                                      "wall_clock_hours FROM events")
+    w(f"- {MEASURED} Session id: `{session_id}`")
+    w(f"- {MEASURED} Bundle built: {cat.meta('built_at') or 'unrecorded'}; working directory "
       f"`{cat.meta('cwd') or 'unrecorded'}`")
-    w(f"- Time span: {first or 'unknown'} to {last or 'unknown'} "
-      + (f"({hours:.1f} wall-clock hours, {span_min / 1440:.1f} days)" if hours is not None
+    w(f"- {DERIVED} Time span: {first or 'unknown'} to {last or 'unknown'} "
+      + (f"({hours:.1f} wall-clock hours, {span_min / 1440:.1f} days), from those two measured "
+         "timestamps" if hours is not None
          else "(span unavailable: the catalog has no event timestamps)"))
+    if hours is not None:
+        add_check(F, "Wall-clock span", DERIVED, f"{hours:.1f} hours ({span_min / 1440:.1f} days)",
+                  span_sql,
+                  derivation="(last record's timestamp - first record's timestamp), in hours. It "
+                             "answers \"how long was this session open\" because the first and last "
+                             "records bracket everything the harness wrote.",
+                  trap="it is the span the records cover, not time anyone spent: most of it can be "
+                       "a gap between two days' work. Section 4's e2e minutes are the worked time.")
     if turns:
         F["turns"] = turns["turns_count"]
         keys["TURNS"] = turns["turns_count"]
-        w(f"- Turns: {num(turns['turns_count'])}; human prompts: {num(turns['prompts'])}; "
+        w(f"- {MEASURED} Turns: {num(turns['turns_count'])}; human prompts: {num(turns['prompts'])}; "
           f"tool calls seen by clp-session turns: {num(turns['tool_calls'])}")
         w(f"  - Source: {turns_note}")
+        add_check(F, "Turns", MEASURED, num(turns["turns_count"]), F.get("turns_cmd"),
+                  note="" if F.get("turns_cmd") else
+                  "the turns run was supplied as a file, so the command that produced it is not known "
+                  "here; re-run clp-session turns against the main archive")
     else:
         catalog_turns = cat.one("SELECT COUNT(DISTINCT turn) FROM events WHERE turn IS NOT NULL", default=0)
         F["turns"] = catalog_turns
         keys["TURNS"] = catalog_turns
-        w(f"- Turns: {num(catalog_turns)} distinct turn numbers in the catalog. "
+        w(f"- {MEASURED} Turns: {num(catalog_turns)} distinct turn numbers in the catalog. "
           f"clp-session turns is UNAVAILABLE: {turns_note}")
+        add_check(F, "Turns", MEASURED, num(catalog_turns),
+                  sql_check(F["bundle"], "SELECT COUNT(DISTINCT turn) AS turns FROM events "
+                                         "WHERE turn IS NOT NULL"))
 
     # -- models
     rows = cat.rows("""
@@ -790,16 +919,23 @@ def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_
     total_responses = (totals or {}).get("responses", logged_rows)
     F["responses"] = total_responses
     F["models_named"] = bool(named)
-    w(f"- Model responses (each counted once): {num(total_responses)}"
+    responses_sql = sql_check(
+        F["bundle"], f"SELECT COUNT(*) AS responses FROM (SELECT 1 FROM events "
+                     f"WHERE tokens_input IS NOT NULL GROUP BY {DEDUP_SQL})")
+    w(f"- {MEASURED} Model responses (each counted once): {num(total_responses)}"
       + (f", from {num(logged_rows)} token-bearing records - {num(logged_rows - total_responses)} of "
          "them are second copies of a response another log already recorded (see the Cost section)"
          if logged_rows != total_responses else ""))
+    add_check(F, "Model responses, each counted once", MEASURED, num(total_responses), responses_sql,
+              derivation="a count of the distinct grouping keys, not a division, so it is measured: "
+                         "one group per `message_id`, and one group per row where a log recorded no "
+                         "message id.")
     if named:
         for model, n, tin, tout in named:
-            w(f"  - `{model}`: {frac(n, total_responses, 'responses')}, {num(tin)} input / {num(tout)} output tokens")
+            w(f"  - {MEASURED} `{model}`: {frac(n, total_responses, 'responses')}, {num(tin)} input / {num(tout)} output tokens")
         unknown = sum(r[1] for r in rows if r[0].startswith("("))
         if unknown:
-            w(f"  - model not recorded for {frac(unknown, total_responses, 'responses')} "
+            w(f"  - {MEASURED} model not recorded for {frac(unknown, total_responses, 'responses')} "
               "(the catalog records a model only where the harness logged one; the rest are omitted "
               "rather than guessed)")
     else:
@@ -807,7 +943,7 @@ def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_
           "so the model mix is omitted rather than guessed.")
 
     # -- archives and their files
-    w("- Archives in the bundle (records compressed, and source files behind them):")
+    w(f"- {MEASURED} Archives in the bundle (records compressed, and source files behind them):")
     sources = dict(cat.rows("SELECT kind, COUNT(*) FROM sources GROUP BY 1"))
     for kind, (aid, records) in sorted(archive_kinds.items()):
         files = sources.get(kind)
@@ -817,6 +953,11 @@ def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_
     if extra:
         w("  - Other source files in the bundle, not separately archived: "
           + ", ".join(f"`{k}` {num(v)}" for k, v in sorted(extra.items())))
+    add_check(F, "Records per archive, and the source files behind them", MEASURED,
+              f"one row per archive kind, {num(len(archive_kinds))} of them",
+              sql_check(F["bundle"], "SELECT a.kind, a.records, (SELECT COUNT(*) FROM sources s "
+                                     "WHERE s.kind = a.kind) AS source_files FROM archives a "
+                                     "ORDER BY a.kind"))
     w(f"- Main-log archive used for the time split: {archive_note}")
     w("")
 
@@ -839,17 +980,36 @@ def section_reliability(cat, multi, single_note, w, F, keys, alerts, top):
     if not total_attempts:
         w(f"- Workflow attempts: {single_note}")
     else:
-        w(f"- Attempts by status ({num(total_attempts)} in all):")
+        w(f"- {MEASURED} Attempts by status ({num(total_attempts)} in all):")
         for status, n in attempts:
             w(f"  - {status or '(none)'}: {frac(n, total_attempts, 'attempts')}")
-        w(f"- Stalls: {frac(stalled, total_attempts, 'attempts')} were stalled and retried")
+        add_check(F, "Attempts by status", MEASURED,
+                  ", ".join(f"{status or '(none)'} {num(n)}" for status, n in attempts),
+                  sql_check(F["bundle"], "SELECT status, COUNT(*) AS attempts, (SELECT COUNT(*) FROM "
+                                         "nodes WHERE kind='attempt') AS all_attempts FROM nodes "
+                                         "WHERE kind='attempt' GROUP BY 1 ORDER BY 2 DESC"))
+        add_check(F, "Attempt ok rate", DERIVED, f"{F['attempt_ok_rate']:.3f}",
+                  sql_check(F["bundle"], "SELECT COUNT(*) AS attempts, SUM(status='ok') AS ok "
+                                         "FROM nodes WHERE kind='attempt'"),
+                  derivation="attempts with status `ok` over all attempts. It answers \"how often did "
+                             "a unit of work reach a usable end\" because `ok` is the only attempt "
+                             "status the runtime treats as a result it will keep.")
+        w(f"- {DERIVED} Stalls: {frac(stalled, total_attempts, 'attempts')} were stalled and retried")
         causes = cat.rows("""SELECT status, COALESCE(cause, '(no cause recorded)'), COUNT(*)
                                FROM nodes WHERE kind = 'attempt' AND status <> 'ok'
                               GROUP BY 1, 2 ORDER BY 3 DESC""")
         bad = sum(n for _, _, n in causes)
-        w(f"- Attempt failure causes ({frac(bad, total_attempts, 'attempts')} did not end ok):")
+        w(f"- {MEASURED} Attempt failure causes ({frac(bad, total_attempts, 'attempts')} did not end ok):")
         for status, cause, n in causes:
             w(f"  - {status} / {cause}: {frac(n, bad, 'non-ok attempts')}")
+        if causes:
+            add_check(F, "Attempt failure causes", MEASURED,
+                      f"{num(len(causes))} status/cause rows over {num(bad)} attempts that did not end ok",
+                      sql_check(F["bundle"],
+                                "SELECT status, COALESCE(cause,'(no cause recorded)') AS cause, "
+                                "COUNT(*) AS attempts, (SELECT COUNT(*) FROM nodes WHERE "
+                                "kind='attempt' AND status<>'ok') AS all_non_ok FROM nodes "
+                                "WHERE kind='attempt' AND status<>'ok' GROUP BY 1,2 ORDER BY 3 DESC"))
 
     agents = cat.rows("SELECT status, COUNT(*) FROM nodes WHERE kind = 'agent' GROUP BY 1 ORDER BY 2 DESC")
     total_agents = sum(n for _, n in agents)
@@ -859,17 +1019,25 @@ def section_reliability(cat, multi, single_note, w, F, keys, alerts, top):
     if not total_agents:
         w(f"- Subagents: {single_note}")
     else:
-        w(f"- Agents by status ({num(total_agents)} in all):")
+        w(f"- {MEASURED} Agents by status ({num(total_agents)} in all):")
         for status, n in agents:
             w(f"  - {status or '(none)'}: {frac(n, total_agents, 'agents')}")
         agent_causes = cat.rows("""SELECT COALESCE(cause, '(no cause recorded)'), COUNT(*)
                                      FROM nodes WHERE kind = 'agent' AND status <> 'completed'
                                     GROUP BY 1 ORDER BY 2 DESC""")
         if agent_causes:
-            w("  - Causes behind the agents that did not complete: "
+            w(f"  - {MEASURED} Causes behind the agents that did not complete: "
               + ", ".join(f"{c} {num(n)}" for c, n in agent_causes))
-        w(f"- Agents that finished but never notified their caller: {frac(no_notify, total_agents, 'agents')}. "
-          "A no-notification agent's work reaches nobody: the caller waits, then moves on without it.")
+        w(f"- {MEASURED} Agents that finished but never notified their caller: "
+          f"{frac(no_notify, total_agents, 'agents')}.")
+        w(f"  - {DOMAIN} A no-notification agent's work reaches nobody: the caller waits, then moves "
+          "on without it.")
+        add_check(F, "Agents by status", MEASURED,
+                  ", ".join(f"{status or '(none)'} {num(n)}" for status, n in agents),
+                  sql_check(F["bundle"], "SELECT status, COALESCE(cause,'(no cause recorded)') AS cause, "
+                                         "COUNT(*) AS agents, (SELECT COUNT(*) FROM nodes WHERE "
+                                         "kind='agent') AS all_agents FROM nodes WHERE kind='agent' "
+                                         "GROUP BY 1,2 ORDER BY 3 DESC"))
 
     # -- what was in flight when an attempt stalled
     if stalled:
@@ -882,10 +1050,21 @@ def section_reliability(cat, multi, single_note, w, F, keys, alerts, top):
               FROM nodes n
              WHERE n.kind = 'attempt' AND n.status = 'stalled-retried'
              GROUP BY 1 ORDER BY n DESC""")
-        w(f"- The last tool each stalled attempt used before it stopped ({num(stalled)} stalls):")
+        w(f"- {MEASURED} The last tool each stalled attempt used before it stopped ({num(stalled)} stalls):")
         for name, n in rows[:top]:
             note = "  (the attempt made no tool call at all before stalling)" if name == "(none)" else ""
             w(f"  - {name}: {frac(n, stalled, 'stalls')}{note}")
+        add_check(F, "The last tool before each stall", MEASURED,
+                  ", ".join(f"{name} {num(n)}" for name, n in rows[:3])
+                  + f" (of {num(stalled)} stalls)",
+                  sql_check(F["bundle"], """SELECT COALESCE((SELECT t.name FROM events e
+                      JOIN event_tools t ON t.event = e.id AND t.role = 'use'
+                      WHERE e.agent_id = n.agent_id ORDER BY e.ts DESC, e.id DESC LIMIT 1),
+                      '(none)') AS last_tool, COUNT(*) AS stalls,
+                      (SELECT COUNT(*) FROM nodes WHERE kind='attempt'
+                       AND status='stalled-retried') AS all_stalls FROM nodes n
+                      WHERE n.kind='attempt' AND n.status='stalled-retried'
+                      GROUP BY 1 ORDER BY 2 DESC"""))
 
     # -- tool calls that never came back
     uses = cat.one("SELECT COUNT(*) FROM event_tools WHERE role = 'use'", default=0)
@@ -895,8 +1074,15 @@ def section_reliability(cat, multi, single_note, w, F, keys, alerts, top):
                                              WHERE r.tool_use_id = u.tool_use_id AND r.role = 'result')""",
                       default=0)
     F.update(tool_uses=uses, tool_orphans=orphans)
-    w(f"- Tool calls with a `use` record and no matching `result`: {frac(orphans, uses, 'calls')}"
+    w(f"- {MEASURED} Tool calls with a `use` record and no matching `result`: "
+      f"{frac(orphans, uses, 'calls')}"
       + ("" if orphans else " - every call that was issued came back."))
+    add_check(F, "Tool calls issued, and those with no result", MEASURED,
+              f"{num(orphans)} of {num(uses)}",
+              sql_check(F["bundle"], """SELECT COUNT(*) AS issued,
+                  SUM(NOT EXISTS (SELECT 1 FROM event_tools r
+                      WHERE r.tool_use_id = u.tool_use_id AND r.role='result')) AS without_result
+                  FROM event_tools u WHERE u.role='use'"""))
 
     # -- launches the runtime refused outright
     launch_errors = cat.rows("SELECT label, start, attrs FROM nodes WHERE kind = 'launch_error' ORDER BY start")
@@ -904,15 +1090,24 @@ def section_reliability(cat, multi, single_note, w, F, keys, alerts, top):
     F.update(launch_errors=len(launch_errors), launches=launches)
     rejected_config = 0
     if launch_errors:
-        w(f"- Launches the runtime rejected before anything ran: {frac(len(launch_errors), launches, 'launches')}")
+        w(f"- {MEASURED} Launches the runtime rejected before anything ran: "
+          f"{frac(len(launch_errors), launches, 'launches')}")
         for label, start, raw in launch_errors:
             reason = " ".join(str(attrs_of(raw).get("error", "(no reason recorded)")).split())
             if CONFIG_REJECTION.search(reason):
                 rejected_config += 1
             w(f"  - {start or 'unknown time'} {label or 'launch'}: {reason[:200]}")
     else:
-        w(f"- Launches the runtime rejected before anything ran: 0 of {num(launches)} launches")
+        w(f"- {MEASURED} Launches the runtime rejected before anything ran: 0 of {num(launches)} launches")
     F["launch_rejected_config"] = rejected_config
+    add_check(F, "Launches, and the ones the runtime rejected", MEASURED,
+              f"{num(len(launch_errors))} of {num(launches)}",
+              sql_check(F["bundle"], "SELECT (SELECT COUNT(*) FROM edges WHERE kind='launch') + "
+                                     "(SELECT COUNT(*) FROM nodes WHERE kind='launch_error') AS launches, "
+                                     "(SELECT COUNT(*) FROM nodes WHERE kind='launch_error') AS rejected"),
+              derivation="a launch is a `launch` edge, plus a `launch_error` node for one the runtime "
+                         "refused before there was anything to point an edge at - so the rejected "
+                         "launches are inside the denominator and not outside it.")
 
     if F["attempt_ok_rate"] is not None and F["attempt_ok_rate"] < 0.80:
         fire(alerts, "reliability:attempt-ok-rate-low", F["attempt_ok_rate"])
@@ -956,10 +1151,12 @@ def section_cost(cat, w, F, keys, alerts, top, multi, single_note, totals):
     w("Token usage is counted once per API response. The catalog sets `tokens_*` on one record per "
       "response *per log*, and one response can be written to more than one log, so the bundle-wide "
       "total below is deduplicated by `message_id` while each per-kind row is left as that log's own "
-      "accounting. `tokens_input` is the whole context sent with the call, so a long conversation's "
+      "accounting.")
+    w(f"{DOMAIN} `tokens_input` is the whole context sent with the call, so a long conversation's "
       "input total is far larger than its context window.")
     w("")
-    w("| Archive kind | Responses | Input | Output | Cache read | Cache write |")
+    w(f"| Archive kind | Responses {MEASURED} | Input {MEASURED} | Output {MEASURED} "
+      f"| Cache read {MEASURED} | Cache write {MEASURED} |")
     w("|---|---:|---:|---:|---:|---:|")
     for kind, n, tin, tout, cr, cw in rows:
         w(f"| {kind} | {num(n)} | {num(tin)} | {num(tout)} | {num(cr)} | {num(cw)} |")
@@ -979,35 +1176,64 @@ def section_cost(cat, w, F, keys, alerts, top, multi, single_note, totals):
           "distinct responses. Each per-kind row is that log's own honest accounting and is not "
           "adjusted; only the cross-kind total would double-count, so only it is deduplicated.")
         if t.get("disagreeing"):
-            w(f"- The copies do not always agree: for {num(t['disagreeing'])} of those responses the "
-              f"copies report different token counts. Where they differ this keeps {TIE_BREAK}.")
-        else:
-            w(f"- Every duplicated response's copies agree. Where they would not, the rule is to keep "
+            w(f"- {MEASURED} The copies do not always agree: for {num(t['disagreeing'])} of those "
+              f"responses the copies report different token counts. Where they differ this keeps "
               f"{TIE_BREAK}.")
+        else:
+            w(f"- {MEASURED} Every duplicated response's copies agree. Where they would not, the rule "
+              f"is to keep {TIE_BREAK}.")
     else:
         w(f"No response is recorded in more than one log, so the per-kind rows add up to the bundle "
           f"total exactly.")
     if t.get("unkeyed"):
-        w(f"- {num(t['unkeyed'])} token-bearing records carry no `message_id`, so they cannot be "
-          "matched against a copy in another log and are each counted as their own response. If that "
-          "number is large, this log records no message ids and the bundle total may still "
+        w(f"- {MEASURED} {num(t['unkeyed'])} token-bearing records carry no `message_id`, so they "
+          "cannot be matched against a copy in another log and are each counted as their own response. "
+          "If that number is large, this log records no message ids and the bundle total may still "
           "double-count.")
     w("")
+    dedup_sql = sql_check(
+        F["bundle"], f"SELECT COUNT(*) AS responses, SUM(ti) AS input, SUM(t_out) AS output, "
+                     f"SUM(cr) AS cache_read, SUM(cw) AS cache_write FROM (SELECT "
+                     f"MAX(tokens_input) AS ti, tokens_output AS t_out, tokens_cache_read AS cr, "
+                     f"tokens_cache_write AS cw FROM events WHERE tokens_input IS NOT NULL "
+                     f"GROUP BY {DEDUP_SQL})")
+    add_check(F, "Total input tokens", MEASURED, num(total_in), dedup_sql,
+              derivation="a sum, once the copies of one response are collapsed: group the "
+                         "token-bearing records by `message_id` (a record with none is its own group), "
+                         "keep the largest `tokens_input` in each group, and add those up.",
+              trap="the per-kind rows above sum higher, and they are not wrong: each is one log's own "
+                   "accounting, and only the cross-kind total would count a shared response twice.")
+    if rows:
+        add_check(F, "Input tokens per archive kind", MEASURED,
+                  ", ".join(f"{kind} {num(tin)}" for kind, _, tin, *_ in rows),
+                  sql_check(F["bundle"],
+                            "SELECT kind, COUNT(*) AS responses, SUM(tokens_input) AS input, "
+                            "SUM(tokens_output) AS output, SUM(tokens_cache_read) AS cache_read, "
+                            "SUM(tokens_cache_write) AS cache_write FROM events "
+                            "WHERE tokens_input IS NOT NULL GROUP BY 1 ORDER BY 3 DESC"))
     for kind, n, tin, tout, cr, cw in rows:
-        w(f"- `{kind}` is {frac(tin or 0, kind_in, 'input tokens')} and "
+        w(f"- {DERIVED} `{kind}` is {frac(tin or 0, kind_in, 'input tokens')} and "
           f"{frac(n, kind_resp, 'records')}, as a share of the per-kind sums (not of the "
           "deduplicated bundle total, so these add to 100%)")
 
     hit = (total_cr / total_in) if total_in else None
     F["cache_hit_rate"] = hit
     keys["CACHE_HIT_RATE"] = f"{hit:.4f}" if hit is not None else "n/a"
-    w(f"- Cache hit rate (cache_read / input): {num(total_cr)} / {num(total_in)} = "
+    w(f"- {DERIVED} Cache hit rate (cache_read / input): {num(total_cr)} / {num(total_in)} = "
       + (f"{hit:.4%}" if hit is not None else "n/a")
       + ("  -  nothing was ever served from cache; every token of every context was billed as fresh input."
          if hit == 0 else ""))
-    w(f"- Input:output ratio: {num(total_in)} : {num(total_out)} = "
+    if hit is not None:
+        add_check(F, "Cache hit rate", DERIVED, f"{hit:.4%}", dedup_sql,
+                  derivation=f"cache_read {num(total_cr)} over input {num(total_in)}, both from the one "
+                             "deduplicated query. It answers \"how much of the context we sent did we "
+                             "avoid paying full price for\" because cache_read is the part of the input "
+                             "the provider served from a cache instead of reading afresh.",
+                  trap="cache_read is a subset of input, not a figure beside it, so the ratio is a "
+                       "share and can never exceed 1.")
+    w(f"- {DERIVED} Input:output ratio: {num(total_in)} : {num(total_out)} = "
       + (f"{total_in / total_out:.1f}:1" if total_out else "n/a")
-      + ". Input dominates the bill, so waste and cache both matter more than output length.")
+      + f". {DOMAIN} Input dominates the bill, so waste and cache both matter more than output length.")
     w("- **Every cost figure here is in tokens, on purpose.** The session log carries a "
       "`totalCostUSD` field and this report does not use it: it is a derived estimate computed from "
       "some unit cost, which is not necessarily what was actually paid, and it is not always updated, "
@@ -1036,20 +1262,40 @@ def section_cost(cat, w, F, keys, alerts, top, multi, single_note, totals):
              discarded_ok_attempts=discarded_n)
     keys["WASTE_SHARE"] = f"{share:.4f}" if share is not None else "n/a"
 
+    waste_sql = sql_check(
+        F["bundle"],
+        "SELECT (SELECT COALESCE(SUM(tokens_input),0) FROM nodes WHERE kind='attempt' AND status<>'ok') "
+        "+ (SELECT COALESCE(SUM(tokens_input),0) FROM nodes WHERE kind='agent' AND status<>'completed') "
+        "+ (SELECT COALESCE(SUM(tokens_input),0) FROM nodes WHERE kind='attempt' AND status='ok' "
+        "AND instance IN (SELECT id FROM nodes WHERE kind='workflow' AND status IN ('killed','aborted'))) "
+        f"AS wasted_input, (SELECT SUM(ti) FROM (SELECT MAX(tokens_input) AS ti FROM events "
+        f"WHERE tokens_input IS NOT NULL GROUP BY {DEDUP_SQL})) AS total_input")
     if not measurable:
         w(f"- Wasted input tokens: {single_note}. Nothing here carries an outcome, so no token can be "
           "shown to have been wasted - that is unknown, not zero.")
     else:
-        w(f"- **Wasted input tokens: {num(waste)}, {pct(waste, total_in)} of all input.** Three classes, "
-          "counted separately because they have different fixes:")
-        w(f"  - Attempts that did not end ok: {num(bad_attempt_n)} attempts, {num(bad_attempt_tok)} input "
-          f"tokens ({pct(bad_attempt_tok, total_in)} of all input)")
-        w(f"  - Agents that did not complete: {num(bad_agent_n)} agents, {num(bad_agent_tok)} input "
-          f"tokens ({pct(bad_agent_tok, total_in)} of all input)")
-        w(f"  - Successful work thrown away by a cancellation: {num(discarded_n)} attempts that ended ok "
-          f"inside a killed or aborted workflow instance, {num(discarded_tok)} input tokens "
-          f"({pct(discarded_tok, total_in)} of all input). This is its own waste class: the model did the "
-          "work correctly and the runtime discarded it, so retry logic cannot recover it.")
+        w(f"- {DERIVED} **Wasted input tokens: {num(waste)}, {pct(waste, total_in)} of all input** "
+          f"({num(waste)} / {num(total_in)}). Three classes, counted separately because they have "
+          "different fixes:")
+        w(f"  - {MEASURED} Attempts that did not end ok: {num(bad_attempt_n)} attempts, "
+          f"{num(bad_attempt_tok)} input tokens ({pct(bad_attempt_tok, total_in)} of all input)")
+        w(f"  - {MEASURED} Agents that did not complete: {num(bad_agent_n)} agents, "
+          f"{num(bad_agent_tok)} input tokens ({pct(bad_agent_tok, total_in)} of all input)")
+        w(f"  - {MEASURED} Successful work thrown away by a cancellation: {num(discarded_n)} attempts "
+          f"that ended ok inside a killed or aborted workflow instance, {num(discarded_tok)} input "
+          f"tokens ({pct(discarded_tok, total_in)} of all input).")
+        w(f"    - {INFERENCE} This is its own waste class: the model did the work correctly and the "
+          "runtime discarded it, so retry logic cannot recover it.")
+        add_check(F, "Waste share of input tokens", DERIVED,
+                  f"{pct(waste, total_in)} ({num(waste)} / {num(total_in)})", waste_sql,
+                  derivation="the summed `tokens_input` of the attempts and agents that reached no kept "
+                             "result - a non-ok attempt, an agent that did not complete, or an ok "
+                             "attempt inside a killed or aborted instance - over the bundle-wide input "
+                             "total. It answers \"how much did we pay for nothing\" because an attempt "
+                             "with no kept result produced nothing that was used.",
+                  trap="the three classes are disjoint by construction (the third takes only `ok` "
+                       "attempts, which the first excludes), so they add up; a fourth class overlapping "
+                       "them would make the sum meaningless.")
 
     # -- who spent it
     runs = cat.rows("SELECT label, tokens_input, tokens_output, attempts FROM nodes "
@@ -1057,16 +1303,24 @@ def section_cost(cat, w, F, keys, alerts, top, multi, single_note, totals):
     agents = cat.rows("SELECT label, tokens_input, tokens_output, tool_calls FROM nodes "
                       "WHERE kind = 'agent' AND tokens_input IS NOT NULL ORDER BY tokens_input DESC LIMIT ?", top)
     if runs:
-        w(f"- Top {len(runs)} workflow runs by input tokens:")
+        w(f"- {MEASURED} Top {len(runs)} workflow runs by input tokens:")
         for label, tin, tout, att in runs:
             w(f"  - `{label}`: {num(tin)} input ({pct(tin, total_in)} of all input), {num(tout)} output, "
               f"{num(att)} attempts")
         F["largest_run_input"] = runs[0][1] or 0
+        add_check(F, "Largest workflow run by input tokens", MEASURED, num(runs[0][1] or 0),
+                  sql_check(F["bundle"], "SELECT label, tokens_input, tokens_output, attempts FROM nodes "
+                                         "WHERE kind='run' AND tokens_input IS NOT NULL "
+                                         "ORDER BY tokens_input DESC LIMIT 10"))
     if agents:
-        w(f"- Top {len(agents)} subagents by input tokens:")
+        w(f"- {MEASURED} Top {len(agents)} subagents by input tokens:")
         for label, tin, tout, calls in agents:
             w(f"  - `{label or '(unlabelled)'}`: {num(tin)} input ({pct(tin, total_in)} of all input), "
               f"{num(tout)} output, {num(calls)} tool calls")
+        add_check(F, "Largest subagent by input tokens", MEASURED, num(agents[0][1] or 0),
+                  sql_check(F["bundle"], "SELECT label, tokens_input, tokens_output, tool_calls FROM nodes "
+                                         "WHERE kind='agent' AND tokens_input IS NOT NULL "
+                                         "ORDER BY tokens_input DESC LIMIT 10"))
     if not runs and not agents:
         w(f"- Top token consumers among runs and agents: {single_note}")
 
@@ -1086,7 +1340,8 @@ def section_cost(cat, w, F, keys, alerts, top, multi, single_note, totals):
         w(f"- Attempt outcomes and input tokens inside those top {len(wanted)} runs "
           "(a run's total says nothing about whether the tokens bought anything):")
         w("")
-        w("| Run | Attempt status | Attempts | Input tokens | Share of the run's input |")
+        w(f"| Run | Attempt status | Attempts {MEASURED} | Input tokens {MEASURED} "
+          f"| Share of the run's input {DERIVED} |")
         w("|---|---|---:|---:|---:|")
         for label in wanted:
             entries = sorted(by_run.get(label, []), key=lambda x: -x[2])
@@ -1118,10 +1373,10 @@ def section_time(cat, turns, turns_note, w, F, keys, alerts, top):
         m = turns["minutes"]
         e2e = m.get("e2e") or 0.0
         F["minutes"] = m
-        w(f"- Total end-to-end: {m.get('e2e', 0):.1f} minutes ({(e2e / 60):.1f} hours) over "
+        w(f"- {MEASURED} Total end-to-end: {m.get('e2e', 0):.1f} minutes ({(e2e / 60):.1f} hours) over "
           f"{num(turns['turns_count'])} turns. Buckets do not double-count a second:")
         w("")
-        w("| Bucket | Minutes | Share of e2e |")
+        w(f"| Bucket | Minutes {MEASURED} | Share of e2e {DERIVED} |")
         w("|---|---:|---:|")
         for bucket in BUCKETS:
             value = m.get(bucket) or 0.0
@@ -1131,10 +1386,19 @@ def section_time(cat, turns, turns_note, w, F, keys, alerts, top):
         waiting = (m.get("human") or 0.0) + (m.get("idle") or 0.0)
         F["human_idle_share"] = (waiting / e2e) if e2e else None
         w(f"- Waiting on a person or on nothing at all (human + idle): {waiting:.1f} minutes, "
-          f"{pct(waiting, e2e)} of e2e. That is the ceiling on what more autonomy could buy back.")
-        w(f"- Working (tool + model): {(m.get('tool') or 0) + (m.get('model') or 0):.1f} minutes, "
-          f"{pct((m.get('tool') or 0) + (m.get('model') or 0), e2e)} of e2e.")
-        w(f"- Token totals clp-session turns measured on the main thread: "
+          f"{pct(waiting, e2e)} of e2e.")
+        w(f"  - {INFERENCE} That is the ceiling on what more autonomy could buy back.")
+        add_check(F, "Waiting on a person or on nothing, as a share of e2e", DERIVED,
+                  f"{pct(waiting, e2e)} ({waiting:.1f} of {e2e:.1f} minutes)", F.get("turns_cmd"),
+                  derivation="the `human` and `idle` minutes of the TOTAL_MIN line over its `e2e` "
+                             "minutes. It answers \"how much of the elapsed time was nobody working\" "
+                             "because the five buckets partition e2e and never double-count a second, "
+                             "so human + idle is exactly the part with neither a tool nor the model "
+                             "running.",
+                  note="" if F.get("turns_cmd") else "the turns run was supplied as a file")
+        w(f"- {DERIVED} Working (tool + model): {(m.get('tool') or 0) + (m.get('model') or 0):.1f} "
+          f"minutes, {pct((m.get('tool') or 0) + (m.get('model') or 0), e2e)} of e2e.")
+        w(f"- {MEASURED} Token totals clp-session turns measured on the main thread: "
           f"input {num(turns['tokens'].get('input'))}, output {num(turns['tokens'].get('output'))}, "
           f"cache_read {num(turns['tokens'].get('cache_read'))}, "
           f"cache_write {num(turns['tokens'].get('cache_write'))}")
@@ -1144,7 +1408,8 @@ def section_time(cat, turns, turns_note, w, F, keys, alerts, top):
         F["largest_turn_input"] = max((t["tokens_in"] or 0) for t in turns["turns"]) if turns["turns"] else 0
         F["turn_rows"] = turns["turns"]
         w(f"- The {len(shown)} longest turns of {num(len(listed))} listed, longest first, with the bucket "
-          "that dominated each:")
+          f"that dominated each. Every column is {MEASURED} except Dominant bucket, which is "
+          f"{DERIVED} - the largest of the five bucket columns on that row:")
         w("")
         w("| Turn | Start | e2e min | Dominant bucket | human | tool | model | idle | other | calls | errors | input tokens |")
         w("|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|")
@@ -1163,7 +1428,7 @@ def section_time(cat, turns, turns_note, w, F, keys, alerts, top):
         other_waits = [x for x in waits if not x["human"]]
         F["waits"] = waits
         F["human_wait_minutes"] = sum(x["minutes"] for x in human_waits)
-        w(f"- Longest tool waits clp-session turns listed: {num(len(waits))} in all - "
+        w(f"- {MEASURED} Longest tool waits clp-session turns listed: {num(len(waits))} in all - "
           f"{num(len(human_waits))} waiting on the person "
           f"({F['human_wait_minutes']:.1f} minutes), {num(len(other_waits))} waiting on a tool "
           f"({sum(x['minutes'] for x in other_waits):.1f} minutes). These are the N longest, not every wait.")
@@ -1199,26 +1464,58 @@ def section_time(cat, turns, turns_note, w, F, keys, alerts, top):
             useful += got
     F.update(attempt_minutes=attempt_minutes, agent_minutes=agent_minutes, useful_minutes=useful)
     wall = (F.get("wall_clock_hours") or 0) * 60
+    minutes_sql = sql_check(
+        F["bundle"],
+        "SELECT kind, COUNT(*) AS nodes, ROUND(SUM((julianday(end)-julianday(start))*1440.0),0) AS minutes, "
+        "ROUND(SUM(CASE WHEN (kind='attempt' AND status='ok' AND (instance IS NULL OR instance NOT IN "
+        "(SELECT id FROM nodes WHERE kind='workflow' AND status IN ('killed','aborted')))) "
+        "OR (kind='agent' AND status='completed') THEN (julianday(end)-julianday(start))*1440.0 END),0) "
+        "AS survived_minutes FROM nodes WHERE kind IN ('attempt','agent') "
+        "AND start IS NOT NULL AND end IS NOT NULL GROUP BY 1")
     if spans or agent_spans:
-        w(f"- Attempt and agent minutes summed: {attempt_minutes:,.0f} minutes across {num(len(spans))} "
-          f"attempts and {agent_minutes:,.0f} minutes across {num(len(agent_spans))} agents, against a "
-          f"wall-clock span of {wall:,.0f} minutes. That is "
+        w(f"- {DERIVED} Attempt and agent minutes summed: {attempt_minutes:,.0f} minutes across "
+          f"{num(len(spans))} attempts and {agent_minutes:,.0f} minutes across {num(len(agent_spans))} "
+          f"agents, against a wall-clock span of {wall:,.0f} minutes. That is "
           + (f"{(attempt_minutes + agent_minutes) / wall:.1f}x" if wall else "n/a")
-          + " the elapsed time: **it measures fan-out, not duration**, because these ran in parallel. "
-            "Never present it as how long the session took.")
-        w(f"  - Of those {attempt_minutes + agent_minutes:,.0f} agent-minutes, "
+          + " the elapsed time.")
+        w(f"  - {DOMAIN} **It measures fan-out, not duration**, because these ran in parallel. Never "
+          "present it as how long the session took.")
+        w(f"  - {DERIVED} Of those {attempt_minutes + agent_minutes:,.0f} agent-minutes, "
           f"{useful:,.0f} ({pct(useful, attempt_minutes + agent_minutes)}) went to work that survived: "
           "an attempt that ended ok inside an instance that was not cancelled, or an agent that completed.")
+        add_check(F, "Agent-minutes, and the share of them that survived", DERIVED,
+                  f"{useful:,.0f} of {attempt_minutes + agent_minutes:,.0f} "
+                  f"({pct(useful, attempt_minutes + agent_minutes)})", minutes_sql,
+                  derivation="each node's end minus its start, in minutes, summed; then the same sum "
+                             "over only the nodes whose result survived. It answers \"how much of the "
+                             "fleet's time bought something\" because a cancelled instance took its "
+                             "attempts' output with it however well they ran.",
+                  trap="summed attempt minutes are not elapsed time: the attempts run in parallel, so "
+                       "this total exceeds the wall-clock span and says nothing about how long the "
+                       "session took.")
     else:
         w("- Attempt and agent minutes: no attempt or agent node carries both a start and an end.")
 
     overlaps, pairs = phase_overlaps(cat)
     F["phase_overlaps"] = overlaps
     if pairs:
-        w(f"- Phases running at the same time: {frac(overlaps, pairs, 'same-run phase pairs')} overlap. "
-          "Phase nodes carry no start or end of their own, so each phase's span is taken from the first "
-          "start and last end of the units in it. An overlap means the workflow was not running its "
-          "phases in order.")
+        w(f"- {DERIVED} Phases running at the same time: {frac(overlaps, pairs, 'same-run phase pairs')} "
+          "overlap. Phase nodes carry no start or end of their own, so each phase's span is taken from "
+          "the first start and last end of the units in it.")
+        w(f"  - {INFERENCE} An overlap means the workflow was not running its phases in order.")
+        add_check(F, "Phase pairs that overlap", DERIVED, f"{num(overlaps)} of {num(pairs)}",
+                  sql_check(F["bundle"], """WITH s AS (SELECT run_id, phase, MIN(start) AS a,
+                      MAX(end) AS b FROM nodes WHERE kind='unit' AND phase IS NOT NULL
+                      AND start IS NOT NULL AND end IS NOT NULL GROUP BY 1,2)
+                      SELECT SUM(x.a < y.b AND y.a < x.b) AS overlapping_pairs,
+                      COUNT(*) AS comparable_pairs FROM s x JOIN s y
+                      ON x.run_id=y.run_id AND x.phase < y.phase"""),
+                  derivation="two phases of one run overlap when each starts before the other ends; the "
+                             "denominator is every pair of phases in one run that both have timestamps. "
+                             "It answers \"did this workflow run its phases in order\" because ordered "
+                             "phases cannot share a second.",
+                  trap="a phase's span is inferred from its units, so a single stray unit timestamp "
+                       "widens a phase and can manufacture an overlap.")
     else:
         w("- Phases running at the same time: no workflow phase has units with timestamps, so no pair "
           "can be compared.")
@@ -1294,38 +1591,65 @@ def section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, 
         confirmed_prs = sum(len(p.get("prs") or []) for p in pr_cmds)
         pr_cmds_with_prs = sum(1 for p in pr_cmds if p.get("prs"))
         F["exact_commits"] = exact
-        w(f"- Repository: `{repo.get('repo')}` (source: {repo_note})")
-        w(f"- **Commits the repository confirms: {frac(confirmed_commits, len(commands), 'commit commands')}**, "
+        repo_cmd = f"clp-bundle {F['bundle']} repo --json"
+        w(f"- {MEASURED} Repository: `{repo.get('repo')}` (source: {repo_note})")
+        w(f"- {MEASURED} **Commits the repository confirms: "
+          f"{frac(confirmed_commits, len(commands), 'commit commands')}**, "
           "by how well each command matched a real commit:")
         for kind in MATCH_ORDER:
             label = "no match" if kind == "none" else kind
             w(f"  - {label}: {frac(by_match.get(kind, 0), len(commands), 'commit commands')}")
-        w(f"  - Only the `exact` matches carry a sha the command itself printed; "
+        w(f"  - {DERIVED} Only the `exact` matches carry a sha the command itself printed; "
           f"{frac(exact, max(confirmed_commits, 1), 'confirmed commits')} are that solid. The rest were "
           "matched by time, or by time and subject, so they are attributed rather than proven.")
-        w(f"- Commits in the repository over the session's span: {num(repo.get('commits_in_span'))}. "
+        add_check(F, "Commits the repository confirms", MEASURED,
+                  f"{num(confirmed_commits)} of {num(len(commands))} commit commands", repo_cmd,
+                  derivation="a commit command counts as confirmed when clp-bundle repo matched it to a "
+                             "commit in the repository by any of `exact`, `time+subject`, `time` or "
+                             "`ambiguous`.",
+                  trap="most of these are attributed, not proven: only an `exact` match rests on a sha "
+                       f"the command itself printed, and here that is {num(exact)} of "
+                       f"{num(confirmed_commits)}. The rest were matched by time, or by time and "
+                       "subject, so a commit made by something else in the same minute can take the "
+                       "credit.")
+        w(f"- {MEASURED} Commits in the repository over the session's span: "
+          f"{num(repo.get('commits_in_span'))}. "
           f"Of those, {num(sum((repo.get('unattributed') or {}).values()))} came from something other than "
           "a commit command in this session"
           + (": " + ", ".join(f"{k} {num(v)}" for k, v in sorted(
               (repo.get("unattributed") or {}).items(), key=lambda x: -x[1])[:top]) if repo.get("unattributed") else "")
-          + ". Rebases and cherry-picks rewrite commits the session had already made, so this is not "
-            "work from elsewhere.")
-        w(f"- **PRs GitHub confirms: {num(confirmed_prs)}**, created by "
+          + ".")
+        w(f"  - {DOMAIN} Rebases and cherry-picks rewrite commits the session had already made, so this "
+          "is not work from elsewhere.")
+        w(f"- {MEASURED} **PRs GitHub confirms: {num(confirmed_prs)}**, created by "
           f"{frac(pr_cmds_with_prs, len(pr_cmds), 'PR commands')}"
           + (f"  ({repo.get('github')})" if repo.get("github") else ""))
+        add_check(F, "PRs GitHub confirms", MEASURED, num(confirmed_prs), repo_cmd,
+                  derivation="the PRs listed against the session's PR commands, counted once each.",
+                  trap="this one asks GitHub, so it needs network and credentials; without them "
+                       "clp-bundle repo reports no PRs, which reads the same as a session that made "
+                       "none.")
 
     # -- command output versus the repository
-    w(f"- What the command output alone claimed: {frac(commit_claimed, commit_run, 'commit commands')} "
+    w(f"- {MEASURED} What the command output alone claimed: "
+      f"{frac(commit_claimed, commit_run, 'commit commands')} "
       f"printed a result the parser could confirm, and {frac(pr_claimed, pr_run, 'PR commands')} did.")
+    add_check(F, "What the command output alone claimed", MEASURED,
+              f"{num(commit_claimed)} of {num(commit_run)} commit commands, "
+              f"{num(pr_claimed)} of {num(pr_run)} PR commands",
+              sql_check(F["bundle"], "SELECT action, COUNT(*) AS commands, SUM(confirmed) AS "
+                                     "self_confirmed, SUM(failed) AS failed FROM actions GROUP BY 1"))
     if confirmed_commits is not None:
-        w(f"  - Ratio, repository-confirmed to output-claimed commits: {num(confirmed_commits)} : "
-          f"{num(commit_claimed)} = "
+        w(f"  - {DERIVED} Ratio, repository-confirmed to output-claimed commits: "
+          f"{num(confirmed_commits)} : {num(commit_claimed)} = "
           + (f"{confirmed_commits / commit_claimed:.2f}x" if commit_claimed else "n/a")
           + ". Reading only the session's own output "
           + ("undercounts" if confirmed_commits > commit_claimed else "overcounts")
-          + " the commits by that factor - the output is not a reliable record of what landed.")
+          + " the commits by that factor.")
+        w(f"    - {INFERENCE} The session's own output is not a reliable record of what landed.")
     if confirmed_prs is not None:
-        w(f"  - Ratio, GitHub-confirmed to output-claimed PRs: {num(confirmed_prs)} : {num(pr_claimed)} = "
+        w(f"  - {DERIVED} Ratio, GitHub-confirmed to output-claimed PRs: {num(confirmed_prs)} : "
+          f"{num(pr_claimed)} = "
           + (f"{confirmed_prs / pr_claimed:.2f}x" if pr_claimed else "n/a"))
 
     keys["CONFIRMED_COMMITS"] = confirmed_commits if confirmed_commits is not None else "unavailable"
@@ -1341,17 +1665,37 @@ def section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, 
     versions = cat.one("SELECT COUNT(*) FROM file_versions", default=0)
     backed_up = cat.one("SELECT COUNT(*) FROM file_versions WHERE backup IS NOT NULL", default=0)
     distinct_paths = cat.one("SELECT COUNT(DISTINCT path) FROM file_versions", default=0)
-    w(f"- Files changed: {num(files_changed)} distinct files, by {num(edits)} successful edits and writes "
-      f"({rate(edits, files_changed, 1)} edits per file).")
-    w(f"- File versions the harness kept: {num(versions)} snapshots over {num(distinct_paths)} paths, "
-      f"of which {frac(backed_up, versions, 'snapshots')} have a backup file on disk.")
-    w(f"- Test commands run: {num(test_run)}; of those {frac(test_failed_runs, test_run, 'test commands')} "
-      "failed as commands (the runner itself errored, which is not the same as a failing test).")
-    w(f"- Assertions: {num(tests_passed)} passed, {num(tests_failed)} failed "
-      f"({pct(tests_passed, tests_passed + tests_failed)} pass rate over "
+    w(f"- {MEASURED} Files changed: {num(files_changed)} distinct files, by {num(edits)} successful "
+      f"edits and writes ({DERIVED} {rate(edits, files_changed, 1)} edits per file).")
+    w(f"- {MEASURED} File versions the harness kept: {num(versions)} snapshots over "
+      f"{num(distinct_paths)} paths, of which {frac(backed_up, versions, 'snapshots')} have a backup "
+      "file on disk.")
+    w(f"- {MEASURED} Test commands run: {num(test_run)}; of those "
+      f"{frac(test_failed_runs, test_run, 'test commands')} failed as commands.")
+    w(f"  - {DOMAIN} A test command that errored is not the same as a failing test: the runner never "
+      "got as far as an assertion.")
+    w(f"- {MEASURED} Assertions: {num(tests_passed)} passed, {num(tests_failed)} failed "
+      f"({DERIVED} {pct(tests_passed, tests_passed + tests_failed)} pass rate over "
       f"{num(tests_passed + tests_failed)} assertions with a recorded count).")
     F.update(test_commands=test_run, test_command_failures=test_failed_runs,
              tests_passed=tests_passed, tests_failed=tests_failed)
+    add_check(F, "Files changed and edits made", MEASURED,
+              f"{num(files_changed)} files, {num(edits)} edits",
+              sql_check(F["bundle"], "SELECT COUNT(DISTINCT file_hash) AS files, COUNT(*) AS edits "
+                                     "FROM file_changes"))
+    add_check(F, "Assertion pass rate", DERIVED,
+              f"{pct(tests_passed, tests_passed + tests_failed)} "
+              f"({num(tests_passed)} / {num(tests_passed + tests_failed)})",
+              sql_check(F["bundle"], "SELECT COALESCE(SUM(tests_passed),0) AS passed, "
+                                     "COALESCE(SUM(tests_failed),0) AS failed, COUNT(*) AS test_commands, "
+                                     "COALESCE(SUM(failed),0) AS commands_errored FROM actions "
+                                     "WHERE action='test'"),
+              derivation="assertions that passed over assertions that passed or failed. It answers \"did "
+                         "the tests that ran agree the work was right\" because an assertion is the "
+                         "smallest thing a test suite reports a verdict on.",
+              trap="the denominator counts only the test commands whose output carried a pass/fail "
+                   "count, so a suite whose output the parser could not read is invisible here rather "
+                   "than counted as failing.")
 
     if outcomes is None:
         w(f"- Per-turn outcome breakdown: UNAVAILABLE ({outcomes_note}). The totals above come from the "
@@ -1359,8 +1703,8 @@ def section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, 
     else:
         rows = [g for g in outcomes if (g.get("commit") or [0])[0] or (g.get("pr") or [0])[0]]
         rows.sort(key=lambda g: -((g.get("commit") or [0])[0] + (g.get("pr") or [0])[0]))
-        w(f"- Turns that produced a commit or a PR: {num(len(rows))} of {num(len(outcomes))} groups "
-          f"clp-bundle outcomes reports (source: {outcomes_note}). The busiest:")
+        w(f"- {MEASURED} Turns that produced a commit or a PR: {num(len(rows))} of {num(len(outcomes))} "
+          f"groups clp-bundle outcomes reports (source: {outcomes_note}). The busiest:")
         for g in rows[:top]:
             commit, pr = g.get("commit") or [0, 0], g.get("pr") or [0, 0]
             w(f"  - turn {g.get('group')}: {num(g.get('files'))} files, {num(g.get('edits'))} edits, "
@@ -1392,14 +1736,37 @@ def section_harness(cat, multi, single_note, w, F, keys, alerts, top):
     responses = F.get("responses") or 0
     F["api_errors"] = api_errors
     F["api_errors_per_1k"] = (1000.0 * api_errors / responses) if responses else None
+    # Both sides of the rate in one statement: the per-cause breakdown alone would
+    # print the numerator and leave the reader to find the denominator elsewhere.
+    api_sql = sql_check(
+        F["bundle"], "SELECT (SELECT COUNT(*) FROM nodes WHERE cause LIKE 'api-%' OR cause='timeout') "
+                     "AS api_and_timeout_failures, (SELECT COUNT(*) FROM (SELECT 1 FROM events "
+                     f"WHERE tokens_input IS NOT NULL GROUP BY {DEDUP_SQL})) AS responses")
+    api_breakdown_sql = sql_check(
+        F["bundle"], "SELECT kind, status, cause, COUNT(*) AS failures FROM nodes "
+                     "WHERE cause LIKE 'api-%' OR cause='timeout' GROUP BY 1,2,3 ORDER BY 4 DESC")
     if api:
-        w(f"- API and timeout failures: {num(api_errors)} across attempts and agents"
-          + (f", {F['api_errors_per_1k']:.2f} per 1,000 model responses "
-             f"({num(responses)} responses in all)" if responses else "") + ":")
+        w(f"- {MEASURED} API and timeout failures: {num(api_errors)} across attempts and agents"
+          + (f" ({DERIVED} {F['api_errors_per_1k']:.2f} per 1,000 model responses, over "
+             f"{num(responses)} responses in all)" if responses else "") + ":")
         for kind, status, cause, n in api:
             w(f"  - {kind} / {status} / {cause}: {num(n)}")
+        add_check(F, "API and timeout failures per 1,000 responses", DERIVED,
+                  f"{F['api_errors_per_1k']:.2f}" if responses else num(api_errors), api_sql,
+                  derivation="attempts and agents whose recorded cause is an `api-*` status or a "
+                             "timeout, over model responses, times 1,000. It answers \"how often did the "
+                             "provider fail us\" because those causes are set by the runtime when a call "
+                             "came back an error or never came back at all.",
+                  trap="the numerator counts failed attempts and agents, not failed calls: one attempt "
+                       "may have retried the same call several times, so this is a floor.")
+        add_check(F, "API and timeout failures by cause", MEASURED,
+                  f"{num(len(api))} kind/status/cause rows over {num(api_errors)} failures",
+                  api_breakdown_sql)
     else:
-        w("- API and timeout failures: none recorded on any attempt or agent node.")
+        w(f"- {MEASURED} API and timeout failures: none recorded on any attempt or agent node.")
+        # Not the per-cause breakdown: with nothing to group it prints a header and
+        # no row, and a check that prints nothing cannot confirm a zero.
+        add_check(F, "API and timeout failures", MEASURED, "0", api_sql)
 
     # -- the runtime-honesty check
     instances = cat.rows("SELECT id, label, status FROM nodes WHERE kind = 'workflow'")
@@ -1420,20 +1787,29 @@ def section_harness(cat, multi, single_note, w, F, keys, alerts, top):
         completed = sum(1 for _, _, s in instances if s == "completed")
         F["instances_total"] = len(instances)
         F["instances_honest"] = len(instances) - len(dishonest)
-        w(f"- **Workflow instances that reported `completed` while holding a failing attempt: "
+        w(f"- {MEASURED} **Workflow instances that reported `completed` while holding a failing attempt: "
           f"{frac(len(dishonest), completed, 'instances that reported completed')}** "
-          f"({frac(len(dishonest), len(instances), 'instances in all')}). This is the runtime-honesty "
-          "check: the status the runtime reported is not what its own attempts did.")
+          f"({frac(len(dishonest), len(instances), 'instances in all')}).")
+        w(f"  - {INFERENCE} This is the runtime-honesty check: the status the runtime reported is not "
+          "what its own attempts did.")
         for wid, label, total, bad in dishonest[: max(top, len(dishonest))]:
             w(f"  - `{label or wid}` (`{wid}`): {frac(bad, total, 'attempts')} did not end ok")
+        add_check(F, "Workflow instances whose reported status misses a failing attempt", MEASURED,
+                  f"{num(len(dishonest))} of {num(len(instances))} instances",
+                  sql_check(F["bundle"], "SELECT (SELECT COUNT(*) FROM nodes WHERE kind='workflow') AS "
+                                         "instances, (SELECT COUNT(*) FROM nodes w WHERE w.kind='workflow' "
+                                         "AND w.status='completed' AND EXISTS (SELECT 1 FROM nodes a "
+                                         "WHERE a.kind='attempt' AND a.instance=w.id AND a.status<>'ok')) "
+                                         "AS misreported"))
 
     resumed = cat.rows("""SELECT w.id, w.label, w.status, json_extract(w.attrs, '$.resumed_from')
                             FROM nodes w WHERE w.kind = 'workflow'
                              AND json_extract(w.attrs, '$.resumed_from') IS NOT NULL""")
     F["resumed_instances"] = len(resumed)
     if instances:
-        w(f"- Resumed workflow instances: {frac(len(resumed), len(instances), 'instances')}. A resume "
-          "reuses the run id and makes a second instance, so the run's totals cover both.")
+        w(f"- {MEASURED} Resumed workflow instances: {frac(len(resumed), len(instances), 'instances')}.")
+        w(f"  - {DOMAIN} A resume reuses the run id and makes a second instance, so the run's totals "
+          "cover both.")
         for wid, label, status, src in resumed:
             w(f"  - `{label or wid}` resumed from `{src}`, second instance ended `{status}`")
 
@@ -1453,7 +1829,26 @@ def section_harness(cat, multi, single_note, w, F, keys, alerts, top):
     F.update(tool_calls=calls_total, tool_errors=errors_total)
     F["tool_error_rate"] = (errors_total / calls_total) if calls_total else None
     F["tool_rows"] = rows
-    w(f"- Tool error rate: {frac(errors_total, calls_total, 'completed tool calls')} returned an error.")
+    w(f"- {DERIVED} Tool error rate: {frac(errors_total, calls_total, 'completed tool calls')} returned "
+      "an error.")
+    tools_sql = sql_check(
+        F["bundle"], "SELECT u.name, COUNT(*) AS calls, COALESCE(SUM(r.is_error),0) AS errors "
+                     "FROM event_tools u JOIN event_tools r ON r.tool_use_id=u.tool_use_id "
+                     "AND r.role='result' WHERE u.role='use' GROUP BY 1 ORDER BY errors DESC, calls DESC")
+    if calls_total:
+        add_check(F, "Tool error rate", DERIVED,
+                  f"{pct(errors_total, calls_total)} ({num(errors_total)} / {num(calls_total)})",
+                  sql_check(F["bundle"], "SELECT COUNT(*) AS completed_calls, "
+                                         "COALESCE(SUM(r.is_error),0) AS errors FROM event_tools u "
+                                         "JOIN event_tools r ON r.tool_use_id=u.tool_use_id "
+                                         "AND r.role='result' WHERE u.role='use'"),
+                  derivation="result records flagged `is_error` over result records paired to a use "
+                             "record. It answers \"how often did a tool the agent reached for come back "
+                             "unusable\" because a call with no result cannot be said to have errored, "
+                             "so it is excluded from both sides rather than counted as a failure.",
+                  trap="the denominator is results, not calls: a tool that emits two result records for "
+                       "one call is counted twice. Use the Issued column for \"how many times did it "
+                       "call X\".")
     issued = dict(cat.rows("SELECT name, COUNT(*) FROM event_tools WHERE role = 'use' GROUP BY 1"))
     issued_total = sum(issued.values())
     if calls_total != issued_total:
@@ -1461,8 +1856,15 @@ def section_harness(cat, multi, single_note, w, F, keys, alerts, top):
           f"them answered {num(issued_total)} issued calls, because a few tools emit more than one result "
           "record for a single call. The Issued column is the call count; use it for anything phrased as "
           "\"how many times did it call X\".")
+    if rows:
+        add_check(F, "Tool calls and errors per tool", MEASURED,
+                  f"one row per tool, {num(len(rows))} of them", tools_sql,
+                  derivation="the Calls and Errors columns of the table above. The Issued column is a "
+                             "separate count of `use` records, because a tool that emits two result "
+                             "records for one call would otherwise be counted twice.")
     w("")
-    w("| Tool | Issued | Calls (results) | Errors | Error rate | Share of all calls |")
+    w(f"| Tool | Issued {MEASURED} | Calls (results) {MEASURED} | Errors {MEASURED} "
+      f"| Error rate {DERIVED} | Share of all calls {DERIVED} |")
     w("|---|---:|---:|---:|---:|---:|")
     for name, calls, errors in rows:
         w(f"| {name or '(unnamed)'} | {num(issued.get(name, 0))} | {num(calls)} | {num(errors)} "
@@ -1474,9 +1876,14 @@ def section_harness(cat, multi, single_note, w, F, keys, alerts, top):
                        "AND COALESCE(human, 0) = 0", default=0)
     user_records = cat.one("SELECT COUNT(*) FROM events WHERE kind = 'main' AND type = 'user'", default=0)
     F["injected_share"] = (injected / user_records) if user_records else None
-    w(f"- Harness-injected records on the main thread: {frac(injected, user_records, 'user-role records')} "
-      "were not typed by the person - tool results, task notifications, command output and the like. "
-      "Only the remainder are prompts.")
+    w(f"- {MEASURED} Harness-injected records on the main thread: "
+      f"{frac(injected, user_records, 'user-role records')} were not typed by the person - tool results, "
+      "task notifications, command output and the like. Only the remainder are prompts.")
+    add_check(F, "Harness-injected records on the main thread", MEASURED,
+              f"{num(injected)} of {num(user_records)}",
+              sql_check(F["bundle"], "SELECT COUNT(*) AS user_records, "
+                                     "SUM(COALESCE(human,0)=0) AS injected FROM events "
+                                     "WHERE kind='main' AND type='user'"))
 
     if api_errors:
         fire(alerts, "harness:api-errors", api_errors)
@@ -1497,24 +1904,35 @@ def section_human(cat, turns, turns_note, w, F, keys, alerts):
     w("## 7. Human loop")
     human_msgs = cat.one("SELECT COUNT(*) FROM events WHERE human = 1", default=0)
     total_events = cat.one("SELECT COUNT(*) FROM events", default=0)
-    w(f"- Messages the person actually wrote: {frac(human_msgs, total_events, 'records in the bundle')}.")
+    w(f"- {MEASURED} Messages the person actually wrote: "
+      f"{frac(human_msgs, total_events, 'records in the bundle')}.")
+    add_check(F, "Messages the person actually wrote", MEASURED,
+              f"{num(human_msgs)} of {num(total_events)}",
+              sql_check(F["bundle"], "SELECT (SELECT COUNT(*) FROM events WHERE human=1) AS "
+                                     "human_messages, (SELECT COUNT(*) FROM events) AS records"))
 
     rows = cat.rows("SELECT kind, COUNT(*) FROM events WHERE interrupt = 1 GROUP BY 1 ORDER BY 2 DESC")
     total_int = sum(n for _, n in rows)
     human_int = sum(n for k, n in rows if k == "main")
     runtime_int = total_int - human_int
     F.update(human_interrupts=human_int, runtime_interrupts=runtime_int)
-    w(f"- Interrupts: {num(total_int)} in all, and they are two different things:")
+    w(f"- {MEASURED} Interrupts: {num(total_int)} in all, and they are two different things:")
     for kind, n in rows:
         if kind == "main":
-            w(f"  - `{kind}`: {frac(n, total_int, 'interrupts')} - **a person pressing escape.** "
+            w(f"  - `{kind}`: {frac(n, total_int, 'interrupts')} - {DOMAIN} **a person pressing escape.** "
               "Main-thread interrupts are the only human ones.")
         else:
-            w(f"  - `{kind}`: {frac(n, total_int, 'interrupts')} - **the runtime killing an agent that "
-              "stopped making progress**, not a person. Counting these as human intervention would "
-              "misread an automated stall-kill as impatience.")
+            w(f"  - `{kind}`: {frac(n, total_int, 'interrupts')} - {DOMAIN} **the runtime killing an "
+              "agent that stopped making progress**, not a person. Counting these as human intervention "
+              "would misread an automated stall-kill as impatience.")
     if not rows:
         w("  - none recorded.")
+    if rows:
+        add_check(F, "Interrupts, human and runtime", MEASURED,
+                  f"{num(human_int)} human of {num(total_int)}",
+                  sql_check(F["bundle"], "SELECT kind, COUNT(*) AS interrupts FROM events "
+                                         "WHERE interrupt=1 GROUP BY 1 ORDER BY 2 DESC"),
+                  derivation="only the `main` row is a person: the others are the runtime killing an agent.")
 
     w("- Permission denials: not derivable from this catalog (a denial is a plain errored tool result "
       "with no flag of its own, and the catalog holds no record text). Not zero - unknown.")
@@ -1525,21 +1943,31 @@ def section_human(cat, turns, turns_note, w, F, keys, alerts):
         ask_waits = [x for x in turns["waits"] if x["tool"] == "AskUserQuestion"]
         ask_minutes = sum(x["minutes"] for x in ask_waits)
         F["ask_minutes"] = ask_minutes
-        w(f"- AskUserQuestion: {num(asks)} calls; the {num(len(ask_waits))} that clp-session turns "
-          f"listed among the longest waits cost {ask_minutes:.1f} minutes "
+        w(f"- {MEASURED} AskUserQuestion: {num(asks)} calls; the {num(len(ask_waits))} that clp-session "
+          f"turns listed among the longest waits cost {ask_minutes:.1f} minutes "
           f"({pct(ask_minutes, turns['minutes'].get('e2e') or 0)} of e2e). Shorter ones are not listed, "
           "so this is a floor.")
+        add_check(F, "AskUserQuestion calls", MEASURED, num(asks),
+                  sql_check(F["bundle"], "SELECT COUNT(*) AS calls FROM event_tools "
+                                         "WHERE role='use' AND name='AskUserQuestion'"))
         retries = [t for t in turns["turns"] if RETRY_PROMPT.search(t["prompt"] or "")]
         F["manual_retries"] = len(retries)
-        w(f"- Turns whose prompt reads like a manual retry: "
-          f"{frac(len(retries), len(turns['turns']), 'turns')} match /try again|retry|continue|keep going/i. "
-          "**This is a heuristic on the prompt text**, not a recorded fact: it will catch a genuine "
-          '"continue with the next item" and miss a rephrased retry.')
+        w(f"- {MEASURED} Turns whose prompt reads like a manual retry: "
+          f"{frac(len(retries), len(turns['turns']), 'turns')} match /try again|retry|continue|keep going/i.")
+        w(f"  - {INFERENCE} **This is a heuristic on the prompt text**, not a recorded fact: it will "
+          'catch a genuine "continue with the next item" and miss a rephrased retry. Whether these were '
+          "retries is an argument, not a measurement.")
         for t in retries[:10]:
             w(f'  - turn {t["turn"]} ({t["start"]}): "{(t["prompt"] or "")[:90]}"')
+        add_check(F, "Turns whose prompt reads like a manual retry", MEASURED,
+                  f"{num(len(retries))} of {num(len(turns['turns']))} turns", None,
+                  note="the regex runs over the `prompt=` field of each TURN line, and a grep of the "
+                       "whole line would also match the tool names and paths on it. Run "
+                       f"`{F.get('turns_cmd') or 'clp-session turns --top 0 <archive>'}` and apply "
+                       "/try again|retry|continue|keep going/i to the prompt text alone.")
     else:
-        w(f"- AskUserQuestion: {num(asks)} calls. Their wait time and the manual-retry count are "
-          f"UNAVAILABLE: {turns_note}")
+        w(f"- {MEASURED} AskUserQuestion: {num(asks)} calls. Their wait time and the manual-retry count "
+          f"are UNAVAILABLE: {turns_note}")
 
     if F.get("manual_retries"):
         fire(alerts, "human:manual-retries", F["manual_retries"])
@@ -1561,17 +1989,25 @@ def section_rework(cat, multi, single_note, w, F, keys, alerts):
         return
     retried = cat.one("SELECT COUNT(*) FROM nodes WHERE kind = 'unit' AND attempts > 1", default=0)
     F.update(units=units, units_retried=retried)
-    w(f"- Logical units that needed more than one attempt: {frac(retried, units, 'units')}.")
-    w(f"- Stalled attempts: {frac(F.get('attempts_stalled', 0), F.get('attempts_total', 0) or 1, 'attempts')}.")
-    w(f"- Resumed workflow instances: {num(F.get('resumed_instances', 0))} of "
+    w(f"- {DERIVED} Logical units that needed more than one attempt: {frac(retried, units, 'units')}.")
+    w(f"- {DERIVED} Stalled attempts: "
+      f"{frac(F.get('attempts_stalled', 0), F.get('attempts_total', 0) or 1, 'attempts')}.")
+    w(f"- {MEASURED} Resumed workflow instances: {num(F.get('resumed_instances', 0))} of "
       f"{num(F.get('instances_total', 0))}.")
+    add_check(F, "Units that needed more than one attempt", DERIVED,
+              f"{pct(retried, units)} ({num(retried)} / {num(units)})",
+              sql_check(F["bundle"], "SELECT COUNT(*) AS units, SUM(attempts > 1) AS retried "
+                                     "FROM nodes WHERE kind='unit'"),
+              derivation="units whose `attempts` count is above one, over all units. It answers \"how "
+                         "much of the work had to be done more than once\" because a unit is the "
+                         "smallest piece of work the runtime will retry as a whole.")
 
     dist = cat.rows("SELECT attempts, COUNT(*) FROM nodes WHERE kind = 'unit' GROUP BY 1 ORDER BY 1")
     total_attempts_on_units = sum((a or 0) * n for a, n in dist)
     w(f"- Attempts per unit ({num(total_attempts_on_units)} attempts over {num(units)} units, "
-      f"{rate(total_attempts_on_units, units, 2)} per unit):")
+      f"{DERIVED} {rate(total_attempts_on_units, units, 2)} per unit):")
     w("")
-    w("| Attempts | Units | Share of units | Attempts spent here |")
+    w(f"| Attempts | Units {MEASURED} | Share of units {DERIVED} | Attempts spent here {DERIVED} |")
     w("|---:|---:|---:|---:|")
     for attempts, n in dist:
         w(f"| {attempts if attempts is not None else '(none)'} | {num(n)} | {pct(n, units)} "
@@ -1591,13 +2027,27 @@ def section_rework(cat, multi, single_note, w, F, keys, alerts):
     done = dict(recovery).get("done", 0)
     F.update(units_hurt=hurt, units_recovered=done)
     if hurt:
-        w(f"- Units that hit at least one bad attempt: {frac(hurt, units, 'units')}, and where they ended:")
+        w(f"- {MEASURED} Units that hit at least one bad attempt: {frac(hurt, units, 'units')}, and "
+          "where they ended:")
         for state, n in recovery:
             w(f"  - final state `{state}`: {frac(n, hurt, 'hurt units')}")
-        w(f"  - Self-recovery rate: {frac(done, hurt, 'units that hit a bad attempt')} still reached "
-          "`done`, with no person involved.")
+        w(f"  - {DERIVED} Self-recovery rate: {frac(done, hurt, 'units that hit a bad attempt')} still "
+          "reached `done`, with no person involved.")
+        add_check(F, "Self-recovery rate", DERIVED, f"{pct(done, hurt)} ({num(done)} / {num(hurt)})",
+                  sql_check(F["bundle"], """SELECT COUNT(*) AS units_hurt,
+                      COALESCE(SUM(json_extract(u.attrs,'$.state')='done'),0) AS reached_done
+                      FROM nodes u WHERE u.kind='unit' AND EXISTS (SELECT 1 FROM edges e
+                      JOIN nodes a ON a.id=e.dst WHERE e.kind='contains' AND e.src=u.id
+                      AND a.kind='attempt' AND a.status<>'ok')"""),
+                  derivation="units that reached the `done` state over units that hit at least one "
+                             "non-ok attempt. It answers \"when something went wrong, did the system fix "
+                             "it itself\" because the denominator is exactly the units that had something "
+                             "to recover from.",
+                  trap="no person appears in this denominator, so a unit a person rescued by hand is "
+                       "counted here as a self-recovery; the human-loop figures in section 7 are what "
+                       "tell you whether that happened.")
     else:
-        w("- Units that hit at least one bad attempt: none.")
+        w(f"- {MEASURED} Units that hit at least one bad attempt: none.")
 
     if units and retried / units > 0.10:
         fire(alerts, "rework:unit-retry-rate-high", retried / units)
@@ -1617,8 +2067,11 @@ def section_rework(cat, multi, single_note, w, F, keys, alerts):
 def section_axes(w, F):
     """Section 9. Returns one record per axis, in id order, for stdout."""
     records = {}
+    bundle = F.get("bundle", "<bundle>")
+    turns_cmd = F.get("turns_cmd")
 
-    def put(axis, value, components="", reason="", denominator=None):
+    def put(axis, value, components="", reason="", denominator=None, because="",
+            check=None, check_note=""):
         """Record an axis. `value` None means it could not be measured, and then
         `reason` says why - it is never quietly turned into a zero, because a
         missing measurement and a bad one are different findings.
@@ -1628,10 +2081,22 @@ def section_axes(w, F):
         handful of them is noise whatever ladder reads it. It is given only where
         the divisor really is a count of things; where the divisor is a duration
         or another continuous quantity it is left out rather than faked, and the
-        axis's rationale in the scale says so."""
+        axis's rationale in the scale says so.
+
+        `because` is what makes this ratio the right answer for this axis, and it
+        is appended to the components: a numerator over a denominator is arithmetic,
+        and a scorecard invites the question of why that arithmetic answers the
+        question the axis is named after. `check` is the one command that
+        reproduces the numerator and the denominator together; where no single
+        command can, `check_note` says what a reader has to run instead."""
+        detail = components
+        if because and value is not None:
+            detail = f"{components}; the right ratio for {AXES[axis]['label']} because {because}"
         records[axis] = {"id": axis, "group": AXES[axis]["group"], "unit": AXES[axis]["unit"],
-                         "value": value, "components": components, "reason": reason,
-                         "denominator": denominator}
+                         "value": value, "components": detail, "reason": reason,
+                         "denominator": denominator,
+                         "check": check if value is not None else None,
+                         "check_note": check_note}
 
     # A count of 0 out of 0 is not a bad measurement, it is a category that does
     # not exist in this session. SINGLE says so, instead of printing "0 of 0".
@@ -1644,20 +2109,40 @@ def section_axes(w, F):
         f"{num(good)} of {num(terminal_total)} attempts+agents reached a good terminal state "
         f"({pct(good, terminal_total)})" if terminal_total else SINGLE,
         "the catalog has no attempt or agent nodes, so there is no terminal state to count",
-        denominator=terminal_total or None)
+        denominator=terminal_total or None,
+        because="an attempt that ended `ok` and an agent that `completed` are the only two terminal "
+                "states whose work the runtime keeps, so everything else is the platform failing to "
+                "finish something it started",
+        check=sql_check(bundle, "SELECT (SELECT COUNT(*) FROM nodes WHERE kind='attempt' AND "
+                                "status='ok') + (SELECT COUNT(*) FROM nodes WHERE kind='agent' AND "
+                                "status='completed') AS good_terminal, (SELECT COUNT(*) FROM nodes "
+                                "WHERE kind IN ('attempt','agent')) AS attempts_and_agents"))
 
     put("A2", F.get("api_errors_per_1k"),
         f"{num(F.get('api_errors'))} API and timeout failures over {num(F.get('responses'))} "
         "model responses" if F.get("api_errors_per_1k") is not None else "no model responses",
         "no model response carries token usage, so there is no response count to divide by",
-        denominator=F.get("responses") or None)
+        denominator=F.get("responses") or None,
+        because="a provider fault has to be read against how much was asked of the provider; per 1,000 "
+                "responses is the rate that stays comparable between a short session and a long one",
+        check=sql_check(bundle, "SELECT (SELECT COUNT(*) FROM nodes WHERE cause LIKE 'api-%' OR "
+                                "cause='timeout') AS api_and_timeout_failures, (SELECT COUNT(*) FROM "
+                                f"(SELECT 1 FROM events WHERE tokens_input IS NOT NULL GROUP BY "
+                                f"{DEDUP_SQL})) AS responses"))
 
     hit = F.get("cache_hit_rate")
     cache_components = (f"cache_read {num(F.get('cache_read'))} of input {num(F.get('total_input'))} "
                         f"tokens ({pct(F.get('cache_read') or 0, F.get('total_input') or 0)})")
+    cache_because = ("cache_read is the part of the input the provider served from a cache instead of "
+                     "reading afresh, so the ratio is exactly the fraction of the context nobody had to "
+                     "pay full price for")
+    cache_check = sql_check(
+        bundle, f"SELECT SUM(cr) AS cache_read, SUM(ti) AS input FROM (SELECT MAX(tokens_input) AS ti, "
+                f"tokens_cache_read AS cr FROM events WHERE tokens_input IS NOT NULL GROUP BY "
+                f"{DEDUP_SQL})")
     put("A3", hit, cache_components if hit is not None else "no input tokens",
         "no response records input tokens, so there is nothing to divide by",
-        denominator=F.get("total_input") or None)
+        denominator=F.get("total_input") or None, because=cache_because, check=cache_check)
 
     launches = F.get("launches") or 0
     rejected = F.get("launch_rejected_config") or 0
@@ -1665,7 +2150,14 @@ def section_axes(w, F):
         f"{num(rejected)} of {num(launches)} launches were rejected for a config or syntax fault "
         f"({pct(rejected, launches)})" if launches else SINGLE,
         "the session launched no agent and no workflow",
-        denominator=launches or None)
+        denominator=launches or None,
+        because="a launch the runtime refused for a config or syntax fault never ran at all, so it is a "
+                "fault in what was handed to the runtime rather than in anything the model then did",
+        check=sql_check(bundle, f"SELECT (SELECT COUNT(*) FROM nodes WHERE kind='launch_error' AND "
+                                f"({CONFIG_LIKE})) AS rejected_for_config, (SELECT COUNT(*) FROM edges "
+                                f"WHERE kind='launch') + (SELECT COUNT(*) FROM nodes WHERE "
+                                f"kind='launch_error') AS launches"),
+        check_note="")
 
     inst = F.get("instances_total") or 0
     honest = F.get("instances_honest") or 0
@@ -1673,16 +2165,34 @@ def section_axes(w, F):
         f"{num(honest)} of {num(inst)} workflow instances reported a status matching what their "
         f"attempts did ({pct(honest, inst)})" if inst else SINGLE,
         "no workflow instances, so there is no reported status to check against reality",
-        denominator=inst or None)
+        denominator=inst or None,
+        because="an instance that reports `completed` while holding a failing attempt tells its caller "
+                "something its own records contradict, and a caller who cannot trust the status has to "
+                "re-read the attempts itself",
+        check=sql_check(bundle, "SELECT (SELECT COUNT(*) FROM nodes WHERE kind='workflow') AS instances, "
+                                "(SELECT COUNT(*) FROM nodes w WHERE w.kind='workflow' AND "
+                                "w.status='completed' AND EXISTS (SELECT 1 FROM nodes a WHERE "
+                                "a.kind='attempt' AND a.instance=w.id AND a.status<>'ok')) AS "
+                                "misreported"))
 
     # -- Group B
     err = F.get("tool_error_rate")
+    tool_check = sql_check(
+        bundle, "SELECT COUNT(*) AS completed_calls, COALESCE(SUM(r.is_error),0) AS errors, "
+                "SUM(u.name='Bash') AS bash_calls, SUM(u.name IN "
+                f"({', '.join(chr(39) + t + chr(39) for t in SEARCH_TOOLS)})) AS search_tool_calls "
+                "FROM event_tools u JOIN event_tools r ON r.tool_use_id=u.tool_use_id "
+                "AND r.role='result' WHERE u.role='use'")
     put("B1", err,
         f"{num(F.get('tool_errors'))} of {num(F.get('tool_calls'))} completed tool calls returned "
         f"an error ({pct(F.get('tool_errors') or 0, F.get('tool_calls') or 0)})"
         if err is not None else "no completed tool calls",
         "no tool call has both a use and a result record, so there is nothing to divide",
-        denominator=F.get("tool_calls") or None)
+        denominator=F.get("tool_calls") or None,
+        because="a call whose result came back flagged as an error is the agent having used a tool "
+                "wrongly or on the wrong thing, and only calls that came back at all can be judged, "
+                "so the denominator is results rather than calls issued",
+        check=tool_check)
 
     rows = F.get("tool_rows") or []
     calls_total = sum(r[1] for r in rows)
@@ -1693,7 +2203,11 @@ def section_axes(w, F):
         f"search tools ({', '.join(SEARCH_TOOLS)}) were used {num(search)} times"
         if calls_total else "no tool calls",
         "the session made no tool call",
-        denominator=calls_total or None)
+        denominator=calls_total or None,
+        because="Bash is the tool that can do anything, so reaching for it where a purpose-built tool "
+                "exists is the measurable trace of a poor choice; the search-tool count beside it is "
+                "what a scorer needs to tell a justified shell call from a lazy one",
+        check=tool_check)
 
     attempts_total = F.get("attempts_total") or 0
     not_kept = (attempts_total - (F.get("attempts_ok") or 0)) + (F.get("discarded_ok_attempts") or 0)
@@ -1702,7 +2216,15 @@ def section_axes(w, F):
         f"({pct(not_kept, attempts_total)}), counting {num(F.get('discarded_ok_attempts'))} that "
         "succeeded inside a cancelled instance" if attempts_total else SINGLE,
         "no attempts, so there is no retry to count",
-        denominator=attempts_total or None)
+        denominator=attempts_total or None,
+        because="an attempt whose result was not kept has to be done again by somebody, whether it "
+                "failed or whether it succeeded inside an instance that was then cancelled",
+        check=sql_check(bundle, "SELECT (SELECT COUNT(*) FROM nodes WHERE kind='attempt' AND "
+                                "status<>'ok') + (SELECT COUNT(*) FROM nodes WHERE kind='attempt' AND "
+                                "status='ok' AND instance IN (SELECT id FROM nodes WHERE "
+                                "kind='workflow' AND status IN ('killed','aborted'))) AS "
+                                "no_kept_result, (SELECT COUNT(*) FROM nodes WHERE kind='attempt') "
+                                "AS attempts"))
 
     put("B4", None, "compactions are not recorded in the catalog",
         "the catalog stores each record's structure, not its text, and a compaction summary is a "
@@ -1714,7 +2236,17 @@ def section_axes(w, F):
     put("B5", (useful / total_min) if (useful is not None and total_min) else None,
         f"{useful:,.0f} of {total_min:,.0f} agent-minutes went to work that survived "
         f"({pct(useful or 0, total_min)})" if total_min else SINGLE,
-        "no agent or attempt node carries both a start and an end, so there are no minutes to divide")
+        "no agent or attempt node carries both a start and an end, so there are no minutes to divide",
+        because="orchestration is judged on what it did with the fleet's time, and a minute spent on an "
+                "attempt whose output was thrown away bought nothing however well the attempt ran",
+        check=sql_check(bundle, "SELECT ROUND(SUM((julianday(end)-julianday(start))*1440.0),0) AS "
+                                "agent_minutes, ROUND(SUM(CASE WHEN (kind='attempt' AND status='ok' AND "
+                                "(instance IS NULL OR instance NOT IN (SELECT id FROM nodes WHERE "
+                                "kind='workflow' AND status IN ('killed','aborted')))) OR "
+                                "(kind='agent' AND status='completed') THEN "
+                                "(julianday(end)-julianday(start))*1440.0 END),0) AS survived_minutes "
+                                "FROM nodes WHERE kind IN ('attempt','agent') AND start IS NOT NULL "
+                                "AND end IS NOT NULL"))
 
     # -- Group C
     artifacts = F.get("confirmed_artifacts")
@@ -1729,7 +2261,14 @@ def section_axes(w, F):
         put("C1", artifacts / model_hours,
             f"{num(artifacts)} repository-confirmed artifacts over {model_hours:.1f} model-hours. "
             "COHORT-RELATIVE: comparable only against other sessions doing the same kind of work, "
-            "never as an absolute")
+            "never as an absolute",
+            because="throughput has to be read against the time the model was actually thinking, not "
+                    "against elapsed time that includes waiting on a person",
+            check_note="the artifacts come from `clp-bundle " + bundle +
+                       " repo --json` and the model-hours from `" +
+                       (turns_cmd or "clp-session turns --top 0 <archive>") +
+                       "`, whose TOTAL_MIN line carries model=. Each input is one command; the ratio "
+                       "is not.")
 
     cc = F.get("confirmed_commits")
     put("C2", ((F.get("exact_commits") or 0) / cc) if cc else None,
@@ -1737,7 +2276,14 @@ def section_axes(w, F):
         f"by a sha the command itself printed ({pct(F.get('exact_commits') or 0, cc)})" if cc
         else "no repository-confirmed commits",
         "clp-bundle repo was unavailable" if cc is None else "the session confirmed no commits",
-        denominator=cc or None)
+        denominator=cc or None,
+        because="only an `exact` match rests on a sha the command printed; the rest are attributed by "
+                "time and subject, so this ratio is how much of the delivery claim is proven rather "
+                "than inferred",
+        check=f"clp-bundle {bundle} repo --json | python3 -c \"import json,sys; "
+              "c=json.load(sys.stdin)['commits']; "
+              "print(sum(1 for x in c if x.get('match')=='exact'), 'exact of', "
+              "sum(1 for x in c if (x.get('match') or 'none')!='none'), 'confirmed')\"")
 
     assertions = (F.get("tests_passed") or 0) + (F.get("tests_failed") or 0)
     commands = F.get("test_commands") or 0
@@ -1748,14 +2294,27 @@ def section_axes(w, F):
         + (f", against {num(artifacts)} confirmed artifacts" if artifacts else "")
         if assertions else f"{num(commands)} test commands, none with a recorded assertion count",
         "no test command reported how many assertions passed or failed",
-        denominator=assertions or None)
+        denominator=assertions or None,
+        because="an assertion is the smallest thing a suite returns a verdict on, so the pass rate is "
+                "the finest-grained evidence the session produced that its work was right; the command "
+                "count beside it is what says whether enough was checked at all",
+        check=sql_check(bundle, "SELECT COALESCE(SUM(tests_passed),0) AS passed, "
+                                "COALESCE(SUM(tests_failed),0) AS failed, COUNT(*) AS test_commands, "
+                                "COALESCE(SUM(failed),0) AS commands_errored FROM actions "
+                                "WHERE action='test'"))
 
     share = F.get("human_idle_share")
     put("C4", (1 - share) if share is not None else None,
         f"human and idle together are {share:.1%} of the {(F.get('minutes') or {}).get('e2e', 0):.1f} "
         f"end-to-end minutes, so {1 - share:.1%} of the session ran without waiting"
         if share is not None else "no time split",
-        "clp-session turns was unavailable, so there is no human/idle split")
+        "clp-session turns was unavailable, so there is no human/idle split",
+        because="the five time buckets partition end-to-end time without double-counting a second, so "
+                "one minus the waiting share is exactly the part of the session that ran on its own",
+        check=turns_cmd,
+        check_note="" if turns_cmd else "the turns run was supplied as a file, so the command behind it "
+                                        "is not recorded here; re-run clp-session turns on the main "
+                                        "archive and read its TOTAL_MIN line")
 
     hurt = F.get("units_hurt")
     put("C5", ((F.get("units_recovered") or 0) / hurt) if hurt else None,
@@ -1763,7 +2322,13 @@ def section_axes(w, F):
         f"done, with no person involved ({pct(F.get('units_recovered') or 0, hurt)})" if hurt
         else "no unit hit a bad attempt",
         "no unit hit a bad attempt, so there was nothing to recover from",
-        denominator=hurt or None)
+        denominator=hurt or None,
+        because="the denominator is exactly the units that had something to recover from, so the ratio "
+                "answers what happened when things went wrong rather than how often they went wrong",
+        check=sql_check(bundle, """SELECT COUNT(*) AS units_hurt,
+            COALESCE(SUM(json_extract(u.attrs,'$.state')='done'),0) AS reached_done FROM nodes u
+            WHERE u.kind='unit' AND EXISTS (SELECT 1 FROM edges e JOIN nodes a ON a.id=e.dst
+            WHERE e.kind='contains' AND e.src=u.id AND a.kind='attempt' AND a.status<>'ok')"""))
 
     # -- Group D
     per_artifact = F.get("tokens_per_artifact")
@@ -1771,7 +2336,12 @@ def section_axes(w, F):
         f"{num(F.get('total_input'))} input tokens over {num(artifacts)} repository-confirmed "
         "artifacts" if per_artifact else "no confirmed artifacts",
         "clp-bundle repo was unavailable, so there is no confirmed-artifact denominator",
-        denominator=artifacts or None)
+        denominator=artifacts or None,
+        because="the bill is in input tokens and the only output anyone can check is what the repository "
+                "confirms, so this is what one confirmed artifact actually cost",
+        check_note="the tokens come from the `Total input tokens` check in this "
+                   "section and the artifacts from the `Commits the repository confirms` and `PRs "
+                   "GitHub confirms` checks beside it. Each input is one command; the ratio is not.")
 
     waste = F.get("waste_share")
     put("D2", waste,
@@ -1779,12 +2349,23 @@ def section_axes(w, F):
         f"({pct(F.get('waste_tokens') or 0, F.get('total_input') or 0)})" if waste is not None
         else SINGLE,
         "nothing in this session carries an outcome, so no token can be shown to be wasted",
-        denominator=(F.get("total_input") or None) if waste is not None else None)
+        denominator=(F.get("total_input") or None) if waste is not None else None,
+        because="an attempt or agent that reached no kept result produced nothing that was used, so its "
+                "input tokens are what was paid for nothing",
+        check=sql_check(
+            bundle,
+            "SELECT (SELECT COALESCE(SUM(tokens_input),0) FROM nodes WHERE kind='attempt' AND "
+            "status<>'ok') + (SELECT COALESCE(SUM(tokens_input),0) FROM nodes WHERE kind='agent' AND "
+            "status<>'completed') + (SELECT COALESCE(SUM(tokens_input),0) FROM nodes WHERE "
+            "kind='attempt' AND status='ok' AND instance IN (SELECT id FROM nodes WHERE "
+            "kind='workflow' AND status IN ('killed','aborted'))) AS wasted_input, "
+            f"(SELECT SUM(ti) FROM (SELECT MAX(tokens_input) AS ti FROM events WHERE tokens_input IS "
+            f"NOT NULL GROUP BY {DEDUP_SQL})) AS total_input"))
 
     # The same measurement as A3, on purpose - see the comment on AXES["D3"].
     put("D3", hit, cache_components if hit is not None else "no input tokens",
         "no response records input tokens, so there is nothing to divide by",
-        denominator=F.get("total_input") or None)
+        denominator=F.get("total_input") or None, because=cache_because, check=cache_check)
 
     put("D4", None, "no model is recorded against any response",
         "the catalog records no model for the responses, so neither the token share by model nor "
@@ -1804,7 +2385,15 @@ def section_axes(w, F):
             parts.append(f"largest {what} unknown ({why})")
     put("D5", max(shares) if shares else None, "; ".join(parts),
         "neither the largest turn nor the largest run could be measured",
-        denominator=(total_in or None) if shares else None)
+        denominator=(total_in or None) if shares else None,
+        because="a bill concentrated in one turn or one run is a different problem from the same bill "
+                "spread evenly: it can be cut by fixing one thing, and it can also be an artefact of one "
+                "deliberate batch, which is why this axis is gated on the declared workload shape",
+        check_note="the largest turn comes from `" +
+                   (turns_cmd or "clp-session turns --top 0 <archive>") +
+                   "` (the largest `tokens_in=` on a TURN line), the largest run from the `Largest "
+                   "workflow run by input tokens` check in this section, and the denominator from the "
+                   "`Total input tokens` check beside it. Each input is one command; the share is not.")
 
     # -- render
     w("## 9. Scoring inputs (raw measurements; this script does not score them)")
@@ -1814,6 +2403,12 @@ def section_axes(w, F):
            "(scoring-scale.json) and an agent applies it. An axis that could not be measured says "
            "n/a and why; it is not a zero, and a scorer must leave it out of its group rather than "
            "count it against the session."))
+    w("")
+    w(wrap(f"Every axis value is {DERIVED} derived - each one is a ratio or a rate over measured "
+           "counts - so the marker is on the value and the Components column carries the derivation: "
+           "the numerator, the denominator, and what makes that ratio the right answer for that axis. "
+           "Section 10 gives each axis the one command that reproduces its numerator and denominator "
+           "together, or says why no single command can."))
     w("")
     w(wrap("The scale reports the four groups separately and never averages them into one number. "
            "The groups have different owners - infra and the gateway, the model and harness, the work "
@@ -1828,7 +2423,7 @@ def section_axes(w, F):
         w("|---|---|---|---:|---:|---|")
         for axis in [a for a in ordered if AXES[a]["group"] == group]:
             rec, spec = records[axis], AXES[axis]
-            cell = bare(rec["value"]) if rec["value"] is not None else "n/a"
+            cell = f"{DERIVED} {bare(rec['value'])}" if rec["value"] is not None else "n/a"
             den = num(rec["denominator"]) if rec.get("denominator") else "-"
             w(f"| {axis} {spec['label']} | {spec['measures']} | {spec['unit']} | {cell} "
               f"| {den} | {rec['components']} |")
@@ -1846,6 +2441,66 @@ def section_axes(w, F):
               + ("it" if len(missing) == 1 else "them") + " zero.")
             w("")
     return [records[a] for a in ordered]
+
+
+# ---------------------------------------------------------------------------
+# 10. Verification
+#
+# The long form of every figure's provenance, kept here rather than on the line
+# that states the figure. A facts file whose every line triples in length is
+# worse for a reader than one that is merely unlabelled, so the body carries a
+# three-character marker and the inputs, and this section carries the command,
+# the formula, the reason the formula answers the question, and the trap.
+# ---------------------------------------------------------------------------
+
+def section_verification(w, F, axis_rows):
+    """Section 10: one command per headline figure and per axis."""
+    checks = list(F.get("checks") or [])
+    for row in axis_rows or []:
+        if row["value"] is None:
+            continue
+        checks.append({
+            "name": f"Axis {row['id']} {AXES[row['id']]['label']}", "tier": DERIVED,
+            "value": bare(row["value"]),
+            "command": row.get("check"), "derivation": row["components"], "trap": "",
+            "note": row.get("check_note") or "no single command reproduces it",
+        })
+    if not checks:
+        return
+    w("## 10. Verification - the one command behind each figure")
+    w(wrap("Copy a command, run it, and compare. The commands name this plugin's own wrappers with no "
+           "path, so nothing here records one machine's install layout: run them with the plugin's "
+           "`bin/` on $PATH. " + CATALOG_NOTE))
+    w("")
+    w(wrap("A figure two tools have to answer together gets no command: it says which two, and what "
+           "each one checks. A command that only looks like a check is worse than none, because a "
+           "reader who runs it and gets a different number concludes the figure is wrong."))
+    w("")
+    unverifiable = 0
+    for c in checks:
+        w(f"- **{c['name']}** `{c['tier']}` = {c['value']}")
+        if c.get("derivation"):
+            w(f"  - Derivation: {c['derivation']}")
+        if c.get("trap"):
+            w(f"  - Trap: {c['trap']}")
+        if c.get("command"):
+            w(f"  - Check: `{c['command']}`")
+        else:
+            unverifiable += 1
+            w(f"  - **Not checkable in one command**: {c.get('note') or NO_REASON}")
+    w("")
+    w(f"{len(checks) - unverifiable} of {len(checks)} figures above are reproduced by a single command. "
+      + verification_tail(unverifiable))
+    w("")
+
+
+def verification_tail(unverifiable):
+    """The sentence that closes section 10."""
+    if not unverifiable:
+        return "Every one of them is."
+    if unverifiable == 1:
+        return "The other one says what it needs instead."
+    return f"The other {unverifiable} say what they need instead."
 
 
 # ---------------------------------------------------------------------------

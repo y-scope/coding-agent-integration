@@ -44,8 +44,9 @@ GENERAL = "general"
 # application is unrecognised are exactly what the general route is for.
 UNRECOGNISED = "unrecognised"
 
-# What each route hands off to, and the skill that owns the interactive stages after it.
-SKILL_OF_ROUTE = {SPECIALISED: "claude-code-trajectory", GENERAL: "log-insights"}
+# The skill that owns the interactive stages after either route. One skill covers both: it branches
+# on the route this module reports, so there is nothing to choose between here.
+ANALYSIS_SKILL = "analyze-logs"
 
 # The KQL that decides whether a Claude Code session needs a bundle: its main log records that it
 # launched an agent or a workflow, but not what they then did. Kept as one constant because it is

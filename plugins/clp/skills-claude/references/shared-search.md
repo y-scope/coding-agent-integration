@@ -10,7 +10,7 @@ Use only the plugin wrapper. Do not call bare `clp-s`.
 
 The wrapper accepts the top-level `Archives dir` printed by compression or the inner clp-s archive directory (resolved automatically). Use single quotes around KQL. A sensible default embedding endpoint is built in; pass extra clp-s flags only if the user asks for something specific.
 
-For session-log workflows (list → compress → search), use the `claude-code-trajectory` skill instead of this one.
+For session-log workflows (list → compress → search), use the `analyze-logs` skill instead of this one.
 
 ## KQL
 

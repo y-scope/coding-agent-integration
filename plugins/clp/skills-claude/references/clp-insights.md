@@ -1,4 +1,4 @@
-# Log shape insight reference (log-insights steps 6–9)
+# Log shape insight reference (`analyze-logs`, general route steps 6–9)
 
 Read this when a classification exists (`/tmp/log-shape-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE); the context question below is asked at step 6, before it does. It covers the three questions to the user, the summary, building the insight inputs, the core plan's pool and the focus queued into it, the facts, the report writer's prompt, saving the report, and the report format.
 

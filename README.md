@@ -33,8 +33,8 @@ plugins/clp/bin/
     clp-insights, clp-report, clp-compress-status,
     kql-build) that are not clp-s passthroughs.
 plugins/clp/skills-claude/
-    Claude Code skills: compress, compress-folder, search, log-insights,
-    decompress, claude-code-trajectory.
+    Claude Code skills: compress, compress-folder, search, analyze-logs,
+    decompress.
 plugins/clp/skills-codex/
     Codex skills: compress, compress-folder, search, log-insights,
     decompress, codex-trajectory.
@@ -129,7 +129,7 @@ This repo follows [Semantic Versioning](https://semver.org/) for the `clp@yscope
 1. Bump the `version` field in both plugin manifests (must match). Bump the version in `plugins/clp/.claude-plugin/plugin.json` and `plugins/clp/.codex-plugin/plugin.json` — they must stay in sync.
 2. Update the relevant `SKILL.md` for any behavior change:
    - KQL/semantic syntax or wrapper flag changes → common `search/SKILL.md`
-   - Session-log workflow or agent schema changes → `claude-code-trajectory/` or `codex-trajectory/`
+   - Session-log workflow or agent schema changes → `analyze-logs/` or `codex-trajectory/`
    - Compress/decompress flag changes → corresponding `compress/` or `decompress/` skill
 3. Update `plugins/clp/README.md` if the API surface changed.
 4. Tag the commit (`git tag vX.Y.Z`) and push the tag.

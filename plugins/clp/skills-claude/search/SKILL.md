@@ -14,7 +14,7 @@ Use only the plugin wrapper. Do not call bare `clp-s`.
 
 **See also:** `clpp-search` for the experimental path, and `dev` for pointing the wrapper at a locally-built `clp-s`.
 
-For session-log workflows (list → compress → search), use the `claude-code-trajectory` skill instead of this one.
+For session-log workflows (list → compress → search), use the `analyze-logs` skill instead of this one.
 
 ## Read the shared reference
 

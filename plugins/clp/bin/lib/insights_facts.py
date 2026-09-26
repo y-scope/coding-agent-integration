@@ -47,6 +47,15 @@ to be unavailable rather than estimated, with the reason: notably the archive's
 time span when the metadata has no timeRange. The fetched records' own first
 and last timestamp are given, labelled as covering only those records.
 
+Every figure also carries its provenance, because a reader cannot otherwise
+tell four different kinds of claim apart: [M] a number counted off the records,
+[D] arithmetic over such numbers, [I] a claim about what caused these records,
+and [K] a claim about how this kind of system behaves. The first two are
+checkable and the Verification section at the end gives each of them the one
+command that reproduces it - the KQL the query pool actually ran, with the
+wrapper named by basename so the file records no install layout. The last two
+are arguments and are labelled as arguments. See PROVENANCE below.
+
 Prints the output path. Exit codes: 0 ok, 1 input problem.
 """
 
@@ -57,6 +66,82 @@ import os
 import re
 import sys
 from collections import defaultdict
+
+
+# ---------------------------------------------------------------------------
+# Provenance.
+#
+# The same four tiers clp-session facts uses, so a reader who has seen one facts
+# file already knows how to read the other. They do not overlap: a figure is read
+# off the records, or computed from figures that were, or it is an argument about
+# cause, or an argument about how this kind of system behaves.
+#
+# The markers are three characters at the front of the line, not a table column:
+# a column would push the figures off a narrow screen, and a reader scanning for
+# "is this measured" wants the answer where the eye already is.
+# ---------------------------------------------------------------------------
+
+MEASURED = "[M]"
+DERIVED = "[D]"
+INFERENCE = "[I]"
+DOMAIN = "[K]"
+
+TIERS = {
+    MEASURED: "measured - counted off the records by one query. The query is in the Verification "
+              "section, and it is the query that actually ran.",
+    DERIVED: "derived - arithmetic over measured values: a share, a sum of counts, a duration between "
+             "two timestamps. The line names its inputs; Verification gives the formula and why it "
+             "answers the question.",
+    INFERENCE: "inference - a claim about what caused these records or what they mean. Not "
+               "reproducible: it is an argument from the figures, and a reader can reject it without "
+               "disputing a number.",
+    DOMAIN: "domain knowledge - a claim about how this kind of system behaves, not taken from these "
+            "records at all.",
+}
+
+
+# The only way a query's own count can end up with no command: the pool that wrote
+# the results file recorded neither the command nor the KQL, so there is nothing to
+# rebuild it from. Saying which file is missing what is the reason; "unstated" is
+# not, because it claims a figure cannot be checked while giving no reason at all.
+NO_REASON = ("no reason was recorded for this figure. That is a defect in clp-insights facts, not a "
+             "property of the figure: report it rather than trusting the figure or discarding it.")
+
+NO_QUERY_RECORDED = ("the results file recorded neither a command nor the KQL for this entry, so the "
+                     "query that produced the count cannot be rebuilt from it. Re-run the plan with "
+                     "clp-insights run, which records both.")
+
+
+def verification_tail(unverifiable):
+    """The sentence that closes the Verification section."""
+    if not unverifiable:
+        return "Every one of them is."
+    if unverifiable == 1:
+        return "The other one says what it needs instead."
+    return f"The other {unverifiable} say what they need instead."
+
+
+def one_command(entry, archive=None):
+    """The single command that reproduces one result entry, or None.
+
+    The pool records the command it ran with an absolute path to the wrapper. The
+    path is one machine's install layout, so only the basename is kept: a reader
+    runs these with the plugin's bin/ on $PATH.
+
+    An entry written by a pool that recorded no `command` still carries the KQL it
+    ran and the archive it ran against, which is that command spelled out, so it
+    is rebuilt rather than left with no check at all. Only an entry with no KQL ran
+    nothing that could be re-run.
+    """
+    command = entry.get("command")
+    if command:
+        head, sep, rest = str(command).partition(" ")
+        return os.path.basename(head) + sep + rest
+    kql, where = entry.get("kql"), entry.get("archive") or archive
+    if not kql or not where:
+        return None
+    select = f"--projection {entry['project']}" if entry.get("project") else "--count"
+    return f"clp-s-search-kql {select} {where} '{kql}'"
 
 
 def load_results(path):
@@ -225,31 +310,41 @@ def fmt_duration(seconds):
 
 
 def time_span(archive_dir):
-    """The archive's time span, from the timeRange clp-s-compress-folder records."""
-    meta = None
+    """(text, check) for the archive's time span, from the timeRange clp-s records.
+
+    `check` is the one command that prints the two timestamps the span is computed
+    from, or None when there is no span to check.
+    """
+    meta = path = None
     # The metadata sits in the top-level archive directory; accept the inner clp-s one too.
     for d in (archive_dir, os.path.dirname(os.path.normpath(archive_dir))):
         try:
-            with open(os.path.join(d, ".yscope-clp-archive.json"), "r", encoding="utf-8") as f:
+            candidate = os.path.join(d, ".yscope-clp-archive.json")
+            with open(candidate, "r", encoding="utf-8") as f:
                 meta = json.load(f)
+            path = candidate
             break
         except (OSError, json.JSONDecodeError):
             continue
     if meta is None:
         return ("unavailable. The archive has no .yscope-clp-archive.json, so neither clp-s-compress-folder "
                 "nor clp-s-compress-session compressed it; recompress it with one of them and a timestamp "
-                "key to record the span.")
+                "key to record the span."), None
     key = meta.get("timestampKey")
     if not key:
-        return "unavailable. The archive was compressed without --timestamp-key; recompress it with one to record the span."
+        return ("unavailable. The archive was compressed without --timestamp-key; recompress it with one "
+                "to record the span."), None
     if "timeRange" not in meta:
         return ("unavailable. The archive was compressed by a version of the plugin's compression wrappers "
-                "that did not record time ranges; recompress it to record the span.")
+                "that did not record time ranges; recompress it to record the span."), None
     if meta["timeRange"] is None:
-        return f"unavailable. No record has the timestamp key `{key}`."
+        return f"unavailable. No record has the timestamp key `{key}`.", None
     begin, end = meta["timeRange"]["beginMs"] / 1000, meta["timeRange"]["endMs"] / 1000
+    check = (f"python3 -c \"import datetime,json; r=json.load(open('{path}'))['timeRange']; "
+             "print(*[datetime.datetime.fromtimestamp(r[k]/1000, datetime.timezone.utc) "
+             "for k in ('beginMs','endMs')])\"")
     return (f"{fmt_ts(begin)} to {fmt_ts(end)} ({fmt_duration(end - begin)}), the earliest and latest "
-            f"`{key}` across every record, recorded by clp-s at compression.")
+            f"`{key}` across every record, recorded by clp-s at compression."), check
 
 
 MASK = re.compile(r"\d+(?:\.\d+)?")
@@ -269,6 +364,12 @@ def pct(n, total):
 
 
 def read_top_templates(path, n, chars=220):
+    """(count, display text, raw log_shape) for the first n templates in the file.
+
+    The raw shape is kept beside the display text so a check can grep the stored
+    record for it: the display text has its newlines replaced and is truncated, so
+    it would never match the file it came from.
+    """
     out = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -282,7 +383,8 @@ def read_top_templates(path, n, chars=220):
             # A stored template's "log_shape" is its prefix; "length" is the whole.
             cut = isinstance(rec.get("length"), int) and rec["length"] > len(raw)
             text = raw.replace("\n", " <NL> ")
-            out.append((rec.get("count", 0), text[:chars] + ("…" if cut or len(text) > chars else "")))
+            out.append((rec.get("count", 0), text[:chars] + ("…" if cut or len(text) > chars else ""),
+                        raw))
     return out
 
 
@@ -362,15 +464,56 @@ def main(argv=None) -> int:
                 totals = json.load(f)
         except (OSError, json.JSONDecodeError):
             totals = None
+    # Every headline figure's provenance, rendered as the Verification section at
+    # the end. The long form belongs there: a line that triples in length to carry
+    # its own command is worse for a reader than one that is merely unlabelled.
+    checks = []
+
+    def add_check(name, tier, value, command=None, derivation="", trap="", note=""):
+        checks.append({"name": name, "tier": tier, "value": value, "command": command,
+                       "derivation": derivation, "trap": trap, "note": note})
+
     w("# Facts (computed in code; every figure below is exact)\n")
     if overlap_note:
         w(f"> **Input problem:** {overlap_note}\n")
+    w("**What the markers mean.** Every figure carries one, and the four kinds do not overlap:\n")
+    for marker in (MEASURED, DERIVED, INFERENCE, DOMAIN):
+        w(f"- `{marker}` {TIERS[marker]}")
+    w("")
+    w("A percentage in parentheses is always derived, from that line's count over the total records "
+      "above, so it takes no marker of its own. In a table the markers are in the column headings. A "
+      "`[baseline #N]` or `[plan #N]` names the query that produced the line; the Verification section "
+      "at the end lists those commands, with the plugin's wrappers named by basename - run them with "
+      "the plugin's `bin/` on $PATH.\n")
+    w("A line with no marker is not a figure: it is a heading, a caption, a note on where something "
+      "came from, or the user's own words quoted back. The Focus section below is the clearest case - "
+      "what the user said is input to the analysis, not a measurement from it, and the four tiers "
+      "above describe only what this file claims about the records.\n")
     w("## Totals")
-    w(f"- Total records: {total:,}" if total else "- Total records: unavailable")
+    w(f"- {MEASURED} Total records: {total:,}" if total else "- Total records: unavailable")
+    if total:
+        add_check("Total records", MEASURED, f"{total:,}",
+                  f"clp-s-search-kql --count {args.archive_dir} '*'",
+                  derivation="a count of every record in the archive, which is also the denominator of "
+                             "every share in this file.")
     if totals:
-        w(f"- Distinct templates: {sum(c['templates'] for c in totals.values()):,} "
+        add_check("Distinct templates", DERIVED, f"{sum(c['templates'] for c in totals.values()):,}",
+                  None,
+                  derivation="the `templates` counts of the category table, summed.",
+                  note="a template count comes from the log-shape store, not from a query over the "
+                       f"archive, so it is checked against `{args.category_totals}` rather than by "
+                       "re-counting: no KQL filter can name a template.")
+        w(f"- {DERIVED} Distinct templates: {sum(c['templates'] for c in totals.values()):,} "
           "(sum of the category table below)")
-    w(f"- Time span: {time_span(args.archive_dir)}")
+    span_text, span_check = time_span(args.archive_dir)
+    w(f"- {DERIVED if span_check else MEASURED} Time span: {span_text}")
+    if span_check:
+        add_check("Time span", DERIVED, span_text.split(",")[0], span_check,
+                  derivation="the last timestamp minus the first, both recorded by clp-s at "
+                             "compression. It answers \"what period do these logs cover\" because "
+                             "clp-s took them from every record, not from a sample.",
+                  trap="it is the span the records cover, not the span anything was running: a gap in "
+                       "the middle is invisible here.")
     names = ", ".join(f"{role} = `{schema[role]}`" for role in ("timestamp", "severity", "logger", "message") if schema.get(role))
     payload = ", ".join(f"`{p}`" for p in schema.get("payload", []) or [])
     tree_note = ""
@@ -384,10 +527,15 @@ def main(argv=None) -> int:
         except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
             print(f"error: cannot read --schema-tree-file {args.schema_tree_file}: {e}", file=sys.stderr)
             return 2
-    w(f"- Fields a KQL query may filter on: {names}" + (f"; payload: {payload}" if payload else "")
+    w(f"- {MEASURED} Fields a KQL query may filter on: {names}"
+      + (f"; payload: {payload}" if payload else "")
       + tree_note
-      + ". Nothing else is a field: the classification's categories exist only in the analysis, "
-      "so a query cannot filter on a category name.\n")
+      + f". {DOMAIN} Nothing else is a field: the classification's categories exist only in the "
+      "analysis, so a query cannot filter on a category name.\n")
+    add_check("Fields a KQL query may filter on", MEASURED, names,
+              f"clp-s-schema-tree {args.archive_dir}",
+              derivation="every path the archive's schema tree lists is a field; the roles above are "
+                         "this run's classification of them.")
 
     # -- the user's focus and context
     focus = None
@@ -416,17 +564,20 @@ def main(argv=None) -> int:
         for cat in focus.get("categories", []):
             c = (totals or {}).get(cat)
             if c:
-                w(f"- `{cat}`: {c['templates']:,} templates, {c['records']:,} records "
+                w(f"- {MEASURED} `{cat}`: {c['templates']:,} templates, {c['records']:,} records "
                   f"({pct(c['records'], total)}); classifier priority {c.get('priority') or '-'}"
-                  + (f": {c['why']}" if c.get("why") else ""))
+                  + (f" - {INFERENCE} {c['why']}" if c.get("why") else ""))
         mine = [r for r in results if r.get("origin") == "focus"]
         if mine:
             w("- Focus queries (their own counts):")
             for r in mine:
-                w(f"  - [plan #{r['index']}] {r.get('label')}: status {r.get('status')}, "
+                w(f"  - {MEASURED} [plan #{r['index']}] {r.get('label')}: status {r.get('status')}, "
                   f"{r.get('count') or 0:,} ({pct(r.get('count') or 0, total)}); kql `{r.get('kql')}`")
                 for smp in (r.get("samples") or [])[:3]:
                     w(f"    - sample: `{sample_text(smp, msg, ts)}`")
+                add_check(f"[plan #{r['index']}] {r.get('label')}", MEASURED,
+                          f"{r.get('count') or 0:,}", one_command(r, args.archive_dir),
+                          note=NO_QUERY_RECORDED)
         elif focus.get("entries"):
             w("- Focus queries: queued but no results recorded.")
         w("")
@@ -449,11 +600,12 @@ def main(argv=None) -> int:
             counted_once.add(ident)
         field, values, negated = fv
         if negated:
-            by_field[field]["residual"] = (values, r.get("count", 0))
+            by_field[field]["residual"] = (values, r.get("count", 0), r)
         else:
-            by_field[field]["values"].append((values[0], r.get("count", 0)))
+            by_field[field]["values"].append((values[0], r.get("count", 0), r))
 
     fetched = defaultdict(list)  # follow-up records by the entry they followed
+    fetched_cmd = {}             # and the one command that fetched them again
     fetched_once = set()
     for r in results:
         origin = r.get("origin", "")
@@ -466,49 +618,81 @@ def main(argv=None) -> int:
                 if ident in fetched_once:
                     continue
                 fetched_once.add(ident)
+            fetched_cmd.setdefault(origin, one_command(r, args.archive_dir))
             for s in r["samples"]:
                 try:
                     fetched[origin].append(json.loads(s))
                 except json.JSONDecodeError:
                     pass
 
-    def breakdown(title, field, fetched_records=None):
+    def cite(entry):
+        return f"[{entry.get('table')} #{entry.get('index')}]"
+
+    def breakdown(title, field, fetched_records=None, fetched_command=None):
         info = by_field.get(field)
         if not info:
             return
         w(f"## {title} (field `{field}`; exact counts from `count` queries)")
-        for v, c in sorted(info["values"], key=lambda x: -x[1]):
-            w(f"- {v}: {c:,} ({pct(c, total)})")
+        for v, c, entry in sorted(info["values"], key=lambda x: -x[1]):
+            w(f"- {MEASURED} {v}: {c:,} ({pct(c, total)}) {cite(entry)}")
+            add_check(f"{title}: {field} = {v}", MEASURED, f"{c:,}",
+                      one_command(entry, args.archive_dir), note=NO_QUERY_RECORDED)
         if info["residual"]:
-            values, c = info["residual"]
-            w(f"- everything other than {', '.join(map(str, values))}: {c:,} ({pct(c, total)})")
+            values, c, entry = info["residual"]
+            w(f"- {MEASURED} everything other than {', '.join(map(str, values))}: {c:,} "
+              f"({pct(c, total)}) {cite(entry)}")
+            add_check(f"{title}: {field} other than " + ", ".join(map(str, values)), MEASURED,
+                      f"{c:,}", one_command(entry, args.archive_dir),
+                      note=NO_QUERY_RECORDED,
+                      derivation="one negated count query, not the total minus the values above: a "
+                                 "record with no value for this field is in neither, and that is how "
+                                 "the sum check below can find it.")
             if fetched_records:
                 counts = defaultdict(int)
                 for rec in fetched_records:
                     counts[dig(rec, field)] += 1
                 note = "" if len(fetched_records) == c else f" (fetched {len(fetched_records):,} of {c:,})"
-                w("  - of which, by value" + note + ": "
+                w(f"  - {MEASURED} of which, by value" + note + ": "
                   + ", ".join(f"{v}={n:,}" for v, n in sorted(counts.items(), key=lambda x: -x[1])))
-        counted = sum(c for _, c in info["values"]) + (info["residual"][1] if info["residual"] else 0)
+                for v, n in sorted(counts.items(), key=lambda x: -x[1]):
+                    add_check(f"{title}: {v} among the fetched records", MEASURED, f"{n:,}",
+                              (f"{fetched_command} | grep -c '\"{field}\":\"{v}\"'"
+                               if fetched_command else None),
+                              derivation="the same follow-up query that fetched the records, with its "
+                                         "rows filtered to that one value.",
+                              note="" if fetched_command else
+                              "the pool recorded no command for the follow-up that fetched these records")
+        counted = sum(c for _, c, _ in info["values"]) + (info["residual"][1] if info["residual"] else 0)
         if total:
             if counted == total:
-                w(f"- check: the lines above sum to all {total:,} records")
+                w(f"- {DERIVED} check: the lines above sum to all {total:,} records")
             elif counted < total:
-                w(f"- check: the lines above sum to {counted:,}; the other {total - counted:,} records "
-                  f"({pct(total - counted, total)}) have no `{field}` value")
+                w(f"- {DERIVED} check: the lines above sum to {counted:,}; the other {total - counted:,} "
+                  f"records ({pct(total - counted, total)}) have no `{field}` value")
+                add_check(f"{title}: records with no `{field}` value", DERIVED, f"{total - counted:,}",
+                          None,
+                          derivation=f"the total records minus the counts above ({total:,} - {counted:,}). "
+                                     "It answers \"is the split complete\" because the values and the "
+                                     "negated residual together cover every record that has the field "
+                                     "at all, so whatever is left has no value for it.",
+                          note="it is the total-records count minus the counts above, and each of those "
+                               "is its own one-command check in this section.")
             else:
                 # Every entry above was counted once, so an excess that is still
                 # here is the data's and not the inputs'. Say so when the inputs
                 # also overlapped, or the reader cannot tell which cause applies.
-                w(f"- check: the lines above sum to {counted:,}, more than the {total:,} records, "
-                  f"so `{field}` is multi-valued in some records"
+                w(f"- {DERIVED} check: the lines above sum to {counted:,}, more than the {total:,} "
+                  f"records, so {INFERENCE} `{field}` is multi-valued in some records"
                   + (" -- each entry above was counted once, so the overlapping inputs noted "
                      "at the top do not explain this excess" if overlap_note else ""))
         w("")
 
     fetched_all = [rec for recs in fetched.values() for rec in recs]
+    # One follow-up in the common case; with several, no single command reproduces
+    # the combined per-value counts, and saying so is better than naming one of them.
+    fetched_one_command = (list(fetched_cmd.values())[0] if len(fetched_cmd) == 1 else None)
     if sev:
-        breakdown("Severity", sev, fetched_all)
+        breakdown("Severity", sev, fetched_all, fetched_one_command)
     if log:
         breakdown("Logger / component", log)
 
@@ -522,27 +706,36 @@ def main(argv=None) -> int:
         base = rec_sum if per_value else total
         unit = "Values" if per_value else "Records"
         w("## Categories (exact: the stored per-template counts, summed; no keyword involved)")
-        w(f"| Category | Priority | Templates | {unit} | Share of {unit.lower()} |")
+        w(f"| Category | Priority | Templates {MEASURED} | {unit} {MEASURED} "
+          f"| Share of {unit.lower()} {DERIVED} |")
         w("|---|---|---|---|---|")
         for cat, c in sorted(totals.items(), key=lambda kv: -kv[1]["records"]):
             w(f"| {cat} | {c.get('priority') or '-'} | {c['templates']:,} | {c['records']:,} "
               f"| {pct(c['records'], base)} |")
         w(f"| **sum** | | {sum(c['templates'] for c in totals.values()):,} | {rec_sum:,} | {pct(rec_sum, base)} |")
+        add_check(f"{unit} the categories account for", DERIVED, f"{rec_sum:,}", None,
+                  derivation="the per-category counts above, summed; each category's own count is the "
+                             "stored per-template counts of the templates in it, summed.",
+                  note="a per-template count comes from the log-shape store, not from a query over the "
+                       f"archive: check it against `{args.category_totals}`, because a template is not "
+                       "something a KQL filter can name.")
         whys = [(cat, c) for cat, c in totals.items() if c.get("why") and c.get("priority") == "high"]
         if whys:
             w("\nWhy the classifier ranked these categories high (its judgement, not a finding):")
             for cat, c in whys:
-                w(f"- `{cat}`: {c['why']}")
+                w(f"- {INFERENCE} `{cat}`: {c['why']}")
         if per_value:
-            w(f"\nTemplated values: {rec_sum:,} in {total:,} records. A record carries one value per "
-              "text field, so the values outnumber the records and every share above is a share of values.")
+            w(f"\n{DERIVED} Templated values: {rec_sum:,} in {total:,} records. {DOMAIN} A record "
+              "carries one value per text field, so the values outnumber the records and every share "
+              "above is a share of values.")
         elif total:
-            w(f"\nRecords no template accounts for: {total - rec_sum:,} ({pct(total - rec_sum, total)}).")
+            w(f"\n{DERIVED} Records no template accounts for: {total - rec_sum:,} "
+              f"({pct(total - rec_sum, total)}), the total records minus the sum above.")
         blobs = [(cat, c) for cat, c in totals.items() if c["templates"] > 500 and c["templates"] > 0.9 * c["records"]]
         for cat, c in blobs:
-            w(f"- `{cat}` has {c['templates']:,} templates for {c['records']:,} records: about one template per "
-              "record, i.e. large near-duplicate messages that never collapse into one recurring template, "
-              "not that many different behaviours.")
+            w(f"- {DERIVED} `{cat}` has {c['templates']:,} templates for {c['records']:,} records: about "
+              f"one template per record. {INFERENCE} That is large near-duplicate messages that never "
+              "collapse into one recurring template, not that many different behaviours.")
         w("")
 
     # -- top templates
@@ -552,10 +745,29 @@ def main(argv=None) -> int:
             top_json = json.load(f)
     except (OSError, json.JSONDecodeError):
         pass
+    # A stored per-template count is measured, but not against the archive: the
+    # log-shape store counted it, and no KQL filter can name a template. So the
+    # check reads the store's own record of it rather than pretending to re-count.
+    def template_check(shape, store):
+        head = str(shape).split("\n")[0][:60]
+        if not head.strip():
+            return None
+        return f"grep -m1 -F -- '{head}' {store}"
+
+    template_note = ("a per-template count is the log-shape store's own count. A template is not "
+                     "something a KQL filter can name, so it cannot be re-counted against the archive "
+                     "in one query; the command reads the stored record instead.")
     if top_json:
-        w(f"## Top {min(args.top, len(top_json['overall']))} templates by records, with their category (stored per-template counts)")
+        w(f"## Top {min(args.top, len(top_json['overall']))} templates by records, with their category "
+          "(stored per-template counts)")
         for t in top_json["overall"][: args.top]:
-            w(f"- {t['count']:,} ({pct(t['count'], total)}) [{t['category']}]: `{t['log_shape']}`")
+            w(f"- {MEASURED} {t['count']:,} ({pct(t['count'], total)}) [{t['category']}]: "
+              f"`{t['log_shape']}`")
+        first = top_json["overall"][0] if top_json["overall"] else None
+        if first:
+            add_check("The single most frequent template", MEASURED, f"{first['count']:,}",
+                      template_check(first.get("log_shape"), args.top_templates_file),
+                      derivation=f"category `{first.get('category')}`.", note=template_note)
         w("")
         w("## Top templates within each category (exact counts; use these for any per-template figure)")
         cats = sorted(top_json["by_category"].items(),
@@ -563,14 +775,17 @@ def main(argv=None) -> int:
         for cat, items in cats:
             w(f"### {cat}")
             for t in items:
-                w(f"- {t['count']:,}: `{t['log_shape']}`")
+                w(f"- {MEASURED} {t['count']:,}: `{t['log_shape']}`")
         w("")
     elif args.freqs_file != "none":
         try:
             top = read_top_templates(args.freqs_file, args.top)
             w(f"## Top {len(top)} templates by records (stored per-template counts)")
-            for c, t in top:
-                w(f"- {c:,} ({pct(c, total)}): `{t}`")
+            for c, t, _ in top:
+                w(f"- {MEASURED} {c:,} ({pct(c, total)}): `{t}`")
+            if top:
+                add_check("The single most frequent template", MEASURED, f"{top[0][0]:,}",
+                          template_check(top[0][2], args.freqs_file), note=template_note)
             w("")
         except OSError:
             pass
@@ -592,21 +807,52 @@ def main(argv=None) -> int:
                 pass
             g["example"] = g["example"] or text.replace("\n", " <NL> ")[:260]
         w(f"## The fetched non-dominant-severity records, grouped by message shape (numbers masked as N, quoted names as \"S\")")
-        w(f"{len(fetched_all):,} records fetched; {len(groups):,} distinct shapes. "
-          "First/last are the timestamps of these records only, not the archive's span.")
+        w(f"{MEASURED} {len(fetched_all):,} records fetched; {DERIVED} {len(groups):,} distinct shapes "
+          "after masking each message's numbers and quoted names. First/last are the timestamps of "
+          "these records only, not the archive's span.")
         for (severity, shp), g in sorted(groups.items(), key=lambda kv: -kv[1]["n"])[: args.top]:
             span = f", {fmt_ts(g['first'])} to {fmt_ts(g['last'])}" if g["first"] is not None else ""
-            w(f"- **{g['n']:,} x [{severity}]**{span}\n  - shape: `{shp}`\n  - example: `{g['example']}`")
+            w(f"- {DERIVED} **{g['n']:,} x [{severity}]**{span}\n  - shape: `{shp}`\n"
+              f"  - example: `{g['example']}`")
         w("")
+        add_check("Distinct message shapes among the fetched records", DERIVED, f"{len(groups):,}",
+                  None,
+                  derivation="the fetched records grouped by severity and by the message with its "
+                             "numbers masked to N and its short quoted strings to \"S\". It answers "
+                             "\"how many different things are happening here\" because two records that "
+                             "differ only in an id or a count are one event, not two.",
+                  trap="the masking is a regex, not the log's own template: a message whose only "
+                       "variable part is an unquoted word keeps that word, so it splits into as many "
+                       "shapes as it has words there.",
+                  note=("the masking and the grouping happen in this script, not in the query, so no "
+                        "command prints the shape count. `" + fetched_one_command + "` reproduces the "
+                        f"{len(fetched_all):,} records it grouped; the shapes themselves are listed "
+                        "above.") if fetched_one_command else
+                       ("more than one follow-up query contributed these records, so no single command "
+                        "fetches the same set; each follow-up's own command is in the pool's results "
+                        "file, and the grouping happens in this script rather than in a query."))
+        add_check("Records fetched behind the non-dominant severities", MEASURED,
+                  f"{len(fetched_all):,}", fetched_one_command,
+                  note="" if fetched_one_command else
+                       "more than one follow-up query contributed these records, so no single command "
+                       "fetches the same set")
 
     # -- semantic and flags
     sem = [r for r in results if r.get("method") == "semantic"]
     if sem:
         w("## Semantic entries")
+        w(f"{DOMAIN} A semantic query ranks records by meaning rather than matching a field, so its row "
+          "count is what the embedding model judged relevant and not a count of anything the log says.")
         for r in sem:
-            w(f"- [{r['table']} #{r['index']}] {r.get('label')}: status {r.get('status')}, {r.get('count') or 0:,} rows; kql `{r.get('kql')}`")
+            w(f"- {MEASURED} [{r['table']} #{r['index']}] {r.get('label')}: status {r.get('status')}, "
+              f"{r.get('count') or 0:,} rows; kql `{r.get('kql')}`")
             for s in (r.get("samples") or [])[:3]:
                 w(f"  - `{sample_text(s, msg, ts)}`")
+            add_check(f"[{r['table']} #{r['index']}] {r.get('label')}", MEASURED,
+                      f"{r.get('count') or 0:,} rows", one_command(r, args.archive_dir),
+                      trap="a semantic query's row count depends on the embedding model and its "
+                           "threshold, so re-running it is reproducible only against the same model.",
+                      note=NO_QUERY_RECORDED)
         w("")
     flagged = [r for r in results if r.get("non_selective") or r.get("status") in ("error", "timeout", "zero") or r.get("retried")]
     if flagged:
@@ -614,7 +860,33 @@ def main(argv=None) -> int:
         for r in flagged:
             why = [x for x in ("non_selective" if r.get("non_selective") else "", r.get("status") if r.get("status") != "ok" else "",
                                "retried" if r.get("retried") else "") if x]
-            w(f"- [{r['table']} #{r['index']}] {r.get('label')}: {', '.join(why)} (count {r.get('count') or 0:,})")
+            w(f"- {MEASURED} [{r['table']} #{r['index']}] {r.get('label')}: {', '.join(why)} "
+              f"(count {r.get('count') or 0:,})")
+        w("")
+
+    # -- Verification: the long form of every headline figure's provenance
+    if checks:
+        w("## Verification - the one command behind each figure")
+        w("Copy a command, run it, and compare. These are the commands the query pool ran, with the "
+          "plugin's wrappers named by basename, so run them with the plugin's `bin/` on $PATH. A figure "
+          "no single command reproduces says so and says what to run instead; a command that only looks "
+          "like a check is worse than none, because a reader who runs it and gets a different number "
+          "concludes the figure is wrong.\n")
+        unverifiable = 0
+        for c in checks:
+            w(f"- **{c['name']}** `{c['tier']}` = {c['value']}")
+            if c.get("derivation"):
+                w(f"  - Derivation: {c['derivation']}")
+            if c.get("trap"):
+                w(f"  - Trap: {c['trap']}")
+            if c.get("command"):
+                w(f"  - Check: `{c['command']}`")
+            else:
+                unverifiable += 1
+                w(f"  - **Not checkable in one command**: {c.get('note') or NO_REASON}")
+        w("")
+        w(f"{len(checks) - unverifiable} of {len(checks)} figures above are reproduced by a single "
+          "command. " + verification_tail(unverifiable))
         w("")
 
     with open(args.out, "w", encoding="utf-8") as f:

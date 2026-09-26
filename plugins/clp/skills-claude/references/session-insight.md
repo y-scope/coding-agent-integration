@@ -1,6 +1,6 @@
 # Session insight — categories, questions, prompts, report
 
-Read this at step 2 of the `claude-code-trajectory` skill. It holds the seven categories, the wording of the three questions, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
+Read this at step 2 of the `analyze-logs` skill's specialised route. It holds the seven categories, the wording of the three questions, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
 
 Every figure quoted anywhere in this pass comes from the facts file that `clp-session facts` writes. Nothing here recomputes a number.
 

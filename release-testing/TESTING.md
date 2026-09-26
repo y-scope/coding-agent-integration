@@ -273,7 +273,7 @@ Expected: `4`
 
 This is the feature's core value: re-analyzing a growing log costs only the classification of what's new.
 
-By the way — Steps 2, 5, and the cache probe are what the `log-insights` skill runs as its first command, via one helper:
+By the way — Steps 2, 5, and the cache probe are what the `analyze-logs` skill's general route runs as its first command, via one helper:
 
 ```bash
 "$B/clp-insights" bootstrap --cache-dir release-testing/workdir/lt-cache \

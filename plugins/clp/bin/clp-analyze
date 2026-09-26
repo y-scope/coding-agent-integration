@@ -387,7 +387,7 @@ def hand_off(route, archive, bundle, dry_run=False):
         out("NEXT_PENDING", "the archive path above is the one the planned compression will print "
                             "as its 'Archives dir:'; on the specialised route the bundle replaces "
                             "--archive when the launch count is not zero")
-    out("NEXT_SKILL", A.SKILL_OF_ROUTE[route])
+    out("NEXT_SKILL", A.ANALYSIS_SKILL)
     out("NEXT_STAGES", "classify, focus and report need a model and a user, so they are the skill's "
                        "and are not attempted here")
     if archive:

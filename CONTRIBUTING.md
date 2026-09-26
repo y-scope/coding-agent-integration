@@ -24,8 +24,8 @@ plugins/clp/bin/
     clp-compress-status, kql-build; shared Python in lib/kql_build.py and
     lib/log_shapes.py).
 plugins/clp/skills-claude/
-    Claude Code skills: compress, compress-folder, search, log-insights,
-    decompress, claude-code-trajectory, clpp-compress, clpp-search, dev,
+    Claude Code skills: compress, compress-folder, search, analyze-logs,
+    decompress, clpp-compress, clpp-search, dev,
     plus references/ (shared snippets included by the skills).
 plugins/clp/skills-codex/
     Codex skills: compress, compress-folder, search, log-insights,

@@ -1,6 +1,6 @@
 # Session forensics — queries, catalog SQL, evidence, caveats
 
-Read this when drilling into a finding from the `claude-code-trajectory` pass, or when the user asks one specific question about a session instead of running the full pass.
+Read this when drilling into a finding from the `analyze-logs` skill's specialised route, or when the user asks one specific question about a session instead of running the full pass.
 
 Write every path out in full. A command with a shell variable (`$B`, `${TMPDIR}`) no longer matches the skill's allowed tools and stops for approval.
 

@@ -113,8 +113,8 @@ Source-specific skills add guidance about how records are emitted and what their
 
 | Skill | What it does | Input | Output | When to use |
 |---|---|---|---|---|
-| `log-insights` | Guides discovery, classification, query planning, and evidence gathering. | Question, archive, and explicit investigation filters. | Findings with executed queries, supporting records, and uncertainty. | Investigate unfamiliar service data or an operational symptom. |
-| `claude-code-trajectory` | Analyzes activity using the Claude Code session schema. | Selected session and question. | Session analysis grounded in tool calls, outcomes, and timing. | Investigate repetition, failures, long turns, or compaction in Claude Code. |
+| `analyze-logs` (general route) | Guides discovery, classification, query planning, and evidence gathering. | Question, archive, and explicit investigation filters. | Findings with executed queries, supporting records, and uncertainty. | Investigate unfamiliar service data or an operational symptom. |
+| `analyze-logs` (specialised route) | Analyzes activity using the Claude Code session schema. | Selected session and question. | Session analysis grounded in tool calls, outcomes, and timing. | Investigate repetition, failures, long turns, or compaction in Claude Code. |
 | `codex-trajectory` | Analyzes activity using the Codex session schema. | Selected session and question. | Session analysis grounded in that format's records. | Investigate Codex behavior without assuming Claude field names. |
 
 Loaded context may answer questions about known fields or templates directly. Claims about an incident's timing, magnitude, or cause generally need executed queries and may require evidence beyond logs. Keep bulk output in local files; bring compact results and selected evidence into the agent's immediate context.
