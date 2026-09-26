@@ -2,8 +2,14 @@
 """log-shape-cluster.py — merge semantically similar log shapes before classification.
 
 Invoked via the `log-shape-cluster` bash launcher, which resolves the embedding
-server URL and exports it as CLP_SEMANTIC_ENDPOINT. Two subcommands:
+server URL and exports it as CLP_SEMANTIC_ENDPOINT. Three subcommands:
 
+  fields   Summarize each text field the templates came from: its templates,
+           values and examples, so a whole field can be given one category
+           instead of clustering it. With --propose-rules it also derives those
+           rules from the templates-to-values ratio -- a field whose templates
+           approach its values is free text, where clustering groups nothing --
+           and measures what they would rule. Stdlib-only and offline.
   cluster  Truncate each log shape to a character limit (default 500, UTF-8
            characters), de-duplicate the results, embed the distinct texts
            via the semantic server's /v1/embeddings endpoint, and group them by
@@ -34,6 +40,7 @@ import argparse
 import json
 import math
 import os
+import re
 import signal
 import struct
 import sys
@@ -465,21 +472,81 @@ def ruled_category(fields, rule_of, share):
     return rule_of[max(ruled, key=lambda f: (ruled[f], f))]
 
 
+def free_text_rule(field, entry, ratio_threshold, template_threshold, floor,
+                   min_templates):
+    """Why this field reads as free text, or None if it does not.
+
+    A field with fewer than `min_templates` templates is left alone whatever its
+    ratio. A rule exists to keep templates out of the embedder, so on one or two
+    it saves nothing while still costing a taxonomy category to review -- and
+    JSON that uses data as keys produces a "field" per datum, each with a single
+    template: this archive has fifty of them, one per question the agent asked.
+
+    A field whose templates approach its values is free text by arithmetic:
+    nearly every value produced a template of its own, so clustering it groups
+    nothing and embedding it buys nothing. `message.content.thinking` on a
+    session archive is 3,694 templates over 3,694 values -- a ratio of 1.00.
+
+    The second test catches what the ratio misses: a field with thousands of
+    templates and a ratio above `floor` is free text that merely repeats itself.
+    `toolUseResult.structuredPatch.lines` is 5,627 templates over 8,242 values,
+    a ratio of 0.68 that no ratio threshold worth using would catch, and it is
+    diff lines -- plainly free text, sharing the odd common line. The floor is
+    there because a low ratio is a real signal of structure: at 0.5 or below,
+    most values are repeats of a template that others share, which is what a
+    machine-generated message looks like.
+    """
+    templates, values = entry["templates"], entry["values"]
+    if values <= 0 or templates < min_templates:
+        return None
+    ratio = templates / values
+    if ratio >= ratio_threshold:
+        return "ratio"
+    if templates >= template_threshold and ratio >= floor:
+        return "templates"
+    return None
+
+
+def rule_category(field):
+    """A category name derived from the field itself. It is deliberately
+    mechanical and says what the rule rests on rather than what the text means,
+    which only a reader can name -- the analyst renames it, and must add it to
+    the classifier's taxonomy, since `expand` refuses a rule whose category is
+    not there."""
+    slug = re.sub(r"[^a-z0-9]+", "-", field.lower()).strip("-")
+    return f"free-text-{slug}" if slug else "free-text"
+
+
 def cmd_fields(args):
     """One JSON line per text field, most templates first: its templates,
     values, and the most frequent templates in it as examples. It is what the
-    agent reads to decide which fields get one category as a whole."""
+    agent reads to decide which fields get one category as a whole.
+
+    With --propose-rules it also writes the rules the templates-to-values ratio
+    already implies, and measures what they would rule, using the same
+    ruled_category() the clusterer applies -- so the reduction it reports is the
+    one that will happen, not an estimate. It proposes; nothing is applied.
+    """
+    if args.free_text_ratio <= 0 or args.free_text_ratio > 1:
+        fail(3, f"--free-text-ratio must be in (0, 1], got: {args.free_text_ratio}")
+    if not 0 <= args.free_text_floor <= 1:
+        fail(3, f"--free-text-floor must be in [0, 1], got: {args.free_text_floor}")
     fields_of = load_template_fields(args.template_fields)
     stats = {}
+    templates_total = 0
+    attributed = []
     try:
         with open(args.freqs_file, encoding="utf-8") as fh:
             for line in fh:
                 if not line.startswith("{"):
                     continue
                 obj = json.loads(line)
+                templates_total += 1
                 fields = fields_of.get(obj.get("hash"))
                 if not fields:
                     continue
+                if args.propose_rules:
+                    attributed.append(fields)
                 for field, values in fields.items():
                     entry = stats.setdefault(field, {"templates": 0, "values": 0, "examples": []})
                     entry["templates"] += 1
@@ -490,6 +557,47 @@ def cmd_fields(args):
         fail(1, f"cannot read --freqs-file: {exc}")
     for field, entry in sorted(stats.items(), key=lambda kv: (-kv[1]["templates"], kv[0])):
         print(json.dumps({"field": field, **entry}, ensure_ascii=False))
+    if not args.propose_rules:
+        return
+
+    rules = []
+    for field, entry in sorted(stats.items(), key=lambda kv: (-kv[1]["templates"], kv[0])):
+        why = free_text_rule(field, entry, args.free_text_ratio,
+                             args.free_text_templates, args.free_text_floor,
+                             args.free_text_min_templates)
+        if why is None:
+            continue
+        rules.append({
+            "field": field,
+            "category": rule_category(field),
+            "proposed_by": "free-text-ratio",
+            "matched": why,
+            "ratio": round(entry["templates"] / entry["values"], 4),
+            "templates": entry["templates"],
+            "values": entry["values"],
+        })
+    rule_of = {r["field"]: r["category"] for r in rules}
+    ruled = sum(1 for fields in attributed
+                if ruled_category(fields, rule_of, args.rule_share) is not None)
+    with open(args.propose_rules, "w", encoding="utf-8") as fh:
+        json.dump({"field_rules": rules}, fh, ensure_ascii=False, indent=1)
+        fh.write("\n")
+    # One more NDJSON line, so stdout stays one JSON object per line.
+    print(json.dumps({"summary": {
+        "fields": len(stats),
+        "proposed_rules": len(rules),
+        "attributions": sum(e["templates"] for e in stats.values()),
+        "templates": templates_total,
+        "templates_with_fields": len(attributed),
+        "templates_ruled": ruled,
+        "templates_left": templates_total - ruled,
+        "free_text_ratio": args.free_text_ratio,
+        "free_text_templates": args.free_text_templates,
+        "free_text_floor": args.free_text_floor,
+        "free_text_min_templates": args.free_text_min_templates,
+        "rule_share": args.rule_share,
+        "output": args.propose_rules,
+    }}, ensure_ascii=False))
 
 
 def cmd_cluster(args):
@@ -774,6 +882,34 @@ def main():
                           help="the bootstrap's FREQS_FILE (most frequent first)")
     p_fields.add_argument("--examples", type=int, default=3)
     p_fields.add_argument("--example-chars", type=int, default=160)
+    p_fields.add_argument("--propose-rules", default=None,
+                          help='also write the field rules the templates-to-values ratio '
+                               'implies to this path, in the shape --field-rules reads, and '
+                               'add a {"summary": ...} line measuring what they would rule. '
+                               'Proposed only: nothing is applied, and each rule carries the '
+                               'ratio and counts behind it so it can be overridden')
+    p_fields.add_argument("--free-text-ratio", type=float, default=0.8,
+                          help="propose a rule for a field whose templates/values ratio is at "
+                               "least this (default: 0.8): nearly every value made its own "
+                               "template, so clustering it groups nothing")
+    p_fields.add_argument("--free-text-templates", type=int, default=500,
+                          help="also propose a rule for a field with at least this many "
+                               "templates (default: 500) and a ratio of at least "
+                               "--free-text-floor: diff lines repeat enough to sit below the "
+                               "ratio threshold while still being free text")
+    p_fields.add_argument("--free-text-min-templates", type=int, default=5,
+                          help="never propose a rule for a field with fewer templates than "
+                               "this (default: 5): a rule saves nothing on one or two, and "
+                               "JSON that uses data as keys makes a one-template field per "
+                               "datum")
+    p_fields.add_argument("--free-text-floor", type=float, default=0.5,
+                          help="the ratio floor for --free-text-templates (default: 0.5). "
+                               "Below it most values repeat a shared template, which is what "
+                               "machine-generated text looks like, so the field is left to be "
+                               "clustered")
+    p_fields.add_argument("--rule-share", type=float, default=0.9,
+                          help="share of a template's values that must sit in ruled fields for "
+                               "the rule to take it (default: 0.9, matching cluster)")
     p_fields.set_defaults(func=cmd_fields)
 
     p_expand = sub.add_parser("expand",

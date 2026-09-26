@@ -20,6 +20,47 @@ Options:
   --top N               Print only the N fields with the most records (the
                         JSON output and TEXT_FIELDS keep them all).
   --json-out F          Also write the rows as JSON to F.
+  --drift               Report the field paths the archive stores under more
+                        than one type, instead of the field rows.
+  --drift-file F        Also write those paths as NDJSON to F (implies --drift;
+                        an empty file means nothing drifts).
+  --field-counts        Report the record root's children grouped by record
+                        count, instead of the field rows. No queries.
+  --field-counts-file F Also write those groups as NDJSON to F (implies
+                        --field-counts).
+  --record-families     Report a partition of the records into families,
+                        instead of the field rows. Unlike every other mode this
+                        one runs counting queries against the archive, because
+                        the tree cannot tell which fields co-occur.
+  --record-families-file F
+                        Also write the partition as NDJSON to F (implies
+                        --record-families).
+  --family-method M     How --record-families partitions: value (the values of
+                        one universal low-cardinality field), existence (which
+                        subtree a record populates), or auto, the default --
+                        value when such a field exists, else existence, which
+                        is coarser and hundreds of queries dearer. Asking for
+                        existence while value applies also prints what value
+                        would have found, so the approximation is visible.
+  --max-partition-values N
+                        Distinct values a field may have and still be used to
+                        partition (default: 64).
+  --min-partition-coverage F
+                        Share of the records a field must carry to partition
+                        them (default: 0.99). The records it misses become the
+                        residual, so this widens which field may be chosen and
+                        changes no arithmetic. 1.0 demands a field every record
+                        carries.
+  --max-family-queries N
+                        Counting queries --record-families may spend (default:
+                        1000). The value method takes about 15; existence about
+                        520 and half a minute on a 44,818-record session
+                        archive. It is a ceiling for pathological archives, not
+                        a budget to tune down: stopping early reports a
+                        residual larger than the truth.
+  --max-discriminator-leaves N
+                        Leaves a disjunction discriminator may OR together
+                        (default: 12; existence method only).
   --search-wrapper P    Search wrapper (default: clp-s-search-kql next to this
                         script).
 
@@ -37,10 +78,156 @@ Output, one line each:
                          shapes), most values first when node counts are known,
                          else most records first
 
-Why: the log-insights bootstrap used to guess the schema from the top-level
-keys of a sample's first record. The tree is exact and whole-archive: every
-path, including the fields inside structured arrays that a session record
-keeps its text in.
+With --drift, instead:
+  DRIFT_PATHS=N          distinct field paths in the tree
+  DRIFT_COUNT=N          how many of them carry more than one type
+  DRIFT path=P types=ClpString:116,Object:4525 records=4641 [kql_path=K]
+                         one per drifting path, most records first. P marks
+                         array elements with []; K, printed when it differs, is
+                         the form to query. The types are ordered by NodeType
+                         id and records is their sum
+
+Why: the merged schema tree keeps one node per path and type, so a field that
+is a ClpString on a failed tool call and an Object on a success is two nodes
+under one key -- drift the tree already knows. It is worth knowing because a
+query written for one of the two shapes silently misses the records that carry
+the other: a projection of the scalar returns nothing for the object records,
+and a NOT predicate over the object matches every scalar record. Array
+elements are left out; their element types are not a field that changed shape.
+
+With --field-counts, instead:
+  FIELD_COUNT_ROOT id=N type=T records=N children=N
+                         the record root: the parent_id == -1 node with the
+                         most records (a tree also roots the archive's
+                         Metadata), and how many child fields it has
+  FIELD_COUNT_GROUPS=N   how many distinct record counts its children read
+  FIELD_COUNT_NOTE=...   the warning below, on the output itself
+  FIELDS count=32614 share=72.8% fields=uuid,cwd,version subtree_nodes=0 [more=N]
+                         one per record count, most records first: the fields
+                         reading it, and how many nodes hang below them. At
+                         most 12 fields are named on the line (more=N counts
+                         the rest); the NDJSON file keeps them all
+
+Why: for JSON logs the text dictionary can hold tens of thousands of templates
+while the structural variety is small -- most records carry one block of fields
+and the rest populate a different subtree. Fields that read a co-equal count
+are one such block, carried by the same records, so they are reported on one
+line rather than as one fact each.
+
+These are per-field record counts and NOT a partition of the records: a record
+that populates `type`, `sessionId` and `message` is counted on all three lines,
+so the shares overlap, they do not sum to 100%, and they must never be summed.
+The tree stores a count per node and nothing about which nodes appear together,
+so co-occurrence cannot be read off it at all -- that is what --record-families
+is for.
+
+With --record-families, instead (this mode queries the archive):
+  RECORD_FAMILY_METHOD=value field=type values=14 coverage=99.97% uncovered=36
+  RECORD_FAMILY_METHOD=existence reason=...
+                               which partition this is. For value, what share
+                               of the records the field carries and how many it
+                               does not -- always printed, 100.00% included, so
+                               a partition of nearly all the records is never
+                               read as one of all of them; the uncovered ones
+                               are in the residual. For existence, why value
+                               did not apply (or that it was asked for)
+  RECORD_FAMILY_ROOT records=N the records the partition has to account for
+  RECORD_FAMILY_COUNT=N        families in the partition
+  RECORD_FAMILY_QUERIES=N      counting queries spent, of --max-family-queries
+  RECORD_FAMILY_CANDIDATES=N tested=N untested=N cap=hit|no
+                               candidates considered; untested ones are left
+                               out of the partition, never silently
+  RECORD_FAMILY_CAP_NOTE=...   printed only when cap=hit: the residual is then
+                               an upper bound and real families may be inside
+                               it. A truncated partition must not read like a
+                               complete one
+  RECORD_FAMILY name=message.role count=16604 share=37.1% kind=structural [also=P,...] [leaves=N]
+                               one per family, most records first. `name` is
+                               the discriminator's KQL path -- the query that
+                               selects the family. `kind` is scalar,
+                               structural or structural-disjunction, and for
+                               the last one `leaves=N` is the width of the
+                               disjunction, whose predicate is in the NDJSON,
+                               since it has spaces in it. `also=` names other
+                               fields a query proved to select the very same
+                               records (not merely to read the same count --
+                               three kinds of record in a session archive
+                               number exactly 2,249 and are nothing alike)
+  RECORD_FAMILY_RESIDUAL count=9819 share=21.9%
+                               records no family's discriminator matches,
+                               printed even when it is 0
+  RECORD_FAMILY_SHARE_SUM=100.0%
+                               the printed shares, which are one-decimal
+                               percentages adjusted to sum to exactly 100.0 (no
+                               value moves by as much as a tenth; the NDJSON
+                               carries the exact fractions). The counts are
+                               checked first and the run fails without printing
+                               a partition if they do not cover the root
+                               exactly: that invariant is the point of the mode
+  RECORD_FAMILY_DISCARDED name=P count=N reason=... [also=P,...]
+                               a candidate that is not disjoint from a family,
+                               with the relation that ruled it out
+  RECORD_FAMILY_UNDISCRIMINATED path=P records=N reason=...
+                               a subtree no query selects exactly: not even a
+                               disjunction of its leaves covers every one of
+                               its records (an empty object among them will do
+                               that), with the count it did reach
+  RECORD_FAMILY_COMPARE method=value field=type families=14 residual=0 queries=15 against existence ...
+                               printed when existence was asked for although
+                               value applies, so the cost of the coarser answer
+                               is on the page
+
+Why: the field counts above overlap, so they cannot answer "how do the records
+divide".
+
+The value method answers it exactly where it applies. A field nearly every
+record carries, with few enough distinct values, already names the kinds of
+record -- `type` on a Claude session archive has 14 values which sum to all
+44,818 -- so its values are the families, one `--count FIELD:"<value>"` each.
+The field is chosen the way the bootstrap's DIST line chooses its fields (the
+same scalar types, outside arrays, no collapsed data-as-keys row), plus the two
+conditions that make a partition possible: it carries at least
+--min-partition-coverage of the records, and it has at most
+--max-partition-values values. Best coverage first, then shallowest, then
+fewest values -- a field the whole archive carries always wins over one that
+nearly does, since what a field misses lands in the residual. On a bundle of
+five session archives, 36 records of 111,223 lack `type`: partitioning by it
+leaves those 36 in the residual for 19 queries, where refusing it over them
+costs 716 and a residual of 3,726. A scalar holds one value per record, so the
+families cannot overlap and the sum is the whole proof. Values are quoted and escaped by the plugin's own rule
+(lib/kql_build), numbers and booleans written bare so they match as numbers;
+a value no predicate can express is reported rather than guessed at.
+
+Failing that, the existence method. It picks one discriminator per child subtree
+of the record root
+-- a leaf every record of that subtree carries, a scalar child being its own --
+and proves the division with `--count` queries instead of inferring it: a
+candidate joins the partition only after counting 0 records in common with
+every family already accepted. So the families are pairwise disjoint by
+construction and the records left over are exactly the root's count minus their
+sum, reported as the residual.
+
+When no single leaf covers a subtree, its discriminator is built as a
+disjunction of its leaves instead of giving up on it -- one leaf per child
+block, ORed until the count matches the subtree's own, terms that add no records
+dropped. `toolUseResult` needs 10 of them, one per kind of tool result, and
+without them a tenth of a session archive would sit in the residual looking
+unexplainable.
+
+A candidate is tried structural-subtree-first and largest-first, because which
+subtree a record populates is what makes it a kind of record, while a scalar at
+the root can belong to records of several kinds. That is how a common field is
+kept out: `message.role:* AND uuid:*` counts all 16604 message records, so
+`uuid` is a superset of that family, not a sibling of it, and it is discarded
+with that reason. The test runs against families already accepted, and only in
+that direction -- read the other way it would discard `message.role` itself for
+containing the optional `effort` field that some message records carry.
+
+
+Why (the field rows): the log-insights bootstrap used to guess the schema from
+the top-level keys of a sample's first record. The tree is exact and
+whole-archive: every path, including the fields inside structured arrays that a
+session record keeps its text in.
 """
 
 import argparse
@@ -54,9 +241,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "li
 from schema_tree import (  # noqa: E402
     CONTAINER_TYPES,
     DEFAULT_MAX_CHILDREN,
+    DEFAULT_MAX_DISCRIMINATOR_LEAVES,
+    DEFAULT_MAX_FAMILY_QUERIES,
+    DEFAULT_MAX_PARTITION_VALUES,
+    DEFAULT_MIN_PARTITION_COVERAGE,
+    family_candidates,
+    field_counts,
     load_trees,
     node_fields,
+    partition_by_value,
+    partition_families,
     summarize,
+    type_drift,
+    value_partition_fields,
 )
 
 
@@ -104,19 +301,354 @@ def field_value_counts(log_shapes_file, trees, max_children):
     return counts if seen else None
 
 
+# Fields named on a FIELDS line. A root whose keys are data (one per file) can
+# put thousands of one-record fields in a single group; the NDJSON keeps all.
+MAX_FAMILY_FIELDS = 12
+
+FIELD_COUNT_NOTE = (
+    "per-field record counts, not a partition: a record is counted on every "
+    "line whose field it carries, so the shares overlap and must not be "
+    "summed. Fields sharing a count are carried by the same records. For a "
+    "partition of the records, run --record-families"
+)
+
+
+def write_ndjson(path, rows):
+    """Write one JSON object per line, truncating the file when there are
+    none: an empty file is the answer "nothing here", not a missing one."""
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def print_drift(trees, drift_file):
+    rows, paths = type_drift(trees)
+    print(f"DRIFT_PATHS={paths}")
+    print(f"DRIFT_COUNT={len(rows)}")
+    for row in rows:
+        types = ",".join(f"{t['type']}:{t['count']}" for t in row["types"])
+        extra = "" if row["kql_path"] == row["path"] else f" kql_path={row['kql_path']}"
+        print(f"DRIFT path={row['path']} types={types} records={row['records']}{extra}")
+    if drift_file:
+        write_ndjson(drift_file, rows)
+
+
+def print_field_counts(trees, field_counts_file):
+    root, groups = field_counts(trees)
+    ids = ",".join(str(i) for i in root["ids"])
+    print(f"FIELD_COUNT_ROOT id={ids} type={root['type']} records={root['records']}"
+          f" children={root['children']}")
+    print(f"FIELD_COUNT_GROUPS={len(groups)}")
+    print(f"FIELD_COUNT_NOTE={FIELD_COUNT_NOTE}")
+    for group in groups:
+        fields = [f["key"] for f in group["fields"]]
+        extra = ""
+        if len(fields) > MAX_FAMILY_FIELDS:
+            extra = f" more={len(fields) - MAX_FAMILY_FIELDS}"
+            fields = fields[:MAX_FAMILY_FIELDS]
+        print(f"FIELDS count={group['count']} share={group['share'] * 100:.1f}%"
+              f" fields={','.join(fields)}"
+              f" subtree_nodes={group['subtree_nodes']}{extra}")
+    if field_counts_file:
+        write_ndjson(field_counts_file, groups)
+
+
+def display_shares(counts, total):
+    """One-decimal percentages of total that sum to exactly 100.0, by giving the
+    tenths lost to rounding to the largest remainders. Rounding each share on
+    its own leaves the printed column at 99.9% or 100.1%, and a partition whose
+    column does not add up is exactly what nobody should have to second-guess.
+    Each value still differs from the true share by less than a tenth."""
+    if total <= 0:
+        return [0.0 for _ in counts]
+    tenths = [c * 1000 // total for c in counts]
+    order = sorted(range(len(counts)), key=lambda i: (-((counts[i] * 1000) % total),
+                                                      -counts[i]))
+    for i in order[:1000 - sum(tenths)]:
+        tenths[i] += 1
+    return [t / 10 for t in tenths]
+
+
+def record_counter(wrapper, archives_dir):
+    """count_records(kql) for the partition functions: the archive's own count
+    aggregation, summed over its archives. A query that matches nothing prints
+    no row at all, which is the count 0."""
+    def count_records(kql):
+        proc = subprocess.run(
+            [wrapper, "--count", archives_dir, kql],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        if proc.returncode != 0:
+            sys.stderr.write(proc.stderr)
+            raise RuntimeError(f"counting query failed: {kql}")
+        total = 0
+        for line in proc.stdout.splitlines():
+            if not line.startswith("{"):
+                continue
+            try:
+                total += json.loads(line).get("count", 0)
+            except json.JSONDecodeError:
+                continue
+        return total
+    return count_records
+
+
+def field_values(wrapper, archives_dir, field):
+    """A field's distinct values, in the archive's own types, deduplicated
+    across archives. None when the query fails."""
+    proc = subprocess.run(
+        [wrapper, "--unique", field, archives_dir, "*"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    values, seen = [], set()
+    for line in proc.stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if "value" not in row:
+            continue
+        value = row["value"]
+        key = (type(value).__name__, value if isinstance(value, (str, int, float, bool)) else repr(value))
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(value)
+    return values
+
+
+def choose_partition_field(trees, wrapper, archives_dir, max_values, max_children,
+                           min_coverage):
+    """(root_records, chosen, reason, queries): the field whose values partition
+    the records -- {"path", "values", "records"} -- or the reason there is none.
+
+    Most records covered first, then shallowest, then fewest values: a field the
+    whole archive carries wins over one that nearly does however few values the
+    latter has, because what a field misses lands in the residual. Each candidate
+    costs one --unique query, and there are rarely more than a handful, a field
+    having to carry nearly every record to be a candidate at all.
+    """
+    root_records, candidates, closest = value_partition_fields(
+        trees, max_children, min_coverage)
+    if not candidates:
+        near = ""
+        if closest and root_records:
+            near = (f" (the best is {closest['path']} at"
+                    f" {100.0 * closest['records'] / root_records:.2f}%,"
+                    f" {closest['records']} of {root_records})")
+        return root_records, None, (
+            f"no scalar field carries {100.0 * min_coverage:.2f}% of the records,"
+            f" so no field's values can account for them{near}"), 0
+    measured = []
+    queries = 0
+    for candidate in candidates:
+        # Candidates arrive best-coverage-first, then shallowest, so once one
+        # qualifies nothing covering less (or covering the same from deeper) can
+        # beat it, and its --unique query is not worth spending. Equal on both
+        # still gets measured, since only the value count separates them.
+        prefix = (-candidate["records"], candidate["depth"])
+        if measured and prefix > (measured[0][0], measured[0][1]):
+            break
+        queries += 1
+        values = field_values(wrapper, archives_dir, candidate["path"])
+        if values is None:
+            continue
+        if 0 < len(values) <= max_values:
+            measured.append((-candidate["records"], candidate["depth"], len(values),
+                             len(candidate["path"]), candidate["path"], values,
+                             candidate["records"]))
+            measured.sort()
+    if not measured:
+        names = ", ".join(c["path"] for c in candidates[:5])
+        return root_records, None, (
+            f"every scalar field covering the records has more than {max_values}"
+            f" distinct values (tried {len(candidates)}: {names})"), queries
+    best = measured[0]
+    return root_records, {"path": best[4], "values": best[5], "records": best[6]}, \
+        None, queries
+
+
+def print_record_families(trees, wrapper, archives_dir, families_file, args):
+    count_records = record_counter(wrapper, archives_dir)
+    # The value method is tried first whatever the choice: on --family-method
+    # existence its numbers are reported beside the partition, so that the
+    # coarser answer is never read without the exact one next to it.
+    try:
+        root_records, chosen, no_value_field, field_queries = choose_partition_field(
+            trees, wrapper, archives_dir, args.max_partition_values, args.max_children,
+            args.min_partition_coverage,
+        )
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if chosen is None and args.family_method == "value":
+        print(f"error: --family-method value: {no_value_field}", file=sys.stderr)
+        return 1
+    method = "value" if chosen is not None and args.family_method != "existence" else "existence"
+
+    candidates = []
+    try:
+        if method == "value":
+            result = partition_by_value(chosen["path"], chosen["values"], root_records,
+                                        count_records, args.max_family_queries)
+            result["queries"] += field_queries
+        else:
+            root_records, candidates = family_candidates(trees)
+            if root_records <= 0:
+                print("error: the schema tree has no record root to partition",
+                      file=sys.stderr)
+                return 1
+            result = partition_families(
+                root_records, candidates, count_records,
+                args.max_family_queries, args.max_discriminator_leaves,
+            )
+    except (RuntimeError, ValueError) as exc:
+        # A partition nobody could verify is worse than no partition, so this
+        # reports rather than printing families it cannot stand behind.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    families, residual = result["families"], result["residual"]
+
+    # The invariant this mode exists for, checked on the counts before a single
+    # share is printed: they are integers from the archive's own count
+    # aggregation, and the families were accepted only after counting 0 records
+    # in common, so a mismatch means the partition is not one.
+    covered = sum(f["count"] for f in families) + residual["count"]
+    if covered != root_records:
+        print(f"error: the families and the residual cover {covered} records, not the"
+              f" root's {root_records}: this is not a partition", file=sys.stderr)
+        return 1
+    shares = display_shares([f["count"] for f in families] + [residual["count"]],
+                            root_records)
+    share_sum = sum(shares)
+    if abs(share_sum - 100.0) > 0.05:
+        print(f"error: the shares sum to {share_sum:.1f}%, not 100%", file=sys.stderr)
+        return 1
+
+    if method == "value":
+        # Coverage on the line whatever it is: a partition of 99.97% of the
+        # records must never read as one of all of them, and 100.00% is worth
+        # saying rather than leaving to be inferred from a missing key.
+        coverage = 100.0 * chosen["records"] / root_records if root_records else 0.0
+        print(f"RECORD_FAMILY_METHOD=value field={chosen['path']}"
+              f" values={len(chosen['values'])} coverage={coverage:.2f}%"
+              f" uncovered={root_records - chosen['records']}")
+    else:
+        reason = ("asked for with --family-method existence" if args.family_method
+                  == "existence" else no_value_field)
+        print(f"RECORD_FAMILY_METHOD=existence reason={reason}")
+    print(f"RECORD_FAMILY_ROOT records={root_records}")
+    print(f"RECORD_FAMILY_COUNT={len(families)}")
+    print(f"RECORD_FAMILY_QUERIES={result['queries']}")
+    print(f"RECORD_FAMILY_CANDIDATES="
+          f"{len(chosen['values']) if method == 'value' else len(candidates)}"
+          f" tested={result['tested']} untested={result['untested']}"
+          f" cap={'hit' if result['cap_hit'] else 'no'}")
+    if result["cap_hit"]:
+        print(f"RECORD_FAMILY_CAP_NOTE=the cap stopped the search with"
+              f" {result['untested']} candidates untested; the residual is an upper"
+              " bound and real families may be inside it. Raise"
+              " --max-family-queries to finish the search")
+    for family, share in zip(families, shares):
+        extra = ""
+        if family["co_equal"]:
+            extra += " also=" + ",".join(family["co_equal"])
+        if family["kind"] == "structural-disjunction":
+            extra += f" leaves={len(family['leaves'])}"
+        # A value can hold a space, so for those the name goes last on the line
+        # and runs to its end, the way a reason= does.
+        if family["kind"] == "value":
+            print(f"RECORD_FAMILY count={family['count']} share={share:.1f}%"
+                  f" kind=value name={family['path']}")
+        else:
+            print(f"RECORD_FAMILY name={family['path']} count={family['count']}"
+                  f" share={share:.1f}% kind={family['kind']}{extra}")
+    print(f"RECORD_FAMILY_RESIDUAL count={residual['count']} share={shares[-1]:.1f}%")
+    print(f"RECORD_FAMILY_SHARE_SUM={share_sum:.1f}%")
+
+    # Asked for the coarse method while the exact one applies: show what it
+    # costs, so the approximation is never read on its own.
+    if method == "existence" and chosen is not None:
+        try:
+            exact = partition_by_value(chosen["path"], chosen["values"], root_records,
+                                       count_records, args.max_family_queries)
+            print(f"RECORD_FAMILY_COMPARE method=value field={chosen['path']}"
+                  f" families={len(exact['families'])}"
+                  f" residual={exact['residual']['count']}"
+                  f" queries={exact['queries'] + field_queries}"
+                  f" against existence families={len(families)}"
+                  f" residual={residual['count']} queries={result['queries']}")
+        except (RuntimeError, ValueError) as exc:
+            print(f"RECORD_FAMILY_COMPARE=unavailable reason={exc}")
+
+    for row in result["discarded"]:
+        also = ",".join(row["co_equal"])
+        print(f"RECORD_FAMILY_DISCARDED name={row['path']} count={row['count']}"
+              + (f" also={also}" if also else "") + f" reason={row['reason']}")
+    for row in result["undiscriminated"]:
+        print(f"RECORD_FAMILY_UNDISCRIMINATED path={row['path']}"
+              f" records={row['records']} reason={row['reason']}")
+
+    if families_file:
+        rows = [dict(row="family", **f) for f in families]
+        rows.append(dict(row="residual", **residual))
+        rows += [dict(row="discarded", **r) for r in result["discarded"]]
+        rows += [dict(row="undiscriminated", **r) for r in result["undiscriminated"]]
+        write_ndjson(families_file, rows)
+    return 0
+
+
 def main():
-    parser = argparse.ArgumentParser(add_help=True)
+    parser = argparse.ArgumentParser(
+        add_help=True, description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("archives_dir")
     parser.add_argument("--log-shapes-file")
     parser.add_argument("--max-children", type=int, default=DEFAULT_MAX_CHILDREN)
     parser.add_argument("--tree-file")
     parser.add_argument("--top", type=int, default=0)
     parser.add_argument("--json-out")
+    parser.add_argument("--drift", action="store_true")
+    parser.add_argument("--drift-file")
+    parser.add_argument("--field-counts", action="store_true")
+    parser.add_argument("--field-counts-file")
+    parser.add_argument("--record-families", action="store_true")
+    parser.add_argument("--record-families-file")
+    parser.add_argument("--max-family-queries", type=int,
+                        default=DEFAULT_MAX_FAMILY_QUERIES)
+    parser.add_argument("--max-discriminator-leaves", type=int,
+                        default=DEFAULT_MAX_DISCRIMINATOR_LEAVES)
+    parser.add_argument("--family-method", choices=("auto", "value", "existence"),
+                        default="auto")
+    parser.add_argument("--max-partition-values", type=int,
+                        default=DEFAULT_MAX_PARTITION_VALUES)
+    parser.add_argument("--min-partition-coverage", type=float,
+                        default=DEFAULT_MIN_PARTITION_COVERAGE)
     parser.add_argument(
         "--search-wrapper",
         default=os.path.join(os.path.dirname(os.path.realpath(__file__)), "clp-s-search-kql"),
     )
     args = parser.parse_args()
+    drift = args.drift or bool(args.drift_file)
+    counts_mode = args.field_counts or bool(args.field_counts_file)
+    families = args.record_families or bool(args.record_families_file)
+    if families and args.max_family_queries < 1:
+        print("error: --max-family-queries must be at least 1", file=sys.stderr)
+        return 2
+    if families and args.max_discriminator_leaves < 1:
+        print("error: --max-discriminator-leaves must be at least 1", file=sys.stderr)
+        return 2
+    if families and args.max_partition_values < 1:
+        print("error: --max-partition-values must be at least 1", file=sys.stderr)
+        return 2
+    if families and not 0 < args.min_partition_coverage <= 1:
+        print("error: --min-partition-coverage must be in (0, 1]", file=sys.stderr)
+        return 2
 
     if args.tree_file:
         with open(args.tree_file, "r", encoding="utf-8") as f:
@@ -126,6 +658,23 @@ def main():
             return 1
     else:
         trees = read_trees(args.search_wrapper, args.archives_dir)
+
+    # These are readings of the same tree, not extra field rows, so each prints
+    # its own report and nothing else.
+    if drift:
+        print_drift(trees, args.drift_file)
+    if counts_mode:
+        print_field_counts(trees, args.field_counts_file)
+    if families:
+        rc = print_record_families(
+            trees, args.search_wrapper, args.archives_dir,
+            args.record_families_file, args,
+        )
+        if rc:
+            return rc
+    if drift or counts_mode or families:
+        return 0
+
     rows = summarize(trees, args.max_children)
     counts = None
     if args.log_shapes_file:
