@@ -45,6 +45,15 @@ either mode. If it reports defects they are printed verbatim, no JSON is
 written, and the exit code is 2. A customer scale that does not validate is
 never quietly swapped for the default: the caller has to see the problem.
 
+An axis the scale marks `gated_by` is scored only when the cohort declares the
+intent it needs: C4 autonomy means "how far a session meant to run unattended
+got without a person", so in a supervised session it is left unscored rather
+than marked down for waiting. A gated-out axis appears in `unscored` with
+`"gated": true`, so a consumer can tell a policy skip from something the session
+could not measure, and its group's mean rests on one fewer axis. The
+measurement itself is untouched: clp-session-facts still reports C4's value in
+every run, gate or no gate.
+
 Each scored axis carries the scale's `basis` and `rationale` (and `anchors`
 where the scale gives them), and `basis_summary` counts the scored axes by
 basis. A score is only as good as the threshold that produced it, so the
@@ -74,7 +83,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 VERSION = "1.0.0"
-SCHEMA_VERSION = "1.1.0"   # 1.1.0 adds each axis's basis/rationale/anchors and basis_summary
+SCHEMA_VERSION = "1.2.0"   # 1.1.0 added basis/rationale/anchors; 1.2.0 adds gated (policy) unscoring
 
 # The scale says what each threshold rests on. These are the short forms for the
 # table; the full word and the rationale are in the JSON. A scorecard resting
@@ -290,7 +299,46 @@ def build_cohort(pairs, hours):
     return cohort
 
 
-def score_session(measured, scale, scale_path, scale_source, bundle, facts_file):
+def check_cohort_values(pairs, scale):
+    """Complaints about a --cohort value the scale declares a vocabulary for.
+
+    An unrecognised value must not slide through as "undeclared": that would turn
+    a typo into a silently skipped axis, which is the one failure mode a gate
+    must not have.
+    """
+    declared = scale.get("cohort_keys") or {}
+    problems = []
+    for pair in pairs or []:
+        key, _, value = pair.partition("=")
+        spec = declared.get(key.strip())
+        if spec is None:
+            continue
+        allowed = (spec or {}).get("values") or []
+        if value.strip() not in allowed:
+            problems.append(f"--cohort {key.strip()}={value.strip()!r} is not recognised; "
+                            f"{key.strip()} must be one of {', '.join(allowed)}")
+    return problems
+
+
+def gate_verdict(spec, cohort):
+    """(scored?, reason) for an axis's gate. (True, None) when there is no gate.
+
+    An axis with a gate only means something under one declared intent, so an
+    undeclared or mismatched cohort leaves it unscored rather than scored badly.
+    """
+    gate = spec.get("gated_by")
+    if not gate:
+        return True, None
+    key = gate.get("cohort_key")
+    value = (cohort or {}).get(key)
+    if value is None:
+        return False, gate.get("undeclared_reason") or f"{key} was not declared"
+    if value in (gate.get("score_when") or []):
+        return True, None
+    return False, gate.get("skip_reason") or f"{key}={value} puts this axis out of scope"
+
+
+def score_session(measured, scale, scale_path, scale_source, bundle, facts_file, cohort):
     """The scored document. Every number in it is a lookup or a mean."""
     # clp-session-facts prints BUNDLE=, so a captured --axes stdout says what it
     # was measured from and a re-score keeps the same provenance. A capture made
@@ -317,6 +365,14 @@ def score_session(measured, scale, scale_path, scale_source, bundle, facts_file)
         if not spec:
             unscored.append({"id": axis["id"], "group": axis["group"], "label": label,
                              "reason": f"{axis['id']} is not in {scale_path}, so no ladder applies"})
+            continue
+        allowed, gate_reason = gate_verdict(spec, cohort)
+        if not allowed:
+            # A policy skip, flagged so a consumer can tell it from something the
+            # session could not measure. The value itself is still in the facts.
+            unscored.append({"id": axis["id"], "group": axis["group"], "label": label,
+                             "reason": gate_reason, "gated": True,
+                             "cohort_key": (spec.get("gated_by") or {}).get("cohort_key")})
             continue
         rung = match_rung(spec, axis["value"])
         if rung is None:
@@ -369,7 +425,7 @@ def score_session(measured, scale, scale_path, scale_source, bundle, facts_file)
             "wall_clock_hours": hours,
             "total_input_tokens": to_int(measured["keys"].get("TOTAL_INPUT_TOKENS")),
         },
-        "cohort": None,   # filled in by the caller, which knows --cohort
+        "cohort": cohort,
         "scale": {
             "file": str(scale_path),
             "scale_version": scale.get("scale_version"),
@@ -451,7 +507,8 @@ def print_table(doc):
     if doc["unscored"]:
         print()
         for axis in doc["unscored"]:
-            print(f"UNSCORED {axis['id']} {axis['label']} ({axis['group']})")
+            gate = f" - gated on {axis['cohort_key']}" if axis.get("gated") else ""
+            print(f"UNSCORED {axis['id']} {axis['label']} ({axis['group']}){gate}")
             for line in wrap_reason(axis["reason"]):
                 print(f"         {line}")
     if doc["alerts"]:
@@ -500,6 +557,13 @@ def main(argv=None) -> int:
     except (OSError, ValueError) as exc:
         print(f"error: cannot read the scale {scale_path}: {exc}", file=sys.stderr)
         return 1
+    # Fail on a bad cohort value before measuring anything: it is cheap to catch
+    # here and a silent typo would quietly gate an axis out.
+    bad = check_cohort_values(args.cohort, scale)
+    if bad:
+        for line in bad:
+            print(f"error: {line}", file=sys.stderr)
+        return 1
 
     # -- measure (or read what was measured), and validate the scale, first
     if args.bundle:
@@ -540,9 +604,9 @@ def main(argv=None) -> int:
         if problems:
             return refuse(scale_path, problems)
 
+    cohort = build_cohort(args.cohort, to_float(measured["keys"].get("WALL_CLOCK_HOURS")))
     doc = score_session(measured, scale, scale_path, scale_source, bundle,
-                        measured["keys"].get("FACTS_FILE"))
-    doc["cohort"] = build_cohort(args.cohort, doc["session"]["wall_clock_hours"])
+                        measured["keys"].get("FACTS_FILE"), cohort)
 
     try:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)

@@ -1759,6 +1759,7 @@ def check_scale(path):
         elif not (groups[group] or {}).get("label"):
             problems.append(("group-unlabelled", f"group {group} has no label"))
 
+    problems.extend(check_cohort_keys(scale.get("cohort_keys")))
     axes = scale.get("axes")
     if not isinstance(axes, list):
         problems.append(("axes-not-a-list", "`axes` must be a list of axis objects"))
@@ -1791,6 +1792,7 @@ def check_scale(path):
                              f"{aid} has cohort_relative={axis.get('cohort_relative')!r}, "
                              f"the script says {bool(spec.get('cohort'))}"))
         problems.extend(check_justification(aid, axis))
+        problems.extend(check_gate(aid, axis, scale.get("cohort_keys") or {}))
         direction = axis.get("direction")
         if direction not in DIRECTIONS:
             problems.append(("axis-bad-direction",
@@ -1803,6 +1805,71 @@ def check_scale(path):
             problems.append(("axis-missing",
                              f"{aid} ({AXES[aid]['label']}) is emitted by this script but is not "
                              "in the scale, so it could never be scored"))
+    return problems
+
+
+def check_cohort_keys(declared):
+    """Problems with the scale's cohort vocabulary.
+
+    A gate names a cohort key and the values it accepts. Declaring the vocabulary
+    in the scale rather than hardcoding it here is what lets a customer add a
+    dimension of their own without editing Python.
+    """
+    if declared is None:
+        return []
+    if not isinstance(declared, dict):
+        return [("bad-cohort-keys", "`cohort_keys` must be an object mapping a key to its values")]
+    problems = []
+    for key, spec in declared.items():
+        if not isinstance(spec, dict):
+            problems.append(("bad-cohort-keys", f"cohort_keys.{key} is not an object"))
+            continue
+        values = spec.get("values")
+        if not isinstance(values, list) or not values or not all(
+                isinstance(v, str) and v.strip() for v in values):
+            problems.append(("bad-cohort-keys",
+                             f"cohort_keys.{key} needs a non-empty `values` array of strings"))
+        if not isinstance(spec.get("describes"), str) or not spec["describes"].strip():
+            problems.append(("bad-cohort-keys",
+                             f"cohort_keys.{key} needs a `describes` saying what the key means"))
+    return problems
+
+
+def check_gate(aid, axis, declared):
+    """Problems with an axis's gate.
+
+    A gate says an axis only means something under one declared intent. A gate
+    that names a key or a value the scale never declares would silently never
+    fire, so it is a defect and not a quirk.
+    """
+    gate = axis.get("gated_by")
+    if gate is None:
+        return []
+    if not isinstance(gate, dict):
+        return [("axis-bad-gate", f"{aid} has a `gated_by` that is not an object")]
+    problems = []
+    for field in ("cohort_key", "skip_reason", "undeclared_reason"):
+        if not isinstance(gate.get(field), str) or not gate[field].strip():
+            problems.append(("axis-bad-gate", f"{aid} gate has no `{field}`"))
+    when = gate.get("score_when")
+    if not isinstance(when, list) or not when or not all(isinstance(v, str) for v in when):
+        problems.append(("axis-bad-gate",
+                         f"{aid} gate needs a non-empty `score_when` array of values"))
+        when = []
+    key = gate.get("cohort_key")
+    if not isinstance(key, str) or not key.strip():
+        return problems
+    spec = declared.get(key)
+    if spec is None:
+        problems.append(("axis-bad-gate", f"{aid} gates on cohort key {key!r}, which the scale's "
+                                          "`cohort_keys` does not declare"))
+        return problems
+    allowed = (spec or {}).get("values") or []
+    for value in when:
+        if value not in allowed:
+            problems.append(("axis-bad-gate",
+                             f"{aid} gate scores when {key}={value!r}, which is not one of that "
+                             f"key's declared values {allowed}"))
     return problems
 
 

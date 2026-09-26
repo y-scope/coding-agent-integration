@@ -1,12 +1,18 @@
 {
-  "scale_version": "1.1.0",
+  "scale_version": "1.2.0",
   "name": "CLP default session scale",
-  "notes": "These are defaults, not verdicts. Every threshold here is a judgement about what a raw measurement is worth, and a customer is expected to edit them: copy this file, change the ladders, and point the skill at the copy. clp-session-facts never reads these ladders to score anything - it emits raw values and the components behind them, and an agent applies this file, so the judgement stays visible and overridable. Report the four group means separately and never average them into one composite: the groups have different owners, and a single number hides exactly the signal each owner needs. An axis the script reports as n/a has not been measured, so leave it out of its group's mean and say how many axes the mean rests on - never score it zero. Axes marked cohort_relative mean nothing as an absolute and need a cohort key (the same kind of work, the same repository, a comparable span) before any trend drawn from them is real. A3 and D3 are the same measurement on purpose: a cache miss is both a platform fault and a cost lever, and those have different owners. Every axis carries a `basis` saying what its ladder rests on - definitional, mechanism, observed or judgement - and a `rationale` saying why the rungs fall where they do. Most are `judgement`: a defensible starting point with no measurement behind it, which is exactly where to spend calibration effort. See `calibration` for how to replace one with your own numbers.",
+  "notes": "These are defaults, not verdicts. Every threshold here is a judgement about what a raw measurement is worth, and a customer is expected to edit them: copy this file, change the ladders, and point the skill at the copy. clp-session-facts never reads these ladders to score anything - it emits raw values and the components behind them, and an agent applies this file, so the judgement stays visible and overridable. Report the four group means separately and never average them into one composite: the groups have different owners, and a single number hides exactly the signal each owner needs. An axis the script reports as n/a has not been measured, so leave it out of its group's mean and say how many axes the mean rests on - never score it zero. Axes marked cohort_relative mean nothing as an absolute and need a cohort key (the same kind of work, the same repository, a comparable span) before any trend drawn from them is real. A3 and D3 are the same measurement on purpose: a cache miss is both a platform fault and a cost lever, and those have different owners. Every axis carries a `basis` saying what its ladder rests on - definitional, mechanism, observed or judgement - and a `rationale` saying why the rungs fall where they do. Most are `judgement`: a defensible starting point with no measurement behind it, which is exactly where to spend calibration effort. See `calibration` for how to replace one with your own numbers. An axis may also carry `gated_by`, naming a cohort key that has to hold a particular value before the axis means anything: C4 autonomy is scored only for a session that was meant to run unattended, because in a supervised session the same number is a design choice and not a fault. A gated-out axis is left unscored with its reason, exactly like one that could not be measured, so its group's mean rests on fewer axes rather than being dragged down.",
   "calibration": {
     "how": "Run clp-bundle-review DIR --build --json over your own sessions. Its RATE lines give each signal's median and 90th percentile across the sessions active enough to rate (at least 5), and --trend week|day adds per-period values, each with its volume, its session count and a 95% interval for rates. Set a rung where your own fleet actually sits rather than where this file guesses.",
     "caution": "A percentile from one or two sessions describes those sessions, not your fleet, and a fleet trend can be one large session - read the session count beside it. Keep a judgement threshold until you have enough volume to beat it.",
     "cohort": "Calibrate within a cohort - task type, repository, duration band. A throughput or cost threshold taken from one kind of work does not transfer to another.",
     "basis_to_revisit": "definitional and mechanism rungs follow from what the metric means or how billing works, so they rarely need moving. observed rungs should be re-cut as your sample grows past the one they cite. judgement rungs are guesses; move those first."
+  },
+  "cohort_keys": {
+    "supervision": {
+      "values": ["autonomous", "supervised", "mixed"],
+      "describes": "whether the session was meant to run unattended; gates axes that are only meaningful under one intent"
+    }
   },
   "groups": {
     "A": {"label": "Platform", "owner": "infra / gateway"},
@@ -363,10 +369,16 @@
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point, and the axis most likely to be wrong for a given team: 1.0 means the session never waited on a person, which is only a goal if unattended running is a goal. A supervised workflow should raise the ladder or drop this axis rather than be marked down for keeping a human in the loop.",
+      "rationale": "Scored only for a session that was meant to run unattended, where it says how far it actually got without a person. In a supervised or mixed session the same share is a design property rather than a fault, so the axis is skipped instead of marked down. The gate accounts for intent, not quality: the logs show what was delivered, never whether it was any good, so a high score here says only that the session did not wait - not that waiting would have been wrong. The rungs themselves are an unmeasured starting point.",
       "anchors": [
         {"value": 1.0, "means": "the session never waited on a person or on nothing"}
       ],
+      "gated_by": {
+        "cohort_key": "supervision",
+        "score_when": ["autonomous"],
+        "skip_reason": "the session was not meant to run unattended, so waiting on a person is not a fault",
+        "undeclared_reason": "supervision mode was not declared, so it cannot be told whether waiting on a person was intended"
+      },
       "ladder": [
         {"score": 10, "min": 0.95},
         {"score":  9, "min": 0.9},

@@ -185,6 +185,14 @@ It validates the scale before scoring and **exits without writing on a bad one**
 
 The JSON carries a `cohort` object with an `_unset` list, so a dashboard can tell an ungrouped session from one grouped as null. Pass the cohort keys whenever the user has said what kind of work the session was; nothing in the log infers task type reliably.
 
+### Declare the supervision mode, or C4 goes unscored
+
+Some axes are only meaningful under one intent, and the scale gates them on a cohort key. `C4 autonomy` is gated on `supervision`, which is `autonomous`, `supervised` or `mixed`. **Autonomy is not a virtue on its own**: a session meant to run unattended that kept stopping for a person scored badly, but a deliberately supervised session shows the same number as a design property, not a fault. So unless `supervision=autonomous` is declared, C4 is not scored and its group mean rests on one fewer axis.
+
+**Ask for it when you score.** Scoring is already opt-in, so one more question on that path is cheap, and guessing the intent from the log is not reliable. If the user's earlier context already makes it clear, use that instead of asking again. If they decline or cannot say, leave it undeclared: an unscored axis with a stated reason is right, and inventing a mode to fill the gap is not.
+
+The raw value is measured and reported either way — `clp-session-facts` never applies the gate — so the human-and-idle share stays visible in the Time category even when the axis is not scored. Note also what the gate does **not** do: it accounts for intent, not for quality. The logs cannot tell you whether unattended work was any good, only whether it was delivered.
+
 | Group | Axes | Owner |
 |---|---|---|
 | A. Platform | execution reliability, provider stability, cache efficiency, config correctness, runtime honesty | infra / gateway |
