@@ -227,6 +227,8 @@ FILES
     over a probe's count, and say so when a probe is flagged non-selective.
     Entries marked "(focus)" ran for the user's focus.
 
+APPLICATION: what these logs appear to be and the evidence for it, from phase 1 -- or "unidentified" when the fingerprint was too generic to name.
+
 Rules:
 1. Every number, percentage, count and timestamp in the report must appear
    verbatim in FACTS_FILE (or in RESULTS_TABLE for a query's own count). If a
@@ -237,6 +239,23 @@ Rules:
    among the fetched records", never present them as the archive's span.
 3. Do not state a rate, a duration, or a cause as fact. A cause or a
    recommendation is inference: label it "inference".
+3a. APPLICATION is what these logs appear to be, with the evidence that
+   identified it. Use what you know about that system to say why a finding
+   matters -- what a gossip failure means for a distributed database, what a
+   growing queue means for an inference server, what the blast radius of each
+   is. Lead with it where the user asked for significance or impact.
+   Three limits, and they are strict. Label it "domain knowledge", separately
+   from "inference", so a reader can tell a claim about this system from a
+   claim about these records. It may never supply a number, a rate or a
+   duration: those come from FACTS_FILE or they do not appear. And it may
+   never overrule a measurement -- where what you know about the system
+   disagrees with what the records show, report the records and say the
+   expectation did not hold.
+3b. Where APPLICATION says the identification is uncertain, say so once and
+   keep the domain knowledge to what holds for the family of systems it could
+   be, or leave it out. A confident explanation built on a misidentified
+   application is the worst output here: it reads as insight and points the
+   reader away from what the logs actually say.
 4. Name the top warning and error templates from the grouped records, with
    their counts, exactly as the facts list them.
 5. Report semantic findings only when they add something to the templates,
@@ -287,7 +306,7 @@ The report has these sections:
 
 ## Report format (present in this order)
 
-1. **Summary** — total records, severity counts, archive span, top logger/component.
+1. **Summary** — total records, severity counts, archive span, top logger/component. Open with what these logs are, one clause, from APPLICATION: naming the system tells a reader what the rest of the report is about. Say "appears to be" where the identification is an inference, and "unidentified" where it could not be named.
 2. **Focus** — what the user asked for, answered first: the focus categories and queries, and whether the records bear out the user's context.
 3. **Log Shape Baseline** — distinct template count, top templates by frequency with counts, the discovered category breakdown. The spine of the report. Flag a category whose true count dwarfs the templates shown for it as a likely large-near-duplicate-blob artifact, not genuine behavioral diversity.
 4. **Issues & Warnings** — errors, warnings, top 3 warning *templates* (grounded, not guessed), actionable problems; semantic-only findings if any.
@@ -295,5 +314,6 @@ The report has these sections:
 6. **Performance Signals** — timing/throughput/slow-operation templates and counts (if the app produces any); semantic-only findings if any.
 7. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
 8. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that template-classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
-9. **Follow-up queries** — 2–3 concrete queries derived from templates.
-10. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.
+9. **What this means for the system** — only where APPLICATION named one, and only where it adds something: what the findings above imply for a system of that kind, and the blast radius of each. Every claim here is labelled "domain knowledge", carries no number that is not already above, and gives way to the records wherever the two disagree. Nothing worth saying — leave the section out rather than filling it.
+10. **Follow-up queries** — 2–3 concrete queries derived from templates.
+11. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.
