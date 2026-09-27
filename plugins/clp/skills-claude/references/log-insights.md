@@ -310,7 +310,9 @@ Write ONLY the Markdown Log Insights Report to
 If DEPTH is short (the default), the report has these sections and no others --
 no Query Log, which belongs to the thorough form: a writer who adds one has turned
 a short report into a long one. The reference section is the last of them and the
-only place a query, a field name or a command line may appear.
+only place a query, a field name or a command line may appear. A legend line sits
+directly under the title, before section 1, reading
+`*[M] measured, [D] derived, [I] inference, [K] domain knowledge.*`
 1. Summary -- what these logs appear to be, with the evidence that identified
    them ("unidentified" where it could not be named), then total records, the
    severity counts, the archive span and the top logger/component.

@@ -293,3 +293,11 @@ That report's seven-row category table is followed by a paragraph opening **Outc
 The rule's positive example is from the same report, which is why the rule exists. Its `What the logs cannot tell you` section states that the records show activity rather than value, that money was never measured, and that a compaction, a truncated read and a refused permission are all unknown rather than absent.
 
 A reader trusts a report that volunteers its limits more than one that reads as complete, and the distinction between unknown and zero is the one a reader will otherwise get wrong.
+
+### 8.10 One notation for the tiers
+
+Two reports written from the same facts file, a day apart, labelled their claims differently, and the first was inconsistent with itself: 51 markers spelled out as `[measured]`, `[derived]`, `[inference]` and `[domain knowledge]` in the prose, and 7 abbreviated to `[M]` and `[D]` in the category table, with `[measured, share derived]` appearing mid-clause twice. The second used `[M]`, `[D]`, `[I]` and `[K]` in all 55 places.
+
+Neither report was wrong, because nothing had ever said which form to use. The second is the better read — fifty spelled-out markers crowd the sentences they qualify — but it is unreadable on first contact without a legend, since nothing in it says what `[K]` means.
+
+The rule exists because the tier is the part of a report a sceptical reader looks for first. A notation that changes between the prose and the table invites them to wonder whether the difference means something.

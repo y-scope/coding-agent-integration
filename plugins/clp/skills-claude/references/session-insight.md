@@ -184,11 +184,13 @@ Exactly these sections, in this order. The reference section is the last of them
 ```markdown
 # Session <name> — <span>
 
+*[M] measured, [D] derived, [I] inference, [K] domain knowledge.*
+
 <Two or three sentences: what the session was working on, over what period, and
 the single most important thing the analysis found. The headline figure belongs in
 the first sentence or the second.>
 
-## <Focus category>
+## <Focus category, named as the finding rather than the category>
 <Leads. The user's focus or the shift you proposed: the figure first, then what it
 means, then the one example id worth opening. A short paragraph or a short list.>
 

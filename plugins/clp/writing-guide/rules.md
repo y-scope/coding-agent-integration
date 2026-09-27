@@ -121,6 +121,7 @@ The reader arrives doubting the numbers and short of time. Every rule below buys
 - **8.7** A table cell holds one fact. A cell that needs a full sentence and two citations belongs in prose, and a row carrying two findings is two rows.
 - **8.8** A table that has one row worth more than the others says so in the table. Telling the reader in the paragraph underneath which row to look at means the table failed to.
 - **8.9** Name what was searched and what was not. A reader judges a report by its blind spots, so the limits are a section, not an apology folded into a sentence.
+- **8.10** One notation for the evidence tiers, used throughout, explained once. The letters `[M] [D] [I] [K]` read better than the words in a report carrying fifty of them, and a one-line legend under the title is what makes them readable to someone meeting them for the first time. Never mix the letters and the words in one report. Which tier a claim gets is not a writing question and is settled by `../skills-claude/references/evidence-tiers.md`.
 
 ## Trailers
 
