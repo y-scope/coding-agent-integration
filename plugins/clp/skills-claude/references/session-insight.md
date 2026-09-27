@@ -63,37 +63,28 @@ This is the most useful thing the skill does, and the easiest to get wrong in ei
 
 ## Extras subagent prompt
 
-One subagent, model unset. Fill in `FACTS_FILE` and `BUNDLE`.
+One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in `FACTS_FILE` and `BUNDLE`.
 
 ```
-Read the session facts file at FACTS_FILE. It covers seven fixed categories:
-reliability, cost, time, outcomes, harness faults, human loop, rework.
+Read the session facts file at FACTS_FILE. It covers seven fixed categories: reliability, cost, time, outcomes, harness faults, human loop, rework.
 
-Your job is to find what those seven miss in this particular session — and
-usually there is nothing, which is a fine answer.
+Your job is to find what those seven miss in this particular session — and usually there is nothing, which is a fine answer.
 
-Look for: record kinds, attachment types or subtypes the facts file does not
-account for; error or interrupt shapes that do not fit the categories above;
-tool or harness behaviours that recur but are not counted; anything in the
-catalog's launch_error or attrs fields that has no home in the seven.
+Look for: record kinds, attachment types or subtypes the facts file does not account for; error or interrupt shapes that do not fit the categories above; tool or harness behaviours that recur but are not counted; anything in the catalog's launch_error or attrs fields that has no home in the seven.
 
-Useful commands (write every path in full, `clp`'s own included, since this
-agent does not inherit the plugin root):
+Useful commands (write every path in full, `clp`'s own included, since this agent does not inherit the plugin root):
   clp bundle BUNDLE sql "SELECT ..."   (schema is in session-forensics.md)
   clp search --unique attachment.type ARCHIVE '*'
   clp search --unique subtype ARCHIVE '*'
 
-Return at most THREE proposed extra categories. For each: a name, one sentence
-on what it covers, the count of records or nodes behind it, and one example id
-or uuid someone can open. Propose nothing that is already a headline figure of
-one of the seven. Return "none" if the seven cover this session.
+Return at most THREE proposed extra categories. For each: a name, one sentence on what it covers, the count of records or nodes behind it, and one example id or uuid someone can open. Propose nothing that is already a headline figure of one of the seven. Return "none" if the seven cover this session.
 
 Return only the proposals. No preamble, no raw JSON, no method notes.
 ```
 
 ## Report writer prompt
 
-One subagent, model unset. Fill in the paths and the user's own words.
+One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in the paths, the user's own words, and `DEPTH` — `short` unless the user asked for a thorough report.
 
 ```
 Write the analysis report for a Claude Code session to /tmp/clp-session-report.md
@@ -103,80 +94,89 @@ Deeper check results: RESULTS
 The user's context, in their words: "CONTEXT"
 Their chosen focus: FOCUS
 Extra categories found: EXTRAS
+Report depth: DEPTH
 
 Rules:
-- Every figure must appear in the facts file. You may not compute, estimate,
-  infer or round a number that is not there. No arithmetic of any kind.
-- Label every claim with its evidence tier: measured, derived, inference or
-  domain knowledge. The definition, the rules and the two cases that look
-  measured but are not (a category, a score) are in
-  references/evidence-tiers.md — read it and follow it; do not paraphrase it.
-- Close the report with the checks: the headline figures and the one command
-  that reproduces each, copied from the facts file's own verification section.
-  Anyone doubting a number must be able to run it, not reconstruct it.
-- Never quote a currency figure, even if asked what the session cost. Cost is in
-  tokens: the log's totalCostUSD comes from an assumed unit price, not from what
-  was billed, and is not always refreshed. Say that converting needs the
-  reader's own rates.
-- Never add up the per-kind token column. One API response can be recorded in
-  several logs, because a fork inherits its parent's transcript, so the bundle
-  total counts each response once and is smaller than those rows summed. Quote
-  the bundle total for the session and a per-kind row for one agent. The facts
-  file states the difference and why; if a reader adds the column up and gets
-  more, that gap is the duplication and not an error.
-- Lead with the focus. The other categories follow in the fixed order:
-  reliability, cost, time, outcomes, harness faults, human loop, rework.
-- Treat the user's context as a claim to check against the records, not as
-  fact. If the records contradict it, say so plainly with both figures.
-- Label every inference as an inference. The logs record activity, not value:
-  they cannot tell you whether the work was good, only what happened.
-- For each finding say whether it is a harness, provider, model, task or
-  environment problem — or that the logs cannot tell them apart.
-- Do not conclude a workflow succeeded from status "completed"; do not read an
-  order of work from phase_order edges; do not claim one agent's output fed
-  another. session-forensics.md has the full list.
-- Report a commit or PR as existing only where the facts file says the
-  repository confirmed it, and say how it matched.
+- Read both style files before you write, and follow both: the plugin's writing guide (`writing-guide/rules.md`, from the plugin root) for the prose — Parts 0, 1 and 2 apply to everything, and Part 8 is the one for a report — and `references/report-style.md` for the report's own shape. Where a rule seems to be in both, the writing guide's wording is the definition.
+- Before you save the file, run the sound pass over your draft: read `writing-guide/humanizer.md` (the 25 patterns, vendored verbatim) and `writing-guide/sound.md` (what they mean for a report), then follow humanizer's own four-step process, including reading the draft aloud and writing the final version by stating each point naturally instead of patching flagged phrases. This step is not optional and it is where a draft stops reading as generated. Vary sentence length; do not make every sentence the same size. The three that bite hardest in a report: a heading restated by the sentence under it, a claim carrying its denominator, its trap and its citation in one sentence, and `rather than` / `, not` / `instead of` kept where the contrast corrects nothing the reader believes.
+- Every figure must appear in the facts file. You may not compute, estimate or infer a number that is not there. No arithmetic of any kind, with one exception that rule 8.2 of the writing guide defines: you may round a ratio to one decimal place for the body, and only for the body, leaving the exact value in its reference entry. Counts are never rounded.
+- Mark the arguments, not the facts. An inference or a piece of domain knowledge says so where it appears, in words — "(inference)", "which suggests", "this is a reading of the records". A measured or derived claim carries no marker in the body: its link into the reference section is the offer to check it, and its entry states which of the two it is. The four tiers, the rules, and the two cases that look measured but are not (a category, a score) are in references/evidence-tiers.md — read it and follow it; do not paraphrase it. Rules 2.10 and 8.10 of the writing guide govern how the marker is written.
+- Close the report with `## Reference — checking each figure`: one entry per claim in the body, `### R3 Workflow instance spans`, opening with its tier and carrying the figure and the one command that reproduces it — a derived figure names its inputs and formula instead. Link every claim in the body into its entry by wrapping the figure the claim rests on, `stayed open [357.4 hours](#r1-wall-clock-span)`, so a reader chasing a number reaches for the number; never trail the sentence with a bracketed label. One link per claim, not one per number. Wrap the entries in a `<details>` block whose `<summary>` says what opening it is for, with both tags on lines of their own, so the section is collapsed until a reader opens it or follows a claim's link into it. Entry headings use letters, digits and single spaces only, because GitHub and the plugin's HTML saver strip punctuation differently and a dash or a colon breaks the link in one of them.
+- Never quote a currency figure, even if asked what the session cost. Cost is in tokens: the log's totalCostUSD comes from an assumed unit price, not from what was billed, and is not always refreshed. Say that converting needs the reader's own rates.
+- Never add up the per-kind token column. One API response can be recorded in several logs, because a fork inherits its parent's transcript, so the bundle total counts each response once and is smaller than those rows summed. Quote the bundle total for the session and a per-kind row for one agent. The facts file states the difference and why; if a reader adds the column up and gets more, that gap is the duplication and not an error.
+- Lead with the focus. The other categories follow in the fixed order: reliability, cost, time, outcomes, harness faults, human loop, rework.
+- Treat the user's context as a claim to check against the records, not as fact. If the records contradict it, say so plainly with both figures.
+- Label every inference as an inference. The logs record activity, not value: they cannot tell you whether the work was good, only what happened.
+- For each finding say whether it is a harness, provider, model, task or environment problem — or that the logs cannot tell them apart.
+- Do not conclude a workflow succeeded from status "completed"; do not read an order of work from phase_order edges; do not claim one agent's output fed another. session-forensics.md has the full list.
+- Report a commit or PR as existing only where the facts file says the repository confirmed it, and say how it matched.
+- Write the short form unless DEPTH says thorough. Read references/report-style.md and follow every rule in it: lead each section with the finding, plain words and short sentences, one line per point, a table for three or more of anything. Shortening never drops an argument's marker, a derivation's trap, or a caveat that changes how a figure reads — cut the restatement around them instead, and never say a thing twice.
+- Keep the tooling out of the body. No query text, no field names, no commands outside the reference section, and no term a reader would have to know this tool to understand — write for someone who has never written a query. Say what was looked for in plain words, not how. The reference section is where the how goes.
+- Do not wrap lines by hand. One line per paragraph, list item, table row and reference entry, however long it runs; the renderers reflow text themselves. The sketches below are wrapped only because they are instructions to you.
 
-Format: see "Report format" below — follow it exactly.
+Format: "Report format" below has both forms — write the short one unless DEPTH says thorough.
 Write the file. Return only its path and a three-line summary.
 ```
 
 ## Report format
 
+Two forms. Write the short one unless DEPTH says the user asked for a thorough report. Both mark their arguments and carry each derivation's trap, and both put the tiers in the reference entries; `report-style.md` governs how either one reads.
+
+### Short form — the default
+
+Exactly these sections, in this order. The reference section is the last of them and the only place a command, a query or a field name may appear; there is no `## Checks` section and no query log in the short form — a reader who wants the whole audit trail is asking for the thorough form, and a writer who adds sections anyway has turned a short report into a long one.
+
 ```markdown
 # Session <name> — <span>
 
-<Two or three sentences: what the session was working on, over what period,
-and the single most important thing the analysis found.>
+<Three or four short sentences, strongest finding first, one finding per sentence. Do not stack what the session did, how long it ran and what it cost into one sentence. The link wraps the figure: `stayed open [357.4 hours](#r1-wall-clock-span)`.>
 
-## <Focus category>
-<Leads. The user's focus or the shift you proposed.>
+## <Focus category, named as the finding rather than the category>
+<Leads. The user's focus or the shift you proposed: the figure first, then what it means, then the one example id worth opening. A short paragraph or a short list.>
 
-## Reliability
-## Cost
-## Time
-## Outcomes
-## Harness faults
-## Human loop
-## Rework
-<The remaining six in fixed order, each: headline figure with its denominator,
-what it means, and one example id to open. A category with nothing notable gets
-one line saying so.>
+## The seven categories
 
-## Checks
-<Each headline figure and the one command that reproduces it, copied from the
-facts file's verification section. Measured figures name their query; derived
-figures name their inputs and formula. This section is what makes the rest
-arguable rather than trusted.>
+| Category | Headline |
+|---|---|
+| Reliability | <headline with its denominator, the figure carrying the link> |
+| Cost | |
+| Time | |
+| Outcomes | |
+| Harness faults | |
+| Human loop | |
+| Rework | |
+
+<One row each, the figure in each row linking to its reference entry. A category with nothing notable says so in its row. Bold the one row that matters most, so the table ranks itself instead of a paragraph underneath naming the row. Anything needing more than a row — per-tool error rates, a bucket split, the largest offenders — goes directly under the table, and only where it changes what the reader would do.>
+
+## Extra categories
+<Only when the extras subagent proposed some: one bullet each, with the count and one example id. Say they come from the extras pass, not the facts file, and never merge their counts into a headline figure.>
 
 ## What the logs cannot tell you
-<Quality of the work. Whether the outcome was right. What it cost in money, as
-opposed to tokens. Anything needing external data — review acceptance, revert
-rate, post-merge CI. Always present. Add here any caveat the facts file raised
-about its own figures: notably, when many token-bearing records carry no
-`message_id` the bundle total may still double-count, and the facts file says
-how many there were.>
+<Three or four lines: quality of the work, money as opposed to tokens, and anything needing external data. Add any caveat the facts file raised about its own figures — notably, when many token-bearing records carry no `message_id` the bundle total may still double-count, and the facts file says how many there were.>
+
+## Reference — checking each figure
+
+<details>
+<summary>Open to check a figure, or follow a claim's link above; each entry carries the one command that reproduces it.</summary>
+
+### R1 Attempts by status
+<Opens with the tier — measured — then 18 of 18 ended ok, then the one command that reproduces it, from the facts file's verification section, indented as a code block. A derived figure names its inputs and formula here instead of, or beside, a command. The tier lives here and not in the body, because this is where someone reproducing the number needs it.>
+
+### R2 <Plain name, letters digits and single spaces only>
+<The next claim's check. One entry per claim in the body, in the order the claims appear; figures one check establishes share the single entry they both link to.>
+
+</details>
+```
+
+**Entry headings must be letters, digits and single spaces only** (`### R3 Workflow instance spans`, not `R3 — Workflow instance spans: 22.9 and 15.2 min`). Both GitHub and the plugin's HTML saver turn a heading into an anchor and strip punctuation differently, so an em dash or a colon yields a link that resolves in one and not the other.
+
+### Thorough form — only when asked
+
+The same report with every figure argued in full: the seven categories as their own sections in the fixed order (`## Reliability` … `## Rework`, each with the headline figure, its denominator, what it means and one example id), then
+
+```markdown
+## Reference — checking each figure
+<The same reference section the short form ends with, collapsed the same way and linked from the body the same way: one heading per claim, `### R3 Workflow instance spans`, carrying the headline figure, the one command that reproduces it, and a derived figure's inputs and formula. Measured figures name their query; derived figures name what they are computed from. This section is what makes the rest arguable rather than trusted.>
 
 ## Query log
 <Each check that ran, its result, and each that failed or matched nothing.>

@@ -30,6 +30,12 @@ It does not expose full-project compression, reducers, network/file output handl
 
 Future use-cases will add their own skill directories under `skills-claude/` (or `skills-codex/` if the use-case is agent-specific).
 
+## Writing guide
+
+`analyze-logs` has a subagent write each report, and that writer reads `writing-guide/rules.md` before it starts: the rules for concision, readability, and claims and evidence, each one a test you can run over a draft. Its evidence — the sentences a reviewer rejected, quoted verbatim — is in `writing-guide/examples.md`. Both files are plain Markdown at the plugin root, with no build step, so editing them is how the plugin's writing standard changes; `writing-guide/README.md` says which file owns what.
+
+Only the report's shape lives in `skills-claude/references/report-style.md`: the short form by default, the thorough form on request, an evidence tier on every claim, and the collapsed reference section its claims link into. `bin/lib/report_save.py` renders `<details>` and `<summary>` for that section and opens the enclosing block when a link lands inside it; every other tag in a report stays escaped.
+
 ## Install
 
 Hosted installer:
