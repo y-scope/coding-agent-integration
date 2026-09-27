@@ -131,6 +131,10 @@ TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 FENCE = re.compile(r"^(\s*)(```+|~~~+)\s*([\w+-]*)\s*$")
+# The only raw HTML a report may carry: a collapsed section and its label, each on
+# a line of its own. Everything else is escaped, because a report quotes log text
+# and command output that must never become markup.
+DETAIL_TAG = re.compile(r"^\s{0,3}(?:</?details(?:\s[^>]*)?>|<summary>.*</summary>)\s*$", re.I)
 
 
 def render_table(lines):
@@ -278,6 +282,11 @@ def render_blocks(lines, nested=False, toc=None, used=None):
                     break
             out.append(render_list(items))
             continue
+        if DETAIL_TAG.match(line):
+            flush()
+            out.append(line.strip())
+            i += 1
+            continue
         para.append(line)
         i += 1
     flush()
@@ -346,6 +355,10 @@ pre { margin: 0; padding: 12px 14px; }
 pre code { background: none; padding: 0; font-size: 13px; overflow-wrap: normal; white-space: pre; }
 blockquote { margin: 0; padding: 10px 14px; background: var(--quote); border-radius: 8px; color: var(--ink-2); }
 hr { border: 0; border-top: 1px solid var(--rule); }
+details { margin: 8px 0 4px; }
+summary { font-family: var(--sans); font-weight: 600; font-size: 13.5px; color: var(--ink-2); cursor: pointer; padding: 4px 0; }
+summary:hover { color: var(--ink); }
+details[open] > summary { margin-bottom: 8px; }
 .tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
 table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--rule); }
@@ -367,6 +380,17 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule)
   h2, h3 { break-after: avoid; }
 }
 """
+
+
+# A claim links to an entry inside the collapsed reference, and a browser does not
+# open a <details> to reveal a fragment target. This opens whatever encloses it,
+# so following a link lands on the entry rather than on a shut box.
+OPEN_TARGET_SCRIPT = (
+    "<script>(function(){function open(){var h=location.hash;if(!h||h.length<2)return;"
+    "var t=document.getElementById(h.slice(1));if(!t||!t.closest)return;"
+    "for(var d=t.closest('details');d;d=d.parentElement?d.parentElement.closest('details'):null){d.open=true;}}"
+    "if(location.hash)open();window.addEventListener('hashchange',open);})()</script>"
+)
 
 
 def build_page(markdown, stamps, fragment=False, fonts=True):
@@ -394,6 +418,7 @@ def build_page(markdown, stamps, fragment=False, fonts=True):
         f"the Query Log lists every one.</footer></div>"
     )
     head = f"<title>{html.escape(page_title)}</title>" + (FONTS if fonts else "") + f"<style>{CSS}</style>"
+    content += OPEN_TARGET_SCRIPT
     if fragment:
         return head + content
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'

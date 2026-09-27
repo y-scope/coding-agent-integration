@@ -106,20 +106,28 @@ Extra categories found: EXTRAS
 Report depth: DEPTH
 
 Rules:
+- Read both style files before you write, and follow both: the plugin's writing
+  guide (`writing-guide/rules.md`, from the plugin root) for the prose — Parts 0,
+  1 and 2 apply to everything — and `references/report-style.md` for the report's
+  own shape. Where a rule seems to be in both, the writing guide's wording is the
+  definition.
 - Every figure must appear in the facts file. You may not compute, estimate,
   infer or round a number that is not there. No arithmetic of any kind.
 - Label every claim with its evidence tier: measured, derived, inference or
   domain knowledge. The definition, the rules and the two cases that look
   measured but are not (a category, a score) are in
   references/evidence-tiers.md — read it and follow it; do not paraphrase it.
-- Close the report with `## Appendix — checking each figure`: one entry per claim
-  in the body, `### A3 Workflow instance spans`, carrying the figure, its tier and
+- Close the report with `## Reference — checking each figure`: one entry per claim
+  in the body, `### R3 Workflow instance spans`, carrying the figure, its tier and
   the one command that reproduces it — a derived figure names its inputs and
   formula instead. End every claim in the body with a link to its entry,
-  `[A3](#a3-workflow-instance-spans)`, so a reader can validate a figure they
-  doubt without the body making anyone read a query. Entry headings use letters,
-  digits and single spaces only, because GitHub and the plugin's HTML saver strip
-  punctuation differently and a dash or a colon breaks the link in one of them.
+  `[R3](#r3-workflow-instance-spans)`, so a reader can validate a figure they
+  doubt without the body making anyone read a query. Wrap the entries in a
+  `<details>` block whose `<summary>` says what opening it is for, with both tags
+  on lines of their own, so the section is collapsed until a reader opens it or
+  follows a claim's link into it. Entry headings use letters, digits and single
+  spaces only, because GitHub and the plugin's HTML saver strip punctuation
+  differently and a dash or a colon breaks the link in one of them.
 - Never quote a currency figure, even if asked what the session cost. Cost is in
   tokens: the log's totalCostUSD comes from an assumed unit price, not from what
   was billed, and is not always refreshed. Say that converting needs the
@@ -150,11 +158,12 @@ Rules:
   changes how a figure reads — cut the restatement around them instead, and never
   say a thing twice.
 - Keep the tooling out of the body. No query text, no field names, no commands
-  outside the appendix, and no term a reader would have to know this tool to
-  understand — write for someone who has never written a query. Say what was
-  looked for in plain words, not how. The appendix is where the how goes.
+  outside the reference section, and no term a reader would have to know this
+  tool to understand — write for someone who has never written a query. Say what
+  was looked for in plain words, not how. The reference section is where the how
+  goes.
 - Do not wrap lines by hand. One line per paragraph, list item, table row and
-  appendix entry, however long it runs; the renderers reflow text themselves. The
+  reference entry, however long it runs; the renderers reflow text themselves. The
   sketches below are wrapped only because they are instructions to you.
 
 Format: "Report format" below has both forms — write the short one unless DEPTH says thorough.
@@ -167,7 +176,7 @@ Two forms. Write the short one unless DEPTH says the user asked for a thorough r
 
 ### Short form — the default
 
-Exactly these sections, in this order. The appendix is the last of them and the only place a command, a query or a field name may appear; there is no `## Checks` section and no query log in the short form — a reader who wants the whole audit trail is asking for the thorough form, and a writer who adds sections anyway has turned a short report into a long one.
+Exactly these sections, in this order. The reference section is the last of them and the only place a command, a query or a field name may appear; there is no `## Checks` section and no query log in the short form — a reader who wants the whole audit trail is asking for the thorough form, and a writer who adds sections anyway has turned a short report into a long one.
 
 ```markdown
 # Session <name> — <span>
@@ -184,7 +193,7 @@ means, then the one example id worth opening. A short paragraph or a short list.
 
 | Category | Headline | Tier |
 |---|---|---|
-| Reliability | <headline with its denominator> [A1](#a1-attempts-by-status) | [M] |
+| Reliability | <headline with its denominator> [R1](#r1-attempts-by-status) | [M] |
 | Cost | | |
 | Time | | |
 | Outcomes | | |
@@ -192,7 +201,7 @@ means, then the one example id worth opening. A short paragraph or a short list.
 | Human loop | | |
 | Rework | | |
 
-<One row each, and each claim in the body ends with a link to its appendix entry.
+<One row each, and each claim in the body ends with a link to its reference entry.
 A category with nothing notable says so in its row. Anything needing more than a
 row — per-tool error rates, a bucket split, the largest offenders — goes directly
 under the table, and only where it changes what the reader would do.>
@@ -208,34 +217,37 @@ needing external data. Add any caveat the facts file raised about its own figure
 notably, when many token-bearing records carry no `message_id` the bundle total may
 still double-count, and the facts file says how many there were.>
 
-## Appendix — checking each figure
+## Reference — checking each figure
 
-<One line: what this is for — a reader who doubts a figure follows its link and runs
-that one command; everyone else skips this section. The facts file carries the rest.>
+<details>
+<summary>Open to check a figure, or follow a claim's link above; each entry carries the one command that reproduces it.</summary>
 
-### A1 Attempts by status
+### R1 Attempts by status
 <[M] 18 of 18 ended ok. Then the one command that reproduces it, from the facts
 file's verification section, indented as a code block. A derived figure names its
 inputs and formula here instead of, or beside, a command.>
 
-### A2 <Plain name, letters digits and single spaces only>
+### R2 <Plain name, letters digits and single spaces only>
 <The next claim's check. One entry per claim in the body, in the order the claims
 appear; figures one check establishes share the single entry they both link to.>
+
+</details>
 ```
 
-**Entry headings must be letters, digits and single spaces only** (`### A3 Workflow instance spans`, not `A3 — Workflow instance spans: 22.9 and 15.2 min`). Both GitHub and the plugin's HTML saver turn a heading into an anchor and strip punctuation differently, so an em dash or a colon yields a link that resolves in one and not the other.
+**Entry headings must be letters, digits and single spaces only** (`### R3 Workflow instance spans`, not `R3 — Workflow instance spans: 22.9 and 15.2 min`). Both GitHub and the plugin's HTML saver turn a heading into an anchor and strip punctuation differently, so an em dash or a colon yields a link that resolves in one and not the other.
 
 ### Thorough form — only when asked
 
 The same report with every figure argued in full: the seven categories as their own sections in the fixed order (`## Reliability` … `## Rework`, each with the headline figure, its denominator, what it means and one example id), then
 
 ```markdown
-## Appendix — checking each figure
-<The same appendix the short form ends with, and the same links from the body into
-it: one heading per claim, `### A3 Workflow instance spans`, carrying the headline
-figure, the one command that reproduces it, and a derived figure's inputs and
-formula. Measured figures name their query; derived figures name what they are
-computed from. This section is what makes the rest arguable rather than trusted.>
+## Reference — checking each figure
+<The same reference section the short form ends with, collapsed the same way and
+linked from the body the same way: one heading per claim, `### R3 Workflow instance
+spans`, carrying the headline figure, the one command that reproduces it, and a
+derived figure's inputs and formula. Measured figures name their query; derived
+figures name what they are computed from. This section is what makes the rest
+arguable rather than trusted.>
 
 ## Query log
 <Each check that ran, its result, and each that failed or matched nothing.>

@@ -1,35 +1,35 @@
 # Report style
 
-The single definition of how a report reads. Both routes' report writers read this and follow it. Do not restate these rules in other words anywhere else — two definitions of a style drift the same way two definitions of an evidence tier do.
+The shape of an analysis report. `writing-guide/rules.md` owns the prose — how a sentence reads, and whether a claim is one the evidence supports. Read that file too, and follow both; where a rule seems to be in both, the writing guide's wording is the definition and this file only adds what is particular to a report.
+
+The section list for each route is in that route's reference under "Report format": `session-insight.md` for a Claude Code session, `log-insights.md` for any other archive.
 
 ## Default: short and skimmable
 
-Write the **short form**. It is the default on every run. Write the **thorough form** — the fuller section list each route's "Report format" gives — only when the run's prompt says the user asked for a thorough or detailed report. A writer that has not been told the user asked for one writes short.
+Write the **short form**. It is the default on every run. Write the **thorough form** only when the run's prompt says the user asked for a thorough or detailed report. A writer that has not been told the user asked for one writes short.
 
-The reader is skimming for what to do next. Aim for a report that fits on one or two screens; no section longer than a short paragraph. A category with nothing to say gets one line saying so, not a paragraph explaining the absence.
+The reader is skimming for what to do next. Aim for a report whose body fits on one or two screens; no section longer than a short paragraph. A category with nothing to say gets one line saying so, not a paragraph explaining the absence.
 
-## Rules
+## The report's own rules
 
-1. **Lead with the finding, not the method.** "**Workflow agents used 99.4% of the input tokens** — 18,685,621 of 18,792,752" — not "the facts pass computed a per-archive-kind token breakdown".
-2. **Progress logically.** Each section answers one question, in the order a reader asks them: what happened, which number matters, why, what it means, how to check it. Do not open a section with background already given, and do not restate an earlier section's figure.
-3. **Use simple language.** Short sentences, one idea each. Prefer the plain word — "used" not "utilised", "shows" not "evidences". Cut any phrase whose only job is to sound thorough. Keep the user's own words for their own concern. Define an unfamiliar term in a clause the first time it appears.
-4. **Keep the tooling out of the body.** No query syntax, no field names, no command lines, and no tool vocabulary in the sections a reader reads for the findings — a reader who has never written a KQL query is the normal case, and the report must make sense to them. Say what was looked for in plain words, not how: "the errors grouped by their message", not `shape(toolUseResult)`. Where a term from the tooling cannot be avoided (a template, a severity, a category), gloss it in a clause the first time.
-5. **Put the checks in an appendix, and link the claims to it.** The report ends with `## Appendix — checking each figure`, which holds one entry per figure quoted above: the figure, its tier, and the one command that reproduces it or the inputs its derivation uses. Every claim in the body ends with a link to its entry — `[A3](#a3-workflow-instance-spans)` — so a reader can validate anything they doubt without the body making them read a query. One link per claim, not one per number: figures that one check establishes share its entry. A reader who wants to trust the numbers and not check them skips the whole appendix.
-   - **Entry headings carry letters, digits and single spaces only** (`### A3 Workflow instance spans`). Both GitHub and the plugin's own HTML saver turn a heading into an anchor, and they strip punctuation differently, so an em dash or a colon in a heading produces a link that works in one renderer and not the other.
-6. **Make it skimmable.** A heading states its section's content. Front-load each sentence with the number or noun that matters. Bold the figure a reader would quote. One line per point; add a second only to carry a caveat.
-7. **A table for three or more of anything** — buckets, per-tool rates, one row per category. A table scans faster than the same facts in prose, and a share column is easier to trust beside the raw counts. Skip charts: these reports are read in a terminal or a plain file, where a table is clearer than anything a chart would add.
-8. **Keep every evidence tier and every trap.** Shortening never drops a marker, a derivation's trap, or a caveat that changes how a figure reads. Cut the restatement around them instead.
-9. **Say nothing twice.** If the focus section already made a point, a later section refers back in one clause instead of re-explaining it.
-10. **Do not wrap lines by hand.** One line per paragraph, per list item, per table row and per appendix entry, however long it runs — a 900-character paragraph is normal. The width a paragraph happens to fill is the reader's window, not yours: the saved HTML reflows text to its own column, so a paragraph broken at your column shows those breaks mid-sentence in a wider one, and the source is harder to edit and to diff. Lines break only where the markup does — table rows, headings, code blocks, and the point a list starts. An appendix command goes on one line even at 300 characters; the code block scrolls and wraps on its own.
+Parts 0, 1 and 2 of `writing-guide/rules.md` cover how the sentences read. These five cover what a report is, on top of that.
+
+1. **Lead with the finding.** The opening takes the single most important thing the analysis found, with its figure, so that a reader who stops there has the answer. That is rule 0.4 of the writing guide applied to a report.
+2. **Tier every claim, and carry every trap.** Each claim carries its evidence tier, and a derived figure carries the trap that keeps it honest — the one that says what the number is not. Shortening never drops a tier or a trap; cut the restatement around them instead. This is the rule that separates a report from prose: the reader must be able to tell a count from an argument.
+3. **A table for three or more of anything** — buckets, per-tool rates, one row per category. A table scans faster than the same facts in prose, and a share column is easier to trust beside the raw counts. Skip charts: these reports are read in a terminal, a plain Markdown file or a saved page, where a table is clearer than anything a chart would add.
+4. **Keep the tooling out of the body.** No query syntax, no field names, no command lines, and no tool vocabulary in the sections a reader reads for the findings. A reader who has never written a query is the normal case. Say what was looked for in plain words, not how: "the errors grouped by their message", not `shape(toolUseResult)`. Gloss an unavoidable term in a clause the first time it appears.
+5. **Put the checks in a reference section, and link every claim into it.** The report ends with `## Reference — checking each figure`, holding one entry per claim: the figure, its tier, and the one command that reproduces it or the inputs its derivation uses. Every claim in the body ends with a link to its entry, `[R3](#r3-workflow-instance-spans)`, so a reader can validate anything they doubt without the body making anyone read a query. One link per claim, not one per number — figures that one check establishes share its entry, and a reader who trusts the numbers never opens the section. It is called the reference and not the appendix because a report may later want a real appendix, and two things with one name is how a reader ends up in the wrong one.
+   - **The entries are collapsed by default.** The heading stays visible and the entries sit inside a `<details>` block, whose `<summary>` says what opening it is for. A reader who trusts the figures never meets a command; one who doubts a figure opens the entry their claim pointed at, and the saved page opens the enclosing block for them when the link lands inside it. `<details>` and `<summary>` go on lines of their own — the saver passes exactly those two tags through as markup, and everything else stays escaped, because a report quotes log text that must never become markup.
+   - **Entry headings carry letters, digits and single spaces only** (`### R3 Workflow instance spans`). Both GitHub and the plugin's own HTML saver make the anchor from the heading and strip punctuation differently, so an em dash or a colon produces a link that works in one renderer and silently fails in the other.
+
+Rule 0.9 of the writing guide settles repetition: if the focus section made a point, a later section refers back to it in one clause instead of making it again.
 
 ## A worked pair
 
-Too long, and it buries the point:
+The failure these rules prevent, twice over: a sentence that restates its method instead of its finding, and a figure quoted without the denominator that gives it meaning.
 
 > The facts pass computed a per-archive-kind token breakdown, and it shows that the workflow-agent archive kind accounted for 18,685,621 of the 18,792,752 input tokens recorded across the bundle, which is 99.4% of the total, while the main thread accounted for the remaining 107,131 (0.6%).
 
-Short, and it leads:
-
 > **Workflow agents used 99.4% of the input tokens** — 18,685,621 of 18,792,752. The main thread used 107,131 (0.6%).
 
-Both sentences are true and neither number changed. The second is the one a reader needs.
+Both sentences are true and neither number changed. The second one is a report.

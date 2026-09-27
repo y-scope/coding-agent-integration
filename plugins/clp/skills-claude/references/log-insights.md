@@ -231,6 +231,12 @@ FILES
 APPLICATION: what these logs appear to be and the evidence for it, from phase 1 -- or "unidentified" when the fingerprint was too generic to name.
 
 Rules:
+Before you write, read both style files and follow both: the plugin's writing
+guide (`writing-guide/rules.md`, from the plugin root) for the prose, whose Parts
+0, 1 and 2 apply to everything, and `references/report-style.md` for the report's
+own shape. Where a rule seems to be in both, the writing guide's wording is the
+definition.
+
 1. Every number, percentage, count and timestamp in the report must appear
    verbatim in FACTS_FILE (or in RESULTS_TABLE for a query's own count). If a
    figure you want is not there, leave it out; never derive one.
@@ -240,12 +246,12 @@ Rules:
    among the fetched records", never present them as the archive's span.
 3. Do not state a rate, a duration, or a cause as fact. A cause or a
    recommendation is inference: label it "inference".
-2a. Label every claim with its evidence tier: measured, derived, inference or
+3a. Label every claim with its evidence tier: measured, derived, inference or
    domain knowledge. The definition, the rules, and the two cases that look
    measured but are not -- a category is classification output while its
    counts are measured; a score is a policy mapping -- are in
    references/evidence-tiers.md. Read it and follow it; do not paraphrase it.
-3a. APPLICATION is what these logs appear to be, with the evidence that
+3b. APPLICATION is what these logs appear to be, with the evidence that
    identified it. Use what you know about that system to say why a finding
    matters -- what a gossip failure means for a distributed database, what a
    growing queue means for an inference server, what the blast radius of each
@@ -257,7 +263,7 @@ Rules:
    never overrule a measurement -- where what you know about the system
    disagrees with what the records show, report the records and say the
    expectation did not hold.
-3b. Where APPLICATION says the identification is uncertain, say so once and
+3c. Where APPLICATION says the identification is uncertain, say so once and
    keep the domain knowledge to what holds for the family of systems it could
    be, or leave it out. A confident explanation built on a misidentified
    application is the worst output here: it reads as insight and points the
@@ -289,10 +295,10 @@ Rules:
 12. Keep the tooling out of the body. No query text, no field names, no command
    lines in the sections a reader reads for the findings, and no term they would
    have to know this tool to understand: assume they have never written a KQL
-   query, and say what was looked for in plain words instead of how. The appendix
-   is where the how goes, and it is the only section that may carry a query.
+   query, and say what was looked for in plain words instead of how. The reference
+   section is where the how goes, and it is the only section that may carry a query.
 13. Do not wrap lines by hand. One line per paragraph, list item, table row and
-   appendix entry, however long it runs; the renderers reflow text themselves.
+   reference entry, however long it runs; the renderers reflow text themselves.
    The section list above is wrapped only because it is an instruction to you.
 
 Write ONLY the Markdown Log Insights Report to
@@ -300,8 +306,8 @@ Write ONLY the Markdown Log Insights Report to
 
 If DEPTH is short (the default), the report has these sections and no others --
 no Query Log, which belongs to the thorough form: a writer who adds one has turned
-a short report into a long one. The appendix is the last section and the only place
-a query, a field name or a command line may appear.
+a short report into a long one. The reference section is the last of them and the
+only place a query, a field name or a command line may appear.
 1. Summary -- what these logs appear to be, with the evidence that identified
    them ("unidentified" where it could not be named), then total records, the
    severity counts, the archive span and the top logger/component.
@@ -323,13 +329,16 @@ a query, a field name or a command line may appear.
 6. Next questions -- 2 or 3 questions a reader might ask next, in plain words.
    No query syntax here: someone reading this may never have written a query.
    The thorough form gives the queries behind them.
-7. Appendix -- checking each figure. One entry per claim in the body, headed
-   `### A3 Workflow instance spans`, carrying the figure, its tier and the one
+7. Reference -- checking each figure. One entry per claim in the body, headed
+   `### R3 Workflow instance spans`, carrying the figure, its tier and the one
    command that reproduces it. End every claim in the body with a link to its
-   entry, `[A3](#a3-workflow-instance-spans)`, so a reader can validate a figure
-   they doubt without anyone having to read a query. Entry headings use letters,
-   digits and single spaces only, because GitHub and the plugin's HTML saver strip
-   punctuation differently and a dash or a colon breaks the link in one of them.
+   entry, `[R3](#r3-workflow-instance-spans)`, so a reader can validate a figure
+   they doubt without anyone having to read a query. Wrap the entries in a
+   `<details>` block whose `<summary>` says what opening it is for, with both tags
+   on lines of their own, so the entries stay collapsed until a reader opens them
+   or follows a claim's link in. Entry headings use letters, digits and single
+   spaces only, because GitHub and the plugin's HTML saver strip punctuation
+   differently and a dash or a colon breaks the link in one of them.
 
 If DEPTH is thorough, use the full section list in "Report format" below
 instead, which adds Notable Categories, Performance Signals, Configuration &
@@ -338,7 +347,7 @@ Startup and Semantic Search Coverage, and a Query Log.
 
 ## Report format
 
-Two forms. Write the short one unless DEPTH says the user asked for a thorough report; the writer prompt above lists the short form's sections. Both carry the evidence tiers and each derivation's caveat, and `report-style.md` governs how either one reads. Both end with the same appendix, and both link every claim in the body into it.
+Two forms. Write the short one unless DEPTH says the user asked for a thorough report; the writer prompt above lists the short form's sections. Both carry the evidence tiers and each derivation's caveat, and `report-style.md` governs how either one reads. Both end with the same collapsed reference section, and both link every claim in the body into it.
 
 ### Thorough form — only when asked
 
@@ -353,6 +362,6 @@ Every figure argued in full, in this order:
 7. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
 8. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that template-classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
 9. **What this means for the system** — only where APPLICATION named one, and only where it adds something: what the findings above imply for a system of that kind, and the blast radius of each. Every claim here is labelled "domain knowledge", carries no number that is not already above, and gives way to the records wherever the two disagree. Nothing worth saying — leave the section out rather than filling it.
-10. **Next questions** — 2–3 questions worth answering next, each with the query that answers it. This section and the appendix below are the only places query text belongs; a reader who has never written one still gets the questions in plain words.
-11. **Appendix — checking each figure** — one heading per claim in the body, `### A3 Workflow instance spans`, with the figure, its tier and the one command that reproduces it, from the facts file's verification section: measured figures name their query, derived ones their inputs and formula. Every claim in the body links to its entry, `[A3](#a3-workflow-instance-spans)`, so a reader can validate a figure they doubt without the body making anyone read a query. Entry headings carry letters, digits and single spaces only — both GitHub and the plugin's HTML saver make an anchor from the heading, and they strip punctuation differently. This is what makes the report arguable instead of trusted.
+10. **Next questions** — 2–3 questions worth answering next, each with the query that answers it. This section and the reference below are the only places query text belongs; a reader who has never written one still gets the questions in plain words.
+11. **Reference — checking each figure** — one heading per claim in the body, `### R3 Workflow instance spans`, with the figure, its tier and the one command that reproduces it, from the facts file's verification section: measured figures name their query, derived ones their inputs and formula. Every claim in the body links to its entry, `[R3](#r3-workflow-instance-spans)`, so a reader can validate a figure they doubt without the body making anyone read a query. The entries sit in a `<details>` block, with both tags on lines of their own, so the section is collapsed until a reader opens it or follows a claim's link in. Entry headings carry letters, digits and single spaces only — both GitHub and the plugin's HTML saver make an anchor from the heading, and they strip punctuation differently. This is what makes the report arguable instead of trusted.
 12. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.

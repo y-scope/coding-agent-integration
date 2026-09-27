@@ -35,6 +35,6 @@ The first two are verifiable and must be. The last two are arguments and must be
 
 ## Where the tier has to appear
 
-- **In the report**, on every claim, and in the closing **Appendix — checking each figure**, whose entries give each claim's figure and the one command that reproduces it, linked from the claim itself. That section is what makes the rest arguable rather than trusted.
+- **In the report**, on every claim, and in the closing **Reference — checking each figure**, whose entries give each claim's figure and the one command that reproduces it, linked from the claim itself. That section is what makes the rest arguable rather than trusted.
 - **In chat**, on anything you assert to the user — the phase summaries, the findings at the close, the descriptions in a question. A figure you quote in conversation is quoted just as loudly as one in the report.
 - **Nowhere by inventing a fifth label.** If a claim does not fit one of the four, it is usually an inference that has not been recognised as one.
