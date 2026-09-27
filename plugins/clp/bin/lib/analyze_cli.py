@@ -246,7 +246,20 @@ def prepare_archive(classified, args, runner, prep):
                                        agent=app.agent or "auto")
     else:
         suggested = classified["detect"]["suggest"]
-        if len(suggested) != 1:
+        if not suggested:
+            # Nothing can be compressed as it stands, and detect says why per file. The usual
+            # case is text in a format with no bundled converter, which needs a parser first.
+            skipped = [f for f in classified["detect"]["files"] if f.get("skip")]
+            reasons = "\n  ".join(f"{f['name']}: {f['skip']}" for f in skipped) or \
+                "clp detect gave no compression command and no reason"
+            parser = any("--parser" in f["skip"] for f in skipped)
+            raise A.AnalyzeError(
+                "clp detect found nothing here it can compress as it stands:\n  " + reasons +
+                ("\n  Write a parser for these lines, then run `clp detect "
+                 f"{A.quoted([classified['target']])} --parser FILE`. Once the parser works it "
+                 "prints the command that compresses them; point clp at the archive that makes."
+                 if parser else ""))
+        if len(suggested) > 1:
             raise A.AnalyzeError(
                 "clp detect found files that need different compression settings. One archive "
                 "takes one --timestamp-key, so this command will not pick between them:\n  "
