@@ -108,11 +108,14 @@ Report depth: DEPTH
 Rules:
 - Read both style files before you write, and follow both: the plugin's writing
   guide (`writing-guide/rules.md`, from the plugin root) for the prose — Parts 0,
-  1 and 2 apply to everything — and `references/report-style.md` for the report's
-  own shape. Where a rule seems to be in both, the writing guide's wording is the
-  definition.
-- Every figure must appear in the facts file. You may not compute, estimate,
-  infer or round a number that is not there. No arithmetic of any kind.
+  1 and 2 apply to everything, and Part 8 is the one for a report — and
+  `references/report-style.md` for the report's own shape. Where a rule seems to
+  be in both, the writing guide's wording is the definition.
+- Every figure must appear in the facts file. You may not compute, estimate or
+  infer a number that is not there. No arithmetic of any kind, with one
+  exception that rule 8.2 of the writing guide defines: you may round a ratio to
+  one decimal place for the body, and only for the body, leaving the exact value
+  in its reference entry. Counts are never rounded.
 - Label every claim with its evidence tier: measured, derived, inference or
   domain knowledge. The definition, the rules and the two cases that look
   measured but are not (a category, a score) are in

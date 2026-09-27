@@ -227,3 +227,69 @@ Part 1 matters most here. A README's readers are the least equipped to recover f
 **Weigh the scaffolding against the change.** One test that genuinely failed before a fix and passed after it was still removed, because its fake service had to implement every RPC in the trait, plus a real server on an ephemeral port, to pin a one-token change.
 
 **Speculative artifacts get cut.** Unit tests over straight-line validation, a README warning about a stale image, and a tracking issue behind a `TODO` were all cut from one session's work as bloat.
+
+---
+
+## Part 8: Analysis reports
+
+Every sentence below is quoted from one generated session report. None of them is wrong: each states a true figure at its correct evidence tier, and each was still rejected for what it costs the reader.
+
+### 8.1 The headings carry the findings
+
+That report's headings read: `Time and cost — your focus`, `The seven categories`, `Extra categories`, `What the logs cannot tell you`. Only the first says anything. A reader skimming the headings learns the shape of the report and none of its content, and the strongest finding in it — that nothing the session claimed to commit reached the repository — is eleven lines inside a section called `The seven categories`.
+
+The heading is the cheapest line in a report to make useful, because a skimmer reads every one of them.
+
+### 8.2 Round a ratio for the reader
+
+| Reject | Accept |
+| --- | --- |
+| The cache served 28.2671% of the input | The cache served 28.3% of the input |
+| 21,198.3 of 21,219.6 end-to-end minutes (99.9%) | 21,198 of 21,220 minutes (99.9%) |
+
+Six significant figures on a ratio reads as a value copied out of a tool rather than a finding someone stands behind, and no decision changes between 28.2671% and 28.3%. The exact value belongs in the figure's reference entry, where a reader who is reproducing it wants every digit.
+
+The rule is narrow on purpose. Rounding is the one arithmetic a report writer may do, because it cannot invent a figure that was not measured; combining two numbers can.
+
+### 8.3 A ratio carries its counts
+
+- Reject: Two tools fail far above the average, at 23.1% and 14.3%.
+- Accept: Web search failed 3 of 13 times (23.1%), web page fetch 2 of 14 (14.3%).
+
+The accepted sentence also kills the finding it looked like it had: a 23.1% failure rate sounds alarming until the denominator shows it is three calls. A percentage without its counts hides exactly the cases where the percentage should not have been computed.
+
+### 8.4 The finding comes before its qualification
+
+> Attempt time sums to 133 minutes across 18 attempts against the 38.1 minutes those two workflows were open [derived]; trap: the attempts ran in parallel, so that sum measures fan-out, not duration.
+
+The trap is doing real work here and must stay. What fails is the order inside the paragraph when the trap arrives before the reader has the point, and the version that opens `Trap: a turn's elapsed time is its last entry minus its first` spends its first sentence on a caveat to a claim the reader has not read yet.
+
+### 8.5 The tier and the link sit at the end
+
+| Reject | Accept |
+| --- | --- |
+| took **18,792,752 input tokens**, 99.4% of them on the workflow agents rather than the main conversation [measured, share derived] [R2](#r2-input-tokens-by-path) | took **18,792,752 input tokens** [measured], 99.4% of them on the workflow agents rather than the main conversation [derived] [R2](#r2-input-tokens-by-path) |
+
+A tier marker mid-clause breaks the sentence where it is still being read. The worst case in that report is a citation with no sentence at all: a table is followed by a line opening `[R25](#r25-errors-per-tool). Trap: the rate counts returned results, not calls`, which asks the reader to parse a link label as a subject.
+
+### 8.6 Two bold openers in a row, not six
+
+One section of that report opened six consecutive paragraphs in bold: **Nearly all the elapsed time is one gap inside one turn.** **The real work is a 96-minute window.** **Two runs are almost the whole bill.** **Nothing was paid for and thrown away.** **The cache served 28.2671% of the input.** **The cheap model did the heavy lifting.**
+
+Each one is a good sentence and rule 0.4 asked for it. Together they flatten the section, because a skimmer's eye is drawn to all six equally and so ranks none of them. The fix is not to delete the sentences; it is to bold the one the reader must not miss.
+
+### 8.7 One fact per cell
+
+> | Reliability | 18 of 18 attempts ended ok [R14](#r14-attempts-by-status); 0 of 656 issued tool calls came back without a result [R15](#r15-tool-calls-with-no-result) | [M] |
+
+Two findings, two citations and a semicolon in a cell whose neighbours hold one short clause. A table's value is that every row is read at the same speed, and one crowded cell costs that for the whole table.
+
+### 8.8 The table ranks its own rows
+
+That report's seven-row category table is followed by a paragraph opening **Outcomes is the row to look at.** The sentence is correct and the table should have said it: seven rows that look identical make the reader read all seven to find out that one of them matters.
+
+### 8.9 Name the blind spots
+
+The rule's positive example is from the same report, which is why the rule exists. Its `What the logs cannot tell you` section states that the records show activity rather than value, that money was never measured, and that a compaction, a truncated read and a refused permission are all unknown rather than absent.
+
+A reader trusts a report that volunteers its limits more than one that reads as complete, and the distinction between unknown and zero is the one a reader will otherwise get wrong.

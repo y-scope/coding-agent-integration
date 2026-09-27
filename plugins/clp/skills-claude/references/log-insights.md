@@ -233,13 +233,16 @@ APPLICATION: what these logs appear to be and the evidence for it, from phase 1 
 Rules:
 Before you write, read both style files and follow both: the plugin's writing
 guide (`writing-guide/rules.md`, from the plugin root) for the prose, whose Parts
-0, 1 and 2 apply to everything, and `references/report-style.md` for the report's
-own shape. Where a rule seems to be in both, the writing guide's wording is the
-definition.
+0, 1 and 2 apply to everything and whose Part 8 is the one for a report, and
+`references/report-style.md` for the report's own shape. Where a rule seems to be
+in both, the writing guide's wording is the definition.
 
 1. Every number, percentage, count and timestamp in the report must appear
    verbatim in FACTS_FILE (or in RESULTS_TABLE for a query's own count). If a
-   figure you want is not there, leave it out; never derive one.
+   figure you want is not there, leave it out; never derive one. The one
+   exception is rule 8.2 of the writing guide: a ratio may be rounded to one
+   decimal place in the body, never in its reference entry, and a count is
+   never rounded at all.
 2. The archive's time span is the facts' "Time span" line: quote it as it
    is, and where it says unavailable, say it is unavailable. The timestamps
    in the grouped records cover those records only; say "first/last seen

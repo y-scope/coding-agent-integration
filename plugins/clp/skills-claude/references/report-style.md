@@ -12,7 +12,7 @@ The reader is skimming for what to do next. Aim for a report whose body fits on 
 
 ## The report's own rules
 
-Parts 0, 1 and 2 of `writing-guide/rules.md` cover how the sentences read. These five cover what a report is, on top of that.
+Parts 0, 1 and 2 of `writing-guide/rules.md` cover how the sentences read, and its Part 8 covers how a report lands on someone skimming it — the headings, the rounding, the placement of a trap or a citation, and what a table owes its reader. These five cover what a report is, on top of both.
 
 1. **Lead with the finding.** The opening takes the single most important thing the analysis found, with its figure, so that a reader who stops there has the answer. That is rule 0.4 of the writing guide applied to a report.
 2. **Tier every claim, and carry every trap.** Each claim carries its evidence tier, and a derived figure carries the trap that keeps it honest — the one that says what the number is not. Shortening never drops a tier or a trap; cut the restatement around them instead. This is the rule that separates a report from prose: the reader must be able to tell a count from an argument.

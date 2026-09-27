@@ -8,7 +8,7 @@ Parts 0, 1, and 2 apply to everything. Then read the part that matches what you 
 
 **Who edits this.** A person, by hand, the same way as the file it came from at `~/.claude/docs/writing-rules.md`. When a reviewer rejects something this file does not cover, add the sentence to `examples.md` and one line here. The copy in this plugin is what the analysis report writers read; keep it in step with the original, and prefer editing both to letting them drift.
 
-**An analysis report has one more file to follow.** `../skills-claude/references/report-style.md` owns the report's shape — the short form by default, the thorough form on request, the evidence tier on every claim, the collapsed reference section and the links into it, and the rule that no query text, field name or command appears outside that section. Read it with this file, and follow both.
+**An analysis report reads Part 8 and one more file.** Part 8 covers how a report lands on a reader who is skimming it. `../skills-claude/references/report-style.md` owns the report's shape — the short form by default, the thorough form on request, the evidence tier on every claim, the collapsed reference section and the links into it, and the rule that no query text, field name or command appears outside that section. Read it with this file, and follow both.
 
 ## Part 0: Concision, point, and flow
 
@@ -106,6 +106,22 @@ Parts 0, 1, and 2 apply to everything. Then read the part that matches what you 
 - Weigh the scaffolding against the change even when the test would have caught the bug.
 - Do not widen a change with repo-wide style refactors.
 
+## Part 8: Analysis reports
+
+How a report lands on someone skimming it. Parts 0 to 2 decide whether a sentence is worth keeping; these decide whether a reader finds it. `../skills-claude/references/report-style.md` owns the sections and their order, and does not repeat these.
+
+The reader arrives doubting the numbers and short of time. Every rule below buys one of those two back.
+
+- **8.1** The headings and the bold openers, read alone, give the findings in order of importance. Where a section has one finding, the finding is the heading: `Nothing the session claimed to commit reached the repository` beats `Outcomes`. The fixed structural headings a report format mandates are exempt.
+- **8.2** Round a ratio to the precision the reader can act on, normally one decimal place. `28.3%` beats `28.2671%`, which reads as machine output and changes no decision. Never round a count, always keep the exact value in the figure's reference entry, and treat this as the only arithmetic allowed: never combine two numbers, convert a unit, or recompute a share.
+- **8.3** Every ratio carries the counts it came from, and carries them first: `5,312,160 of 18,792,752 (28.3%)`. A bare percentage cannot be checked at a glance, and a reader who cannot check it discounts it.
+- **8.4** The finding comes before its qualification. A trap, caveat or exclusion follows the claim it qualifies. It never opens the paragraph and never sits between the claim and its number, because a reader who stops after one sentence should leave holding the finding rather than the warning.
+- **8.5** A claim's evidence tier and its reference link sit together at the end of the sentence, never mid-clause and never stranded on a line of their own after a table. The eye should leave a sentence at the full stop.
+- **8.6** At most two consecutive paragraphs open with a bold lead-in. Six in a row emphasise nothing. Bold the one finding per section that a skimmer must not miss, and let the rest open in plain text.
+- **8.7** A table cell holds one fact. A cell that needs a full sentence and two citations belongs in prose, and a row carrying two findings is two rows.
+- **8.8** A table that has one row worth more than the others says so in the table. Telling the reader in the paragraph underneath which row to look at means the table failed to.
+- **8.9** Name what was searched and what was not. A reader judges a report by its blind spots, so the limits are a section, not an apology folded into a sentence.
+
 ## Trailers
 
 Banned outright, in every repo, with no per-repo exception to check:
@@ -131,6 +147,6 @@ Trailers carrying real information stay: `Fixes #N`, `Co-Authored-By:` naming an
 Rules for how a finished draft sounds, after it satisfies Part 0. They change the phrasing, not the length or the facts.
 
 - **No em-dash as a default joint.** It is a recognisable verbal signature when it carries clause after clause. A period, a comma or a colon usually does the work.
-- **No bold lead-in on a bullet that does not need one.** Bold the figure or the term a reader would search for, not the first three words of every line.
+- **No bold lead-in on a bullet that does not need one.** Bold the figure or the term a reader would search for, not the first three words of every line. Rule 8.6 puts a ceiling on consecutive bold paragraph openers for the same reason.
 - **Check every list against 0.7 before keeping it.** A list that reports the items that exist stays; one padded to look thorough is cut to the items that exist. Bold lead-ins commonly appear on exactly the padded ones.
 - The `humanizer` skill (`npx skills add blader/humanizer --global`, then `/humanizer`) does this pass mechanically over a draft. Run it when the report is for someone outside the team, or when a draft reads as generated. It never adds facts, so it cannot repair a claim that Part 2 rejects.

@@ -9,7 +9,7 @@ How the prose this plugin produces is written. Two files, both plain Markdown, b
 
 `skills-claude/analyze-logs` spawns a subagent to write each analysis report. That writer is told to read `rules.md` here and `skills-claude/references/report-style.md` beside it:
 
-- `rules.md` owns the prose — how a sentence reads, and whether a claim is one the evidence supports.
+- `rules.md` owns the prose — how a sentence reads, whether a claim is one the evidence supports, and, in Part 8, how the finished report lands on someone skimming it.
 - `report-style.md` owns the report's shape — the short form by default, the thorough form on request, the evidence tier on every claim, the collapsed reference section and the links into it, and no query text anywhere outside that section.
 
 Neither restates the other. If a rule seems to belong in both, it belongs in `rules.md` and the report file points at it.
