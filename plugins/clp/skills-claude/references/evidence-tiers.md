@@ -35,8 +35,9 @@ The first two are verifiable and must be. The last two are arguments and must be
 
 ## Where the tier has to appear
 
-- **In the report**, on every claim, and in the closing **Reference — checking each figure**, whose entries give each claim's figure and the one command that reproduces it, linked from the claim itself. That section is what makes the rest arguable rather than trusted.
-- **In chat**, on anything you assert to the user — the phase summaries, the findings at the close, the descriptions in a question. A figure you quote in conversation is quoted just as loudly as one in the report.
+- **In the report body, on the arguments.** An inference or a piece of domain knowledge says so where it appears, in words. A measured or derived claim carries no marker: it links to its entry in the closing **Reference — checking each figure**, and that is a stronger offer than a badge, because the reader can act on it. Rule 2.10 of `../../writing-guide/rules.md` is the definition and the reasoning; a body that marks every claim buries the five that are arguments under the fifty that are facts.
+- **In every reference entry, on every claim.** Each entry opens with its tier and gives the figure with the one command that reproduces it, or a derived figure's inputs and formula. This is where measured and derived are told apart, because it is where someone reproducing the number needs to know which they are doing. That section is what makes the rest arguable rather than trusted.
+- **In chat**, on anything you assert to the user — the phase summaries, the findings at the close, the descriptions in a question. Use the words, not letters. A figure you quote in conversation is quoted just as loudly as one in the report.
 - **Nowhere by inventing a fifth label.** If a claim does not fit one of the four, it is usually an inference that has not been recognised as one.
 
-How the label is printed is a writing question and rule 8.10 of `../../writing-guide/rules.md` settles it: the letters `[M] [D] [I] [K]`, the same form throughout a report, with one legend line under the title. This file decides which of the four a claim gets, and that is all it decides.
+This file decides which of the four a claim gets, and that is all it decides. How the label is printed, and whether it is printed at all, is a writing question that `../../writing-guide/rules.md` settles in rules 2.10 and 8.10.

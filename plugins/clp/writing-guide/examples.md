@@ -264,13 +264,17 @@ The accepted sentence also kills the finding it looked like it had: a 23.1% fail
 
 The trap is doing real work here and must stay. What fails is the order inside the paragraph when the trap arrives before the reader has the point, and the version that opens `Trap: a turn's elapsed time is its last entry minus its first` spends its first sentence on a caveat to a claim the reader has not read yet.
 
-### 8.5 The tier and the link sit at the end
+### 8.5 / 2.11 The citation attaches to the figure
 
-| Reject | Accept |
-| --- | --- |
-| took **18,792,752 input tokens**, 99.4% of them on the workflow agents rather than the main conversation [measured, share derived] [R2](#r2-input-tokens-by-path) | took **18,792,752 input tokens** [measured], 99.4% of them on the workflow agents rather than the main conversation [derived] [R2](#r2-input-tokens-by-path) |
+> The session worked on separating private commits from open-source ones and on labelling commits with a git trailer, through two workflow runs named oss-pr-mirroring-design and commit-provenance-trailers, over a log that stayed open for 357.4 hours (14.9 days) [D] [R1](#r1-wall-clock-span).
 
-A tier marker mid-clause breaks the sentence where it is still being read. The worst case in that report is a citation with no sentence at all: a table is followed by a line opening `[R25](#r25-errors-per-tool). Trap: the rate counts returned results, not calls`, which asks the reader to parse a link label as a subject.
+The reviewer's words were "the readability of this is poor — like `[D]` and `R1`". Two tokens the reader must decode, neither meaning anything on its own, and the sentence ends on bookkeeping rather than on the finding.
+
+> The log stayed open [357.4 hours](#r1-wall-clock-span), 14.9 days.
+
+The number is what a doubting reader reaches for, so the number is the link. Rule 2.10 removed the `[D]`: a derived figure that offers its own check does not also need a badge saying it is a figure.
+
+The same sentence breaks 0.4 twice over, which is why the rewrite under `0.4` below splits it.
 
 ### 8.6 Two bold openers in a row, not six
 
@@ -294,10 +298,70 @@ The rule's positive example is from the same report, which is why the rule exist
 
 A reader trusts a report that volunteers its limits more than one that reads as complete, and the distinction between unknown and zero is the one a reader will otherwise get wrong.
 
-### 8.10 One notation for the tiers
+### 8.10 / 2.10 Mark the arguments, not the facts
 
-Two reports written from the same facts file, a day apart, labelled their claims differently, and the first was inconsistent with itself: 51 markers spelled out as `[measured]`, `[derived]`, `[inference]` and `[domain knowledge]` in the prose, and 7 abbreviated to `[M]` and `[D]` in the category table, with `[measured, share derived]` appearing mid-clause twice. The second used `[M]`, `[D]`, `[I]` and `[K]` in all 55 places.
+One generated report carried 55 tier markers in its body: 30 `[M]`, 20 `[D]`, 4 `[I]` and 1 `[K]`. Fifty of them said "this is a fact", which is what a reader assumes before reading a word, and the five that mattered — the claims someone could argue with — looked exactly like the fifty that did not.
 
-Neither report was wrong, because nothing had ever said which form to use. The second is the better read — fifty spelled-out markers crowd the sentences they qualify — but it is unreadable on first contact without a legend, since nothing in it says what `[K]` means.
+An earlier revision of this rule tried to fix the reading by pinning one notation and adding a legend under the title. That was the wrong lever: the problem was never which characters the marker used, it was that a marker appeared on claims that needed no defending.
 
-The rule exists because the tier is the part of a report a sceptical reader looks for first. A notation that changes between the prose and the table invites them to wonder whether the difference means something.
+| Reject | Accept |
+| --- | --- |
+| The cache served 28.3% of the input [derived] [R11](#r11-cache-hit-rate) | The cache served [28.3% of the input](#r11-cache-hit-rate) |
+| So the low rate is a property of that one path, not of the session [inference] | So the low rate looks like a property of that one path rather than of the session (inference) |
+
+The tier has not been dropped, only moved: every reference entry still opens with it, where a reader reproducing the figure needs to know whether to run a command or check a derivation.
+
+### 0.4 The opener leads with the finding
+
+The sentence in `8.5` also stacks three facts — what the work was, how it was run, and how long the log stayed open — and reaches the only memorable number last.
+
+> Almost none of this session was work. The log stayed open [357.4 hours](#r1-wall-clock-span); 21 minutes of that had anything running. Two workflow runs worked out how to label private commits separately from open-source ones.
+
+Three sentences, strongest first. Rule 0.5 already forbade the stacking, and 0.4 now says which sentence goes first, because a reader who stops after the opening paragraph should leave with the finding and not with the project description.
+
+---
+
+## Sound
+
+Evidence for `sound.md`. Every sentence below is from a report that satisfied every rule in Parts 0, 1, 2 and 8, and still came back from the reviewer as "extremely AI written and difficult to read".
+
+### S17 / S18 Density is what actually broke it
+
+The report's body was 45 lines and read as a wall. Measured: one paragraph of 177 words, two of 116, and single sentences of 48, 44 and 44 words against a median of 14.
+
+> Idle and unattended time is 21,198.3 of the 21,219.6 end-to-end minutes (99.9%), and the five buckets never double-count a second, so that is the part with neither a tool nor the model running.
+
+One sentence carrying a figure, a denominator, a trap and a definition. The trap is worth keeping and belongs in its own sentence. Length is the first thing to measure in a draft, because it costs the most and is the easiest tell to see.
+
+### S1 The contrast frame, six times in 45 lines
+
+Rule 1.7 already limited `X rather than Y, since Z` to one appearance. The report used the wider family — `rather than`, `, not`, `instead of`, `never` — six times:
+
+| Reject | Accept |
+| --- | --- |
+| this is the span the log was open, not time anyone spent | this is how long the log stayed open |
+| a property of the workflow path rather than of the session | a property of that one path |
+| 464 records are bookkeeping the seven categories never read | 464 records are bookkeeping that no category counts |
+| these are unknown rather than zero | these are unknown |
+
+Each one is defensible alone. Together they are the strongest single tell in the draft, because the negative exists to make the positive sound larger.
+
+### S8 The heading, restated underneath
+
+Rule 8.1 asked headings to carry findings, and that produced a new failure the moment it worked:
+
+> ## Almost all the elapsed time is a single 14.68-day silence inside one turn
+>
+> Idle and unattended time is 21,198.3 of the 21,219.6 end-to-end minutes (99.9%) … Nearly all of it sits inside turn 12 …
+
+The heading makes the claim and the paragraph makes it again before reaching any evidence. A heading that states its finding is followed by the evidence for it.
+
+### S9 Chatbot residue
+
+> You came to this exploring, with no specific problem in mind, and nothing in the records contradicts that.
+
+Written to the person who asked rather than to a reader. It carries no finding and deletes without loss under 0.1.
+
+### S7 Inflated significance
+
+`Two runs hold the whole bill`, `The one unit worth opening`, `The work itself is dense`. Three ordinary facts dressed as turning points in two paragraphs. State the fact and let the figure carry the weight.

@@ -1,13 +1,15 @@
 # Writing guide
 
-How the prose this plugin produces is written. Two files, both plain Markdown, both meant to be edited by a person:
+How the prose this plugin produces is written. Three files, all plain Markdown, all meant to be edited by a person:
 
 - **`rules.md`** — the rules. Each one is a yes-or-no test you can run over a draft: concision and flow, readability, claims and evidence, then the part that matches what you are writing. Loaded by the report writers on every run, so it stays short on purpose.
+- **`humanizer.md`** — how a finished draft sounds. 25 patterns with their trigger words and before/after pairs, vendored verbatim from the `humanizer` skill under MIT so that a writer gets them without a network call and without a lossy summary. Refresh it from upstream; do not edit it to fit a house style.
+- **`sound.md`** — the adapter for `humanizer.md`: which of its patterns an analysis report trips over, and which of a report's habits it would wrongly cut (a derivation's trap is not a stacked qualifier).
 - **`examples.md`** — the evidence behind the rules: the sentences a reviewer rejected, quoted verbatim, with the rule each one produced. Grows over time. Read it when a rule needs justifying.
 
 ## Who reads it
 
-`skills-claude/analyze-logs` spawns a subagent to write each analysis report. That writer is told to read `rules.md` here and `skills-claude/references/report-style.md` beside it:
+`skills-claude/analyze-logs` spawns a subagent to write each analysis report. That writer reads `rules.md` and `report-style.md` before drafting, then `humanizer.md` and `sound.md` as a revision pass before saving:
 
 - `rules.md` owns the prose — how a sentence reads, whether a claim is one the evidence supports, and, in Part 8, how the finished report lands on someone skimming it.
 - `report-style.md` owns the report's shape — the short form by default, the thorough form on request, the evidence tier on every claim, the collapsed reference section and the links into it, and no query text anywhere outside that section.

@@ -15,7 +15,7 @@ Parts 0, 1, and 2 apply to everything. Then read the part that matches what you 
 - **0.1** Delete the sentence and see what breaks. When nothing is lost, it stays deleted. Applies to whole sections too.
 - **0.2** No sentence restates its predecessor in different words.
 - **0.3** No preamble. `It is worth noting that`, `In order to`, `This section describes`, and `As mentioned above` delete without loss.
-- **0.4** Conclusion first. A reader who stops after the first paragraph still has the answer.
+- **0.4** Conclusion first. A reader who stops after the first paragraph still has the answer. In that first paragraph, one finding per sentence and the strongest one first: three facts stacked into an opening sentence reach the point last, which is where nobody is still reading.
 - **0.5** One idea per sentence. Two independent clauses sharing no subject are two sentences.
 - **0.6** Each paragraph has one job that you can name in a few words.
 - **0.7** Consecutive paragraphs connect. When two can be swapped without loss, write them as a list. The list reports the items that exist; never pad one to reach a round count.
@@ -46,6 +46,8 @@ Parts 0, 1, and 2 apply to everything. Then read the part that matches what you 
 - **2.7** State what you did not verify. "Consistent with the log" and "confirmed by running it" are different claims.
 - **2.8** Every number keeps the unit that it was measured in.
 - **2.9** A small bug is filed as a small bug. Severity is an observation, not a lever.
+- **2.10** Mark the arguments, not the facts. A reader assumes by default that what you wrote is a fact, so labelling the facts tells them nothing and buries the claims that are readings, guesses or judgements. Mark those, in the word itself rather than a letter or a symbol — `(inference)`, "which suggests", "this is a reading of, not a measurement". Where a scheme labels every claim, most labels say "fact" and the label stops being read at all.
+- **2.11** A citation attaches to what it supports. Wrap the figure, the identifier or the clause that rests on the source — `stayed open [357.4 hours](#r1)` — rather than trailing the sentence with a bracketed label a reader has to decode. A reader chasing a number reaches for the number. Where the claim has no single figure, the citation goes on the words that state it.
 
 ## Part 3: PR summaries
 
@@ -112,16 +114,16 @@ How a report lands on someone skimming it. Parts 0 to 2 decide whether a sentenc
 
 The reader arrives doubting the numbers and short of time. Every rule below buys one of those two back.
 
-- **8.1** The headings and the bold openers, read alone, give the findings in order of importance. Where a section has one finding, the finding is the heading: `Nothing the session claimed to commit reached the repository` beats `Outcomes`. The fixed structural headings a report format mandates are exempt.
+- **8.1** The headings and the bold openers, read alone, give the findings in order of importance. Where a section has one finding, the finding is the heading: `Nothing the session claimed to commit reached the repository` beats `Outcomes`. The fixed structural headings a report format mandates are exempt. A heading that states its finding is not restated by the sentence beneath it; that paragraph opens on the evidence (rule S8 of `sound.md`).
 - **8.2** Round a ratio to the precision the reader can act on, normally one decimal place. `28.3%` beats `28.2671%`, which reads as machine output and changes no decision. Never round a count, always keep the exact value in the figure's reference entry, and treat this as the only arithmetic allowed: never combine two numbers, convert a unit, or recompute a share.
 - **8.3** Every ratio carries the counts it came from, and carries them first: `5,312,160 of 18,792,752 (28.3%)`. A bare percentage cannot be checked at a glance, and a reader who cannot check it discounts it.
 - **8.4** The finding comes before its qualification. A trap, caveat or exclusion follows the claim it qualifies. It never opens the paragraph and never sits between the claim and its number, because a reader who stops after one sentence should leave holding the finding rather than the warning.
-- **8.5** A claim's evidence tier and its reference link sit together at the end of the sentence, never mid-clause and never stranded on a line of their own after a table. The eye should leave a sentence at the full stop.
+- **8.5** Rule 2.11 in a report: the link wraps the figure and points at that claim's entry in the reference section. One link per claim, not one per number. A citation never sits mid-clause, and never alone on the line after a table.
 - **8.6** At most two consecutive paragraphs open with a bold lead-in. Six in a row emphasise nothing. Bold the one finding per section that a skimmer must not miss, and let the rest open in plain text.
 - **8.7** A table cell holds one fact. A cell that needs a full sentence and two citations belongs in prose, and a row carrying two findings is two rows.
 - **8.8** A table that has one row worth more than the others says so in the table. Telling the reader in the paragraph underneath which row to look at means the table failed to.
 - **8.9** Name what was searched and what was not. A reader judges a report by its blind spots, so the limits are a section, not an apology folded into a sentence.
-- **8.10** One notation for the evidence tiers, used throughout, explained once. The letters `[M] [D] [I] [K]` read better than the words in a report carrying fifty of them, and a one-line legend under the title is what makes them readable to someone meeting them for the first time. Never mix the letters and the words in one report. Which tier a claim gets is not a writing question and is settled by `../skills-claude/references/evidence-tiers.md`.
+- **8.10** Rule 2.10 in a report: a measured or derived claim carries no marker in the body, because its link already offers the reader the check. Its tier is stated in its reference entry, where someone reproducing the figure needs to know which of the two it is. An inference or a piece of domain knowledge is marked where it appears, in words. Which tier a claim gets is not a writing question and is settled by `../skills-claude/references/evidence-tiers.md`.
 
 ## Trailers
 
@@ -146,9 +148,10 @@ Trailers carrying real information stay: `Fixes #N`, `Co-Authored-By:` naming an
 
 ## Sound
 
-Rules for how a finished draft sounds, after it satisfies Part 0. They change the phrasing, not the length or the facts.
+How a finished draft sounds, after it satisfies Part 0. `humanizer.md` beside this file is the rule set, vendored verbatim under MIT: 25 patterns with their watch-for lists and before/after pairs. `sound.md` says what they mean for an analysis report and what a report keeps that they would otherwise cut. Run that pass before you save a draft anyone else will read, and work from `humanizer.md` itself rather than from a summary of it.
+
+Three of its rules are cited often enough to repeat here:
 
 - **No em-dash as a default joint.** It is a recognisable verbal signature when it carries clause after clause. A period, a comma or a colon usually does the work.
 - **No bold lead-in on a bullet that does not need one.** Bold the figure or the term a reader would search for, not the first three words of every line. Rule 8.6 puts a ceiling on consecutive bold paragraph openers for the same reason.
 - **Check every list against 0.7 before keeping it.** A list that reports the items that exist stays; one padded to look thorough is cut to the items that exist. Bold lead-ins commonly appear on exactly the padded ones.
-- The `humanizer` skill (`npx skills add blader/humanizer --global`, then `/humanizer`) does this pass mechanically over a draft. Run it when the report is for someone outside the team, or when a draft reads as generated. It never adds facts, so it cannot repair a claim that Part 2 rejects.
