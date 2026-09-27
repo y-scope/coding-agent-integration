@@ -56,5 +56,5 @@ Use `semantic("natural language query")` in KQL to find log events whose log sha
   ```
 - List a field's distinct values among matches with `--unique FIELD` instead of projecting and running `sort | uniq`. It still scans the matching records (measured ~84s for a low-cardinality field over 16.5M records), so get per-value totals with one `--count` query per value.
 - `--count`, `--unique`, and `--limit` are mutually exclusive, and `--count`/`--unique` cannot be combined with `--projection`.
-- Prefer one compound KQL query over several: `'field1:value AND field2 >= 1000'`. A keyword alternation is not a reason to grep: OR the wildcards in the query itself, `message:"*a*" OR message:"*b*" OR message:"*c*"`, which still runs inside the search engine. Pipe to `grep`/`jq` only when the match needs real regex features (anchors, character classes, backreferences).
+- Prefer one compound KQL query over several: `'field1:value AND field2 >= 1000'`. A keyword alternation is not a reason to grep: OR the wildcards in the query itself, `message:"*a*" OR message:"*b*" OR message:"*c*"`, which still runs inside the search engine. Pipe to `grep` only when the match needs real regex features (anchors, character classes, backreferences).
 - Point at a local build with `--clp-s-bin PATH` or `CLP_S_BIN` (see the `dev` skill).

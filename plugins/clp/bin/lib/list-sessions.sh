@@ -134,10 +134,7 @@ if ! [[ "$limit" =~ ^[0-9]+$ ]] || [[ "$limit" -eq 0 ]]; then
   exit 2
 fi
 
-if ! command -v jq >/dev/null 2>&1; then
-  echo "error: jq is required to summarize session metadata" >&2
-  exit 127
-fi
+require_python3 || exit $?
 
 if [[ -z "$manifest" ]]; then
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -203,12 +200,15 @@ format_bytes() {
   fi
 }
 
+# first_json_value FILE FIELD [WHERE_PATH WHERE_VALUE]: the first record's value
+# at FIELD, skipping records where it is absent or empty. These header lines were
+# written by the harness, not by us, so the field can be missing or empty and the
+# same information sits in different places across harness versions.
 first_json_value() {
-  local file="$1"
-  local filter="$2"
-  head -n 200 "$file" \
-    | jq -r "$filter // empty" 2>/dev/null \
-    | head -n 1 || true
+  local file="$1" field="$2" where_path="${3:-}" where_value="${4:-}"
+  local args=(--file "$file" --field "$field" --non-empty)
+  [[ -z "$where_path" ]] || args+=(--where-path "$where_path" --where-equals "$where_value")
+  python3 "${CLP_PLUGIN_LIB_DIR}/session_meta.py" "${args[@]}" 2>/dev/null || true
 }
 
 modified_time() {
@@ -242,24 +242,24 @@ session_metadata() {
 
   session_id="$(basename "$path" .jsonl)"
   if [[ "$source_agent" == "codex" ]]; then
-    kind="$(first_json_value "$path" 'select(.type == "session_meta") | .payload.source')"
+    kind="$(first_json_value "$path" payload.source type session_meta)"
     if [[ -z "$kind" ]]; then
       kind="codex"
     fi
-    cwd="$(first_json_value "$path" 'select(.payload.cwd? != null and .payload.cwd != "") | .payload.cwd')"
+    cwd="$(first_json_value "$path" payload.cwd)"
     if [[ -z "$cwd" ]]; then
       cwd="$project"
     fi
     project="$(basename "$(dirname "$cwd")")/$(basename "$cwd")"
     session_name="$(basename "$cwd")"
   else
-    cwd="$(first_json_value "$path" 'select(.cwd? != null and .cwd != "") | .cwd')"
+    cwd="$(first_json_value "$path" cwd)"
     if [[ -z "$cwd" ]]; then
       cwd="$project"
     fi
-    session_name="$(first_json_value "$path" 'select(.customTitle? != null and .customTitle != "") | .customTitle')"
+    session_name="$(first_json_value "$path" customTitle)"
     if [[ -z "$session_name" ]]; then
-      session_name="$(first_json_value "$path" 'select(.slug? != null and .slug != "") | .slug')"
+      session_name="$(first_json_value "$path" slug)"
     fi
     if [[ -z "$session_name" ]]; then
       session_name="$(basename "$cwd")"

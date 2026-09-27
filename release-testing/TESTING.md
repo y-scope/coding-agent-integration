@@ -13,7 +13,7 @@ INFO 06-15 03:52:34 [importing.py:81] Triton not installed or not compatible; ..
 
 ## Prerequisites
 
-- `bash`, `jq`, `python3`
+- `bash`, `python3`
 - `clp-s` — the CLP binary, **clp-core 0.13+ (shapes API)**. Check with:
 
   ```bash
@@ -34,7 +34,7 @@ CLP=./plugins/clp/bin/clp   # the plugin's one command
 
 > **Keep one shell open for the whole walkthrough.** Later steps reuse variables defined earlier (`CLP`, `ARCHIVE`, `KEY`, `A2`, `K2`, `CLP_LOG_SHAPE_CACHE_DIR`). If you lose your shell, re-run the Setup block above and the `ARCHIVE=` line in Step 1, then continue where you left off.
 
-One output convention used throughout: `clp search` prints its human-readable header lines (archive metadata, the underlying command) to **stderr**, so stdout carries only the JSON results and pipes straight into `jq`. The `2>/dev/null` below hides those headers and clp-s's own log lines.
+One output convention used throughout: `clp search` prints its human-readable header lines (archive metadata, the underlying command) to **stderr**, so stdout carries only the JSON results and reads straight into a python one-liner. The `2>/dev/null` below hides those headers and clp-s's own log lines.
 
 ## Step 1 — Compress the logs into an archive
 
@@ -129,7 +129,9 @@ Expected: `35`
 # matching record (like SELECT level FROM ...) — cheaper than full records,
 # and the workhorse of the next step:
 "$CLP" search --projection level "$ARCHIVE" '*' 2>/dev/null \
-  | jq -r '.level' | sort | uniq -c
+  | python3 -c 'import json, sys
+for line in sys.stdin:
+    if line.startswith("{"): print(json.loads(line)["level"])' | sort | uniq -c
 ```
 
 Expected:
@@ -153,7 +155,9 @@ To search message content, *project* the field and grep it:
 
 ```bash
 "$CLP" search --projection message "$ARCHIVE" '*' 2>/dev/null \
-  | jq -r '.message' | grep -c 'Triton'
+  | python3 -c 'import json, sys
+for line in sys.stdin:
+    if line.startswith("{"): print(json.loads(line)["message"])' | grep -c 'Triton'
 ```
 
 Expected: `18` — the text was there all along; you just have to reach it this way. Tip: narrow with a searchable field first (`level:WARNING`) and then grep the projected messages — cheaper than scanning everything.
@@ -167,7 +171,8 @@ A *log shape* is a message template with variables replaced by `<*>`. The dictio
 ```bash
 "$CLP" search "$ARCHIVE" 'stats.log_shapes' 2>/dev/null \
   | "$CLP" shape-cache normalize > release-testing/workdir/log-shapes.ndjson
-jq -s 'length' release-testing/workdir/log-shapes.ndjson
+python3 -c 'import sys; print(sum(1 for line in open(sys.argv[1]) if line.strip()))' \
+  release-testing/workdir/log-shapes.ndjson
 ```
 
 Expected: `100` — 250 records collapse to 100 distinct templates.
@@ -213,8 +218,15 @@ Normally the *agent* classifies the templates (Step 9): the templates are cluste
 ```bash
 stand_in() {   # usage: stand_in LOG_SHAPES_NDJSON > classification.json
   W=release-testing/workdir
-  jq -s '{max_chars:500, clusters:[{id:"c1", representative:.[0].log_shape,
-          members:[.[].log_shape], count:length}]}' "$1" > "$W/clusters.json"
+  python3 - "$1" "$W/clusters.json" <<'PY'
+import json, sys
+shapes = [json.loads(line)["log_shape"]
+          for line in open(sys.argv[1]) if line.strip()]
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    json.dump({"max_chars": 500,
+               "clusters": [{"id": "c1", "representative": shapes[0],
+                             "members": shapes, "count": len(shapes)}]}, handle)
+PY
   echo '{"schema":{"message":"message"},
          "taxonomy":[{"category":"other","description":"walkthrough","priority":"low","why":"walkthrough"}],
          "assignments":[{"id":"c1","category":"other"}],
@@ -248,7 +260,8 @@ cp release-testing/sample-logs/vllm/macos-m1-smoke-failure-2026-06-15.log \
 A2="$(ls -dt release-testing/workdir/archives2/folder-* | head -1)"
 "$CLP" search "$A2" 'stats.log_shapes' 2>/dev/null \
   | "$CLP" shape-cache normalize > release-testing/workdir/log-shapes-2.ndjson
-jq -s 'length' release-testing/workdir/log-shapes-2.ndjson
+python3 -c 'import sys; print(sum(1 for line in open(sys.argv[1]) if line.strip()))' \
+  release-testing/workdir/log-shapes-2.ndjson
 ```
 
 Expected: `96` — the 2-file archive has 96 templates.
@@ -298,7 +311,9 @@ Expected: the estimate line says `analyzed before`, `SHAPES_SOURCE=stored`, `CAC
 
 ```bash
 "$CLP" search "$ARCHIVE" 'semantic("GPU features unavailable")' 2>/dev/null \
-  | jq -r '.message' | sort -u | grep 'Triton'
+  | python3 -c 'import json, sys
+for line in sys.stdin:
+    if line.startswith("{"): print(json.loads(line)["message"])' | sort -u | grep 'Triton'
 ```
 
 Expected:

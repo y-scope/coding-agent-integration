@@ -107,9 +107,9 @@ Stdout prints a summary then one `{"id","count","representative"}` line per clus
    - security / auth / access
    - other (note but don't deep-search)
 
-Build a QUERY PLAN: targeted queries derived from the representatives, expressed in the discovered field names. Per entry: `label`, the filter as a structured `match` object, the `project` columns, and the `method`. Never write a KQL string: the plan runner renders `match` to KQL itself, quoting and escaping every value and parenthesizing every group, and an entry carrying a `kql` key is rejected. `match` grammar (nest freely): `{"all":[F,...]}` (AND), `{"any":[F,...]}` (OR), `{"not":F}`, `{"field":"<f>","eq":V}` (exact value — fastest, for a scalar field whose full value is known; on the message field it matches only a message equal to V, so it correctly returns 0 otherwise), `{"field":"<f>","contains":"text"}` (substring — what message content almost always needs; the text is literal, spaces and quotes included), `{"field":"<f>","contains":["a","b"]}` (substrings in order, e.g. a template's static fragments around its `<*>`), `{"field":"<f>","prefix":"text"}`, `{"field":"<f>","exists":true}`, `{"field":"<f>","gt":N}` (also `gte`/`lt`/`lte`), and `{"semantic":"text"}` (only inside an `all` beside a concrete filter; never alone, never under `not`). Methods: `count` (run with `--count`) / `project+grep` (fold the text into `match` as an `any` of `contains` nodes; set `grep` only for real regex features) / `project+jq` (with `jq`) / `semantic`. For GROWTH, add entries only for genuinely new signals.
+Build a QUERY PLAN: targeted queries derived from the representatives, expressed in the discovered field names. Per entry: `label`, the filter as a structured `match` object, the `project` columns, and the `method`. Never write a KQL string: the plan runner renders `match` to KQL itself, quoting and escaping every value and parenthesizing every group, and an entry carrying a `kql` key is rejected. `match` grammar (nest freely): `{"all":[F,...]}` (AND), `{"any":[F,...]}` (OR), `{"not":F}`, `{"field":"<f>","eq":V}` (exact value — fastest, for a scalar field whose full value is known; on the message field it matches only a message equal to V, so it correctly returns 0 otherwise), `{"field":"<f>","contains":"text"}` (substring — what message content almost always needs; the text is literal, spaces and quotes included), `{"field":"<f>","contains":["a","b"]}` (substrings in order, e.g. a template's static fragments around its `<*>`), `{"field":"<f>","prefix":"text"}`, `{"field":"<f>","exists":true}`, `{"field":"<f>","gt":N}` (also `gte`/`lt`/`lte`), and `{"semantic":"text"}` (only inside an `all` beside a concrete filter; never alone, never under `not`). Methods: `count` (run with `--count`) / `project+grep` (fold the text into `match` as an `any` of `contains` nodes; set `grep` only for real regex features) / `semantic`. For GROWTH, add entries only for genuinely new signals.
 
-With field rules (step 5), every rule category is part of the taxonomy too: rank it like the others, and assign clusters to it where one fits. Then RANK what you found, by what matters for the application rather than for this one capture (the classification is cached and reused for every later capture). Give every taxonomy category a `priority` — `high` (problems, or what tells whether the application is healthy and doing its job: errors, failures, request outcomes, latency; at most a handful), `medium` (useful context), or `low` (routine or uninformative) — and a one-line `why`: what a reader learns from it. Give every query_plan entry its `category` (a taxonomy category), a `priority` on the same scale, and a `stage`: `core` entries run on every analysis (the overview: counts and the key probes); `drill` entries run only when the user focuses on their category — write 1–3 per high or medium category, the next question a reader would ask once that category matters (the records behind a count, a narrower failure signal, the slow or failed subset). Example (Mongo): `{"label":"Slow queries","match":{"field":"attr.durationMillis","exists":true},"project":"t.$date,attr.durationMillis,msg","jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}`. Example (vLLM): `{"label":"Memory or OOM warnings","match":{"all":[{"field":"level","eq":"WARNING"},{"any":[{"field":"message","contains":"memory"},{"field":"message","contains":"OOM"},{"field":"message","contains":"oom-killer"}]}]},"project":"timestamp,level,message","method":"project+grep"}`.
+With field rules (step 5), every rule category is part of the taxonomy too: rank it like the others, and assign clusters to it where one fits. Then RANK what you found, by what matters for the application rather than for this one capture (the classification is cached and reused for every later capture). Give every taxonomy category a `priority` — `high` (problems, or what tells whether the application is healthy and doing its job: errors, failures, request outcomes, latency; at most a handful), `medium` (useful context), or `low` (routine or uninformative) — and a one-line `why`: what a reader learns from it. Give every query_plan entry its `category` (a taxonomy category), a `priority` on the same scale, and a `stage`: `core` entries run on every analysis (the overview: counts and the key probes); `drill` entries run only when the user focuses on their category — write 1–3 per high or medium category, the next question a reader would ask once that category matters (the records behind a count, a narrower failure signal, the slow or failed subset). Example (Mongo): `{"label":"Slow queries","match":{"field":"attr.durationMillis","gt":100},"project":"t.$date,attr.durationMillis,msg","method":"count"}`. Example (vLLM): `{"label":"Memory or OOM warnings","match":{"all":[{"field":"level","eq":"WARNING"},{"any":[{"field":"message","contains":"memory"},{"field":"message","contains":"OOM"},{"field":"message","contains":"oom-killer"}]}]},"project":"timestamp,level,message","method":"project+grep"}`.
 
 Write `/tmp/log-shape-class.json` with this shape — `assignments` must contain EVERY cluster id exactly once, with ONLY ids, never log shape text (members are re-attached mechanically); omit `schema` for GROWTH:
    ```
@@ -117,7 +117,7 @@ Write `/tmp/log-shape-class.json` with this shape — `assignments` must contain
      "schema": {"timestamp":"<TS>","severity":"<SEV>","logger":"<LOGGER>","message":"<MSG>","payload":["<leaf>",...]},
      "taxonomy": [{"category":"<name>","description":"<one line>","priority":"<high|medium|low>","why":"<one line>"}],
      "assignments": [{"id":"c1","category":"<name>"}],
-     "query_plan": [{"label":"...","match":{...},"project":"...","grep":"...","jq":"...","method":"...","category":"<name>","priority":"<high|medium|low>","stage":"<core|drill>"}]
+     "query_plan": [{"label":"...","match":{...},"project":"...","grep":"...","method":"...","category":"<name>","priority":"<high|medium|low>","stage":"<core|drill>"}]
    }
    ```
 
@@ -126,8 +126,12 @@ Then validate, expand ids to every member template (by hash, exact by constructi
    BIN=~/.codex/marketplaces/yscope/plugins/clp/bin
    # Fields must be ARRAYS (a bare `.assignments` test passes for a scalar,
    # which would poison the cache entry):
-   jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_plan|type=="array")' \
-     /tmp/log-shape-class.json >/dev/null || exit 1
+   python3 - <<'PYVALIDATE' || exit 1
+import json
+classified = json.load(open("/tmp/log-shape-class.json"))
+lists = ("taxonomy", "assignments", "query_plan")
+raise SystemExit(0 if all(isinstance(classified.get(k), list) for k in lists) else 1)
+PYVALIDATE
    # Every query_plan entry needs a valid `match` filter and its ranking
    # (category, priority, stage), and every taxonomy entry its priority and
    # why: one "[i] OK <kql>" or "[i] ERROR <label>: <why>" line per entry,
@@ -172,7 +176,7 @@ Then validate, expand ids to every member template (by hash, exact by constructi
 
 After storing, close phase 3 in one line: how many categories you found and that the classification is cached for later runs. The category table waits for the summary in step 7.
 
-7. **Summarize, ask, and stop.** Extract the plan with the bounded extractor (a raw `jq` over the classification file can take minutes when an app logs large near-duplicate blobs). It writes the core plan (`/tmp/clp-insights-query-plan.txt`, the `core` entries, high priority first), the drill entries (`/tmp/clp-insights-drill-plan.txt`), `/tmp/log-shape-templates-by-category.txt` (the top templates per category by frequency) and `/tmp/log-shape-category-totals.json` (exact records per category, with priority and why), and empties the focus inbox:
+7. **Summarize, ask, and stop.** Extract the plan with the bounded extractor (reading the whole classification file at once can take minutes when an app logs large near-duplicate blobs). It writes the core plan (`/tmp/clp-insights-query-plan.txt`, the `core` entries, high priority first), the drill entries (`/tmp/clp-insights-drill-plan.txt`), `/tmp/log-shape-templates-by-category.txt` (the top templates per category by frequency) and `/tmp/log-shape-category-totals.json` (exact records per category, with priority and why), and empties the focus inbox:
 
    ```bash
    BIN=~/.codex/marketplaces/yscope/plugins/clp/bin
@@ -212,8 +216,7 @@ After storing, close phase 3 in one line: how many categories you found and that
 
    The runner renders each entry's `match` to KQL (values quoted, groups parenthesized) and records that KQL, the result, status (`ok` / `zero` / `error` / `timeout`, plus a `non_selective` flag at 90% or more of the records), elapsed time, and a few samples in its results file (`/tmp/clp-insights-baseline-results.ndjson` for the baseline, `/tmp/clp-insights-query-results.ndjson` for the plan); the run also records the archive's total record count. Do not give a line per entry; post one status line each time a minute passes without news (`12 of 20 checks done`). The baseline entries (`origin: "baseline"`) give the severity and logger breakdown; when a rare-severity residual is small, a follow-up entry fetches those records, and its `samples` are the errors and warnings themselves. `/tmp/log-shape-category-totals.json` holds the exact records per category, so report those instead of a keyword probe's count. Then run `"$BIN"/clp facts --schema-json '<SCHEMA= line>' --freqs-file <FREQS_FILE> --schema-tree-file /tmp/clp-insights-schema-tree.json` (it reads both results files and `/tmp/clp-insights-focus.json`) (add `--freqs-file none --category-totals none` when frequencies are unavailable): it writes `/tmp/clp-insights-facts.md` with every number of the report computed in code, the user's focus and context first, so quote figures from that file and never add up or derive your own. Before presenting the report, save it to `/tmp/clp-insights-report.md` and run `"$BIN"/clp report check /tmp/clp-insights-report.md --also /tmp/clp-insights-baseline-table.md --also /tmp/clp-insights-plan-table.md --schema-tree-file /tmp/clp-insights-schema-tree.json`; fix or remove any figure it flags. When the pools are done, close phase 4 in one or two lines: how many checks ran, and each that failed or matched nothing, with what it costs the report. Keep both tables for the report's Query Log instead of pasting them into the chat. Do not re-run plan entries; for an `error` or `timeout` entry, run ONE corrected query (e.g. quote a wildcard value that contains spaces, `<message>:"*a b*"`) and log it in the Query Log. Then give 3–5 lines of early numbers from the facts file, the focus first, and open phase 5 (`[5/5] Writing the report`) before step 9. For the queries you run yourself, pick the method that fits:
    - `count`: run the KQL with `--count` (in-engine; cannot be combined with `--projection`), never `--projection ... | grep -c '^{'`. It prints one `{"archive_id":...,"count":N}` line per archive, `"count":0` included, and on a zero says when the archive's structure explains it (a filter at an `Object` path, or a path the archive does not have).
-   - `project+grep`: fold the target into the KQL as `<message>:"*text*"`, and OR the wildcards for a keyword alternation (`<message>:"*a*" OR <message>:"*b*"`). Only when the target needs real regex features (anchors, character classes, backreferences), run the KQL with `--projection`, then `jq -r '.<message>' | grep -Ei '<grep>'`. Add `--limit N` when a few example records are enough.
-   - `project+jq`: run the KQL with `--projection`, then `jq -r '<jq>'`.
+   - `project+grep`: fold the target into the KQL as `<message>:"*text*"`, and OR the wildcards for a keyword alternation (`<message>:"*a*" OR <message>:"*b*"`). Only when the target needs real regex features (anchors, character classes, backreferences), run the KQL with `--projection` and keep the matching records with a python filter (field name and regex as argv). Add `--limit N` when a few example records are enough.
    - `semantic`: run `semantic("...") AND <kql>` with `--projection`.
 
 MANDATORY semantic pass — in addition to any query_plan entries whose method is `semantic`, always run at least one scoped `semantic()` query derived from the goal or the dominant templates, e.g. `semantic("...") AND <severity>:<value>` or `semantic("...") AND <logger>:"*<substr>*"`. Never run an unscoped `semantic()`. Discard any query that returns nothing or only generic/meaningless log shapes — do not include it in the report.
@@ -247,11 +250,19 @@ CLP=~/.codex/marketplaces/yscope/plugins/clp/bin/clp
   '<severity>:WARNING AND <message>:"*StaticText*"'
 ```
 
-Fall back to projecting the message field and grepping/jq-filtering only when the distinctive text needs a regex the wildcard syntax can't express:
+Fall back to projecting the message field and filtering it only when the distinctive text needs a regex the wildcard syntax can't express:
 
 ```bash
 "$CLP" search --projection <timestamp>,<severity>,<message> <archive-dir> '<severity>:WARNING' \
-  | jq -rc 'select(.<message>|test("StaticText";"i"))'
+  | python3 - <message> 'StaticText' <<'PYFILTER'
+import json, re, sys
+pattern = re.compile(sys.argv[2], re.I)
+for line in sys.stdin:
+    if line.startswith("{"):
+        value = str(json.loads(line).get(sys.argv[1], ""))
+        if pattern.search(value):
+            print(line, end="")
+PYFILTER
 ```
 
 Semantic search (`semantic("…")`) also reads the log shapes directly and is a good complement to wildcard search for concept-shaped questions. The insight pass (step 8) always runs one mandatory scoped semantic cross-check; beyond that, use it only for an ambiguous template, grouping similar templates, or a conceptual user question — always scoped: `semantic("…") AND <severity>:<value>`. Flags: `--semantic-top-k` (default 5) and `--semantic-threshold` (default 0.3; raise for precision).

@@ -8,6 +8,10 @@ CLP_PLUGIN_BIN_DIR="$(cd -- "${CLP_PLUGIN_LIB_DIR}/.." && pwd -P)"
 # shellcheck disable=SC1091
 source "${CLP_PLUGIN_LIB_DIR}/clp-common.sh"
 
+# The archive stats, the schema tree's rows and the sample are all read by
+# python helpers.
+require_python3 || exit $?
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -304,10 +308,10 @@ archive_log_shapes=""
 archive_vars=""
 if "${SEARCH[@]}" "$archives_dir" 'stats.archives' 2>"$archive_stats_err_file" \
      > "$archive_stats_file"; then
-  archive_log_shapes="$(grep '^{' "$archive_stats_file" \
-    | jq -s 'map(.num_log_shapes // 0) | add' 2>/dev/null || true)"
-  archive_vars="$(grep '^{' "$archive_stats_file" \
-    | jq -s 'map(.num_vars // 0) | add' 2>/dev/null || true)"
+  archive_log_shapes="$(python3 "${CLP_PLUGIN_LIB_DIR}/bootstrap_json.py" \
+    sum-field --file "$archive_stats_file" --field num_log_shapes 2>/dev/null || true)"
+  archive_vars="$(python3 "${CLP_PLUGIN_LIB_DIR}/bootstrap_json.py" \
+    sum-field --file "$archive_stats_file" --field num_vars 2>/dev/null || true)"
 fi
 [[ "$archive_log_shapes" =~ ^[0-9]+$ ]] || archive_log_shapes=""
 [[ "$archive_vars" =~ ^[0-9]+$ ]] || archive_vars=""
@@ -355,9 +359,8 @@ echo "ARCHIVE_BYTES=$archive_bytes"
 if [[ -n "$archive_log_shapes" ]]; then
   echo "ARCHIVE_LOG_SHAPES=$archive_log_shapes"
   echo "ARCHIVE_VARS=$archive_vars"
-  grep '^{' "$archive_stats_file" | jq -r '
-      "ARCHIVE_STAT archive_id=\(.archive_id) log_shapes=\(.num_log_shapes)" +
-      " vars=\(.num_vars)"' 2>/dev/null || true
+  python3 "${CLP_PLUGIN_LIB_DIR}/bootstrap_json.py" archive-lines \
+    --file "$archive_stats_file" 2>/dev/null || true
 else
   echo "ARCHIVE_LOG_SHAPES=UNAVAILABLE"
   echo "ARCHIVE_STATS_HINT=stats.archives returned no counts (see $archive_stats_err_file); the clp-s binary may predate the query — reinstall the plugin"
@@ -415,13 +418,12 @@ describe_sample() {
 
   # Candidate schema fields: the scalar fields outside arrays that the most
   # records carry (cap 8). Severity- and logger-like fields are among them.
-  mapfile -t dist_fields < <(jq -r '
-      [.[] | select((.type=="VarString" or .type=="Integer" or .type=="Boolean")
-                    and (.display | contains("[]") | not) and (has("collapsed_keys") | not))]
-      | sort_by(-.records) | .[:8][] | .path' "$tree_json_file" 2>/dev/null)
+  mapfile -t dist_fields < <(python3 "${CLP_PLUGIN_LIB_DIR}/bootstrap_json.py" \
+    scalar-fields --tree-file "$tree_json_file" 2>/dev/null || true)
 
   for field in "${dist_fields[@]}"; do
-    dist="$(jq -r --arg f "$field" 'getpath($f | split(".")) // empty | tostring' "$sample_file" 2>/dev/null \
+    dist="$(python3 "${CLP_PLUGIN_LIB_DIR}/bootstrap_json.py" field-values \
+      --record-file "$sample_file" --field "$field" 2>/dev/null \
       | sort | uniq -c | sort -rn)"
     distinct="$(printf '%s\n' "$dist" | grep -c . || true)"
     # Top 8 values as "value"(count), values truncated to 60 chars. Herestring,

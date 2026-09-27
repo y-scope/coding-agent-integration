@@ -15,10 +15,9 @@ Keep the answer, verbatim, for the focus question and `clp focus --context`. Whe
 
 ## Build the insight inputs (step 7)
 
-Extract the pieces with `clp extract` (stdlib-only Python; do not use a raw `jq` pipeline here — see below):
+Extract the pieces with `clp extract` (stdlib-only Python; it builds every input the report writer needs, so do not assemble them by hand):
 
 ```bash
-jq -r '.taxonomy[] | "- \(.category) [\(.priority)]: \(.description) -- \(.why)"' /tmp/log-shape-classification.json
 "${CLAUDE_PLUGIN_ROOT}/bin/clp" extract \
   --classification-file /tmp/log-shape-classification.json \
   --freqs-file FREQS_FILE

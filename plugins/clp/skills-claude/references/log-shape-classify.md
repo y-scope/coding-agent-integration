@@ -64,7 +64,7 @@ Method:
      - lifecycle / state-transitions (start/stop/election/stepdown/restart)
      - security / auth / access
      - other (note but don't deep-search)
-2. Build a QUERY PLAN: targeted queries derived from the representatives, expressed in the discovered field names. Per entry: label, the filter as a structured `match` object, the columns to --projection, and the method. clp-s projects leaf columns only, and an array is a leaf returned whole: a column inside an array, or an object, projects nothing. The search wrapper rewrites such a column to the array that holds it (or the leaf columns under the object) and notes it in the result's projection_notes; a "jq" program sees the rewritten shape, so index into an array as `.message.content[]?.text`, not `.message.content.text`. Never write a KQL string: the plan runner renders `match` to KQL itself, quoting and escaping every value and parenthesizing every group, and an entry carrying a "kql" key is rejected. `match` grammar (nest freely):
+2. Build a QUERY PLAN: targeted queries derived from the representatives, expressed in the discovered field names. Per entry: label, the filter as a structured `match` object, the columns to --projection, and the method. clp-s projects leaf columns only, and an array is a leaf returned whole: a column inside an array, or an object, projects nothing. The search wrapper rewrites such a column to the array that holds it (or the leaf columns under the object) and notes it in the result's projection_notes. Never write a KQL string: the plan runner renders `match` to KQL itself, quoting and escaping every value and parenthesizing every group, and an entry carrying a "kql" key is rejected. `match` grammar (nest freely):
      {"all": [F, ...]}                  every child matches (AND)
      {"any": [F, ...]}                  at least one child matches (OR)
      {"not": F}                         F does not match
@@ -108,15 +108,13 @@ Method:
                          character classes, backreferences) that "contains"
                          can't express; never use grep merely to implement
                          `a|b|c` matching.
-     - "project+jq"   -> project message/payload, jq-filter (e.g. a numeric
-                         threshold on a payload leaf)
      - "semantic"     -> a "semantic" node inside an "all" beside a scalar
                          filter, ONLY for an ambiguous template or to group
                          similar ones
    Example (Mongo): {"label":"Slow queries",
-     "match":{"field":"attr.durationMillis","exists":true},
+     "match":{"field":"attr.durationMillis","gt":100},
      "project":"t.$date,attr.durationMillis,msg",
-     "jq":"select((.attr.durationMillis//0)>100)","method":"project+jq"}
+     "method":"count"}
    Example (vLLM):  {"label":"Memory or OOM warnings",
      "match":{"all":[{"field":"level","eq":"WARNING"},
                      {"any":[{"field":"message","contains":"memory"},
@@ -143,13 +141,14 @@ Write the result as valid JSON to /tmp/log-shape-class.json with EXACTLY this sh
     "schema": {"timestamp":"<TS>","severity":"<SEV>","logger":"<LOGGER>","message":"<MSG>","payload":["<leaf>",...]},
     "taxonomy": [{"category":"<name>","description":"<one line>","priority":"<high|medium|low>","why":"<one line>"}],
     "assignments": [{"id":"c1","category":"<name>"}],
-    "query_plan": [{"label":"<...>","match":{<filter>},"project":"<...>","grep":"<...>","jq":"<...>","method":"<count|project+grep|project+jq|semantic>","category":"<name>","priority":"<high|medium|low>","stage":"<core|drill>"}]
+    "query_plan": [{"label":"<...>","match":{<filter>},"project":"<...>","grep":"<...>","method":"<count|project+grep|semantic>","category":"<name>","priority":"<high|medium|low>","stage":"<core|drill>"}]
   }
 Rules:
 - `assignments` must contain EVERY cluster id above exactly once, with ONLY ids — never log shape text; the member templates are re-attached mechanically.
 - Omit "schema" for GROWTH (the base entry already has it); include it for NEW.
 - Use only the keys each query_plan entry needs (omit null/empty keys).
-- Write every filter as `match`; never add a "kql" key.
+- Write every filter as `match`; never add a "kql" key, and never a "jq" program
+  (a per-record filter is a numeric `match` comparison: `{"field":"...","gt":N}`).
 - Use the discovered field names verbatim in `match` and `project`.
 - Every taxonomy entry has "priority" and "why"; every query_plan entry has "category" (a taxonomy category), "priority", and "stage".
 - [Only with field rules] The taxonomy includes every field-rule category.
@@ -162,10 +161,14 @@ Validation needs no message to the user unless it fails. The insight pass needs 
 The subagent never writes KQL: each query_plan entry carries a `match` filter that `clp kql` renders, so an unquoted wildcard or an ungrouped AND/OR cannot reach the cache. `clp shape-cache merge` and `put` refuse an entry without a valid `match` or ranking too, as a backstop; `put` also checks every entry's category against the merged taxonomy.
 
 ```bash
-# 1. Shape-validate — the fields must be ARRAYS (a bare `.assignments` test
-#    passes for a scalar, which would poison the cache entry):
-jq -e '(.taxonomy|type=="array") and (.assignments|type=="array") and (.query_plan|type=="array")' \
-  /tmp/log-shape-class.json >/dev/null || exit 1
+# 1. Shape-validate — the fields must be ARRAYS (a bare truth test passes for a
+#    scalar, which would poison the cache entry):
+python3 - <<'PY' || exit 1
+import json
+classified = json.load(open("/tmp/log-shape-class.json"))
+lists = ("taxonomy", "assignments", "query_plan")
+raise SystemExit(0 if all(isinstance(classified.get(k), list) for k in lists) else 1)
+PY
 
 # 2. Plan-validate -- every query_plan entry needs a valid `match` filter,
 #    method, and ranking (category, priority, stage), and every taxonomy

@@ -27,7 +27,7 @@ Record the following before the run:
 
 ## 2. Prepare the tools
 
-Run commands from the repository root in Bash. The [plugin README](plugins/clp/README.md) describes installation and binary resolution; [local testing](LOCAL_TESTING.md) covers smoke checks. The walkthrough requires Bash, Python 3, `jq`, `rg` (ripgrep), and a `clp-s` build supporting semantic search and the shapes API (`clp-core` 0.13+ for the dictionary path). Record the exact build used rather than relying only on that minimum version.
+Run commands from the repository root in Bash. The [plugin README](plugins/clp/README.md) describes installation and binary resolution; [local testing](LOCAL_TESTING.md) covers smoke checks. The walkthrough requires Bash, Python 3, `rg` (ripgrep), and a `clp-s` build supporting semantic search and the shapes API (`clp-core` 0.13+ for the dictionary path). Record the exact build used rather than relying only on that minimum version.
 
 Configure a running embedding endpoint explicitly. The example below uses localhost and assumes a compatible service is already running there; these commands do not start it. Without an explicit endpoint, `clp search` can try remote services. Account separately for content sent to the agent model during classification and investigation.
 
@@ -108,9 +108,16 @@ The question and retrieval settings are starting examples, not validated choices
 For a transparent keyword baseline over exactly the retrieved scope, this example tests `timeout`, `slow`, and `latency` in the message field:
 
 ```bash
-rg '^\{' "$DEMO_RUN/scoped-records.stdout" \
-  | jq -c 'select((.message // "") | test("timeout|slow|latency"; "i"))' \
-  > "$DEMO_RUN/keyword-results.ndjson"
+python3 - "$DEMO_RUN/scoped-records.stdout" "$DEMO_RUN/keyword-results.ndjson" <<'PY'
+import json, re, sys
+pattern = re.compile("timeout|slow|latency", re.I)
+with open(sys.argv[2], "w", encoding="utf-8") as out:
+    for line in open(sys.argv[1]):
+        if line.startswith("{"):
+            message = json.loads(line).get("message") or ""
+            if pattern.search(message):
+                out.write(line)
+PY
 
 rg '^\{' "$DEMO_RUN/semantic-results.stdout" \
   > "$DEMO_RUN/semantic-results.ndjson"

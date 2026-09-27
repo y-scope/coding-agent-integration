@@ -26,8 +26,7 @@ jobs:
       - name: Read plugin metadata
         id: meta
         run: |
-          PLUGIN_NAME=$(jq -r .name plugins/clp/.claude-plugin/plugin.json)
-          PLUGIN_VERSION=$(jq -r .version plugins/clp/.claude-plugin/plugin.json)
+          read -r PLUGIN_NAME PLUGIN_VERSION < <(python3 -c 'import json; d = json.load(open("plugins/clp/.claude-plugin/plugin.json")); print(d["name"], d["version"])')
           echo "plugin_name=${PLUGIN_NAME}" >> "$GITHUB_OUTPUT"
           echo "plugin_version=${PLUGIN_VERSION}" >> "$GITHUB_OUTPUT"
           if [[ "${PLUGIN_VERSION}" != "${VERSION}" ]]; then

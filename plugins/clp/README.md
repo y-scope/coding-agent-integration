@@ -329,7 +329,8 @@ Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T`
 # The legacy `stats.logtypes` spelling is rejected: shapes-API binaries silently return nothing for it.
 ./plugins/clp/bin/clp search /tmp/archive 'stats.log_shapes' 2>/dev/null \
   | ./plugins/clp/bin/clp shape-cache normalize > /tmp/log-shapes.ndjson
-jq -s 'length' /tmp/log-shapes.ndjson
+python3 -c 'import sys; print(sum(1 for line in open(sys.argv[1]) if line.strip()))' \
+  /tmp/log-shapes.ndjson
 ```
 
 This reads the dictionary rather than every record, so it is cheap regardless of archive size: a run with millions of records typically has tens to a few hundred templates. Every subsequent query is derived from a template that is known to exist, instead of guessing keywords that may not appear at all.

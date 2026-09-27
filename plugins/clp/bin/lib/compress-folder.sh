@@ -9,6 +9,9 @@ CLP_PLUGIN_BIN_DIR="$(cd -- "${CLP_PLUGIN_LIB_DIR}/.." && pwd -P)"
 # shellcheck disable=SC1091
 source "${CLP_PLUGIN_LIB_DIR}/clp-common.sh"
 
+# Every JSON document this run writes is built by a python helper.
+require_python3 || exit $?
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -722,19 +725,20 @@ comp_pid=0
 read_bytes=0
 
 write_compress_status() {
-  local state="$1" exit_code="${2:-null}"
-  jq -n \
-    --arg state "$state" \
-    --argjson pid "$comp_pid" \
-    --argjson startedAt "$compress_started" \
-    --argjson updatedAt "$(date +%s)" \
-    --argjson inputBytes "$total_bytes" \
-    --argjson readBytes "$read_bytes" \
-    --argjson archiveBytes "$(directory_file_bytes "$output_dir")" \
-    --argjson exitCode "$exit_code" \
-    '{state: $state, pid: $pid, startedAt: $startedAt, updatedAt: $updatedAt,
-      inputBytes: $inputBytes, readBytes: $readBytes, archiveBytes: $archiveBytes,
-      exitCode: $exitCode}' > "$status_file.tmp" && mv "$status_file.tmp" "$status_file"
+  local state="$1" exit_code="${2:-}"
+  local args=(
+    status-write
+    --out "$status_file"
+    --state "$state"
+    --pid "$comp_pid"
+    --started-at "$compress_started"
+    --updated-at "$(date +%s)"
+    --input-bytes "$total_bytes"
+    --read-bytes "$read_bytes"
+    --archive-bytes "$(directory_file_bytes "$output_dir")"
+  )
+  [[ -z "$exit_code" ]] || args+=(--exit-code "$exit_code")
+  python3 "${CLP_PLUGIN_LIB_DIR}/archive_json.py" "${args[@]}"
 }
 
 "${cmd[@]}" > "$stats_out" &
@@ -796,74 +800,51 @@ reduction_bytes=$((total_bytes - archive_bytes))
 reduction_percent="$(awk -v raw="$total_bytes" -v reduction="$reduction_bytes" 'BEGIN { if (raw > 0) printf "%.2f%%", reduction * 100 / raw; else printf "n/a" }')"
 clp_archive_dir="$(resolve_clp_s_archive_dir "$output_dir" 2>/dev/null || true)"
 
-# Build extensions JSON array
-paths_json="$(printf '%s\n' "${real_paths[@]}" | jq -R . | jq -s .)"
+# Build the metadata document. The flags carry values, not JSON: the helper owns
+# the document's shape and its per-field types.
 source_type="$archive_prefix"
-if [[ "$has_folder" -eq 0 ]]; then
-  extensions_json='null'
-elif [[ "$all_files" -eq 1 ]]; then
-  extensions_json='"*"'
-else
-  extensions_json="$(printf '%s\n' "${ext_array[@]}" | jq -R . | jq -s .)"
-fi
-
 metadata_file="$(clp_archive_metadata_file "$output_dir")"
-command_json="$(printf '%s\n' "${cmd[@]}" | jq -R . | jq -s .)"
-jq -n \
-  --arg schemaVersion "1" \
-  --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --arg plugin "yscope-clp" \
-  --arg sourceType "$source_type" \
-  --argjson sourcePaths "$paths_json" \
-  --arg parser "$parser_file" \
-  --arg sourcePath "$input_folder" \
-  --arg sourceName "$folder_name" \
-  --argjson sourceRecursive "$([[ "$has_folder" -eq 1 ]] && echo "$recursive" || echo null)" \
-  --argjson sourceExtensions "$extensions_json" \
-  --argjson sourceFileCount "$file_count" \
-  --arg archiveRoot "${resolved_archives_root:-}" \
-  --arg archiveRootSource "${archives_root_source:-output-dir}" \
-  --arg archiveDir "$output_dir" \
-  --arg clpArchiveDir "$clp_archive_dir" \
-  --arg timestampKey "${timestamp_key:-}" \
-  --argjson timeRange "$time_range_json" \
-  --argjson inputBytes "$total_bytes" \
-  --argjson archiveBytes "$archive_bytes" \
-  --argjson reductionBytes "$reduction_bytes" \
-  --arg compressionRatio "$compression_ratio" \
-  --arg reductionPercent "$reduction_percent" \
-  --argjson command "$command_json" \
-  --argjson structurizeFlag "$structurize" \
-  '{
-    schemaVersion: ($schemaVersion | tonumber),
-    createdAt: $createdAt,
-    plugin: $plugin,
-    source: {
-      type: $sourceType,
-      path: $sourcePath,
-      name: $sourceName,
-      recursive: $sourceRecursive,
-      extensions: $sourceExtensions,
-      paths: $sourcePaths,
-      fileCount: $sourceFileCount
-    },
-    archiveRoot: (if $archiveRoot == "" then null else $archiveRoot end),
-    archiveRootSource: $archiveRootSource,
-    archiveDir: $archiveDir,
-    clpArchiveDir: (if $clpArchiveDir == "" then null else $clpArchiveDir end),
-    timestampKey: (if $timestampKey == "" then null else $timestampKey end),
-    timeRange: $timeRange,
-    structurize: ($structurizeFlag == 1),
-    parser: (if $parser == "" then null else $parser end),
-    compression: {
-      rawBytes: $inputBytes,
-      archiveBytes: $archiveBytes,
-      ratio: $compressionRatio,
-      reductionBytes: $reductionBytes,
-      reductionPercent: $reductionPercent
-    },
-    command: $command
-  }' > "$metadata_file"
+metadata_args=(
+  folder-metadata
+  --out "$metadata_file"
+  --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  --source-type "$source_type"
+  --source-path "$input_folder"
+  --source-name "$folder_name"
+  --source-file-count "$file_count"
+  --archive-root "${resolved_archives_root:-}"
+  --archive-root-source "${archives_root_source:-output-dir}"
+  --archive-dir "$output_dir"
+  --clp-archive-dir "$clp_archive_dir"
+  --timestamp-key "${timestamp_key:-}"
+  --time-range "$time_range_json"
+  --input-bytes "$total_bytes"
+  --archive-bytes "$archive_bytes"
+  --reduction-bytes "$reduction_bytes"
+  --compression-ratio "$compression_ratio"
+  --reduction-percent "$reduction_percent"
+  --parser "$parser_file"
+)
+if [[ "$has_folder" -eq 1 ]]; then
+  metadata_args+=(--source-recursive "$recursive")
+  if [[ "$all_files" -eq 1 ]]; then
+    metadata_args+=(--source-extensions-all)
+  else
+    for ext in "${ext_array[@]}"; do
+      # `--flag=value`: an extension or an argv element can start with a dash.
+      metadata_args+=(--source-extension="$ext")
+    done
+  fi
+fi
+for path in "${real_paths[@]}"; do
+  metadata_args+=(--path="$path")
+done
+for arg in "${cmd[@]}"; do
+  metadata_args+=(--command="$arg")
+done
+[[ "$structurize" -eq 0 ]] || metadata_args+=(--structurize 1)
+
+python3 "${CLP_PLUGIN_LIB_DIR}/archive_json.py" "${metadata_args[@]}"
 
 echo "Raw input bytes: $total_bytes"
 echo "Archive bytes: $archive_bytes"
