@@ -112,9 +112,11 @@ Rules:
   domain knowledge. The definition, the rules and the two cases that look
   measured but are not (a category, a score) are in
   references/evidence-tiers.md — read it and follow it; do not paraphrase it.
-- Close the report with the checks: the headline figures and the one command
-  that reproduces each, copied from the facts file's own verification section.
-  Anyone doubting a number must be able to run it, not reconstruct it.
+- Close the report with the checks, in the form DEPTH calls for: the short form
+  ends with one line pointing at the facts file, where every headline figure has
+  the one command that reproduces it; the thorough form copies those figures and
+  commands in itself, so anyone doubting a number can run it rather than
+  reconstruct it. Do not expand the short form into the thorough one.
 - Never quote a currency figure, even if asked what the session cost. Cost is in
   tokens: the log's totalCostUSD comes from an assumed unit price, not from what
   was billed, and is not always refreshed. Say that converting needs the
@@ -158,6 +160,8 @@ Write the file. Return only its path and a three-line summary.
 Two forms. Write the short one unless DEPTH says the user asked for a thorough report. Both carry the evidence tiers and each derivation's trap; `report-style.md` governs how either one reads.
 
 ### Short form — the default
+
+Exactly these sections, in this order. There is no `## Checks` section and no query log in the short form: a reader who wants every figure with its query is asking for the thorough form, and a writer who adds them anyway has turned a short report into a long one.
 
 ```markdown
 # Session <name> — <span>

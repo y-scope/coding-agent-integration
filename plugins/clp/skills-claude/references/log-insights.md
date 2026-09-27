@@ -296,7 +296,9 @@ Rules:
 Write ONLY the Markdown Log Insights Report to
 /tmp/clp-insights-report.md (Write tool), then reply DONE and nothing else.
 
-If DEPTH is short (the default), the report has these sections:
+If DEPTH is short (the default), the report has these sections and no others --
+no Checks section and no Query Log, which belong to the thorough form: a writer
+who adds them has turned a short report into a long one.
 1. Summary -- what these logs appear to be, with the evidence that identified
    them ("unidentified" where it could not be named), then total records, the
    severity counts, the archive span and the top logger/component.
