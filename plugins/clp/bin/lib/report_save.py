@@ -342,7 +342,6 @@ nav a { font-size: 13px; color: var(--ink-2); text-decoration: none; background:
 nav a:hover, nav a:focus-visible { color: var(--ink); border-color: var(--muted); }
 article { display: grid; gap: 14px; min-width: 0; }
 article > * { margin: 0; min-width: 0; }
-p, li { max-width: 78ch; }
 ul, ol { padding-left: 22px; display: grid; gap: 4px; }
 li > ul, li > ol { margin-top: 4px; }
 li > p { margin: 0; }
