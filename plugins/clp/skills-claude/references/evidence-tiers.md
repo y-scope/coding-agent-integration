@@ -27,11 +27,19 @@ The first two are verifiable and must be. The last two are arguments and must be
 
 **An inference names what would settle it.** A causal claim that cannot be tested against these records should say so, and say what other evidence would decide it.
 
-## Two things that look measured and are not
+## Three things that look measured and may not be
 
 **A category is classification output, not data.** In the insights pipeline a model groups templates into categories and ranks them; in the trajectory pipeline the seven categories are a fixed design choice. Either way the *name* and the *ranking* are judgement, while the *record counts within* a category are measured. Report them that way: the count is checkable, the grouping is a claim about what the records mean. A category table presented as though the whole thing were counted is the most easily missed violation of these tiers.
 
 **A score is a policy mapping, not a measurement.** `clp session score` maps a derived value onto 0–10 through a ladder in the scale file. The value is checkable; the score is only as good as the threshold someone chose, which is why each axis carries a `basis` and why the raw value is always shown beside the score. Never report a score without its value, and never call a score a measurement.
+
+**A value can be a placeholder.** A source that does not measure something often writes a fixed value into the field instead of leaving it out. The value is then recorded faithfully, and it still says nothing about what happened. Be suspicious when a field that should vary does not: it is 0 on every record, or empty, or one round number such as 4096 or 1000, or the same across hundreds of records when each record describes different work. A duration of exactly 0 or a timestamp that never advances fits the same pattern. So does a count that is exactly the configured limit. There is often a reason nobody reading the logs knows, like a provider or proxy that does not report the field, and the user may know it.
+
+- **Treat it as a caveat, not a finding.** Quote it as logged, next to one sentence saying why it may not be real, and build no conclusion on it. A derived figure resting on it inherits the doubt, and so does a score.
+- **Ask when it matters.** If it would change the headline, a recommended focus or a score, ask the user whether the field is really measured by that source. Give the background in the question: which field, how many records, the value, and why a source might write that. Do not ask about a suspicious value that changes nothing.
+- **Never settle it yourself.** Without an answer it stays a caveat. A guess in either direction is worse: calling it real reports a problem the session may not have, and calling it a placeholder throws away a real measurement.
+
+The number is exactly what the records say. Whether it is a measurement is a separate claim, and the user is often the only one who can settle it.
 
 ## Where the tier has to appear
 
