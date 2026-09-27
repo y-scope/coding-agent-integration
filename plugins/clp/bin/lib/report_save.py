@@ -1,7 +1,7 @@
 """
-clp report save - save a finished report where the user asked, as Markdown,
-HTML, PDF, or a page to publish on claude.ai (the last step of both the
-log-insights and claude-code-trajectory skills).
+clp report save: save a finished report where the user asked, as Markdown,
+HTML, PDF, or a page to publish on claude.ai. It is the last step of the
+analyze-logs skill on both of its routes.
 
 The report writer always writes Markdown to /tmp/clp-insights-report.md,
 and the report check reads that file, so the user's choice of place and format
@@ -21,7 +21,8 @@ and runs this afterwards.
                   each format's own. "~" is expanded; missing parent
                   directories are created. Default: the current directory.
   --name N        The <name> part of a default file name (default: taken from
-                  the report's title, e.g. "cockroach.node1.log").
+                  the report's title, e.g. "cockroach.node1.log" or
+                  "session-61e8bbf7").
   --facts F       The facts file whose "Time span" line gives the logs' date
                   range for the header (default: /tmp/clp-insights-facts.md).
                   With no file, or a span that is unavailable, the header
@@ -394,7 +395,7 @@ OPEN_TARGET_SCRIPT = (
 
 def build_page(markdown, stamps, fragment=False, fonts=True):
     lines = markdown.splitlines()
-    title = "Log Insights Report"
+    title = "Log report"
     if lines and HEADING.match(lines[0]) and HEADING.match(lines[0]).group(1) == "#":
         title = HEADING.match(lines[0]).group(2)
         lines = lines[1:]
@@ -404,17 +405,17 @@ def build_page(markdown, stamps, fragment=False, fonts=True):
     if len(toc) > 2:
         nav = '<nav aria-label="Sections">' + "".join(
             f'<a href="#{hid}">{re.sub(r"<[^>]+>", "", text)}</a>' for hid, text in toc) + "</nav>"
-    page_title = "Log Insights Report"
+    # "Log insights: cockroach.node1.log" names its subject after the colon; a
+    # title with no colon, such as a session report's, is its own page title.
     subject = title.split(":", 1)[1].strip() if ":" in title else ""
-    if subject:
-        page_title = f"{subject} log insights"
+    page_title = f"{subject} log insights" if subject else re.sub(r"[*`_]", "", title)
     content = (
-        f'<div class="page"><header><div class="eyebrow">CLP · log-insights</div>'
+        f'<div class="page"><header><div class="eyebrow">CLP log analysis</div>'
         f"<h1>{inline(title)}</h1>"
         '<div class="meta">' + "".join(f"<span>{html.escape(k)}: {html.escape(v)}</span>" for k, v in stamps) + "</div>"
         f"{nav}</header><article>{body}</article>"
-        f"<footer>Written by the CLP plugin's log-insights skill from queries against the archive; "
-        f"the Query Log lists every one.</footer></div>"
+        f"<footer>Written by the CLP plugin from the logs. The Reference section at the end "
+        f"shows how to check each figure.</footer></div>"
     )
     head = f"<title>{html.escape(page_title)}</title>" + (FONTS if fonts else "") + f"<style>{CSS}</style>"
     content += OPEN_TARGET_SCRIPT
@@ -540,7 +541,9 @@ def default_name(markdown, name):
         first = markdown.lstrip().splitlines()[0] if markdown.strip() else ""
         m = HEADING.match(first)
         title = m.group(2) if m else ""
-        name = title.split(":", 1)[1] if ":" in title else ""
+        # "Log insights: cockroach.node1.log" names its subject after the colon.
+        # A session report's "Session 61e8bbf7, <span>" names it before the comma.
+        name = title.split(":", 1)[1] if ":" in title else title.split(",", 1)[0].lower()
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip()).strip("-.") or "report"
     return f"log-insights-{name}-{datetime.datetime.now():%Y%m%d-%H%M}"
 

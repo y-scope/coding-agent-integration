@@ -101,7 +101,7 @@ Rules:
 - Before you save the file, run the sound pass over your draft: read `writing-guide/humanizer.md` (the 25 patterns, vendored verbatim) and `writing-guide/sound.md` (what they mean for a report), then follow humanizer's own four-step process, including reading the draft aloud and writing the final version by stating each point naturally instead of patching flagged phrases. This step is not optional and it is where a draft stops reading as generated. Vary sentence length; do not make every sentence the same size. The three that bite hardest in a report: a heading restated by the sentence under it, a claim carrying its denominator, its trap and its citation in one sentence, and `rather than` / `, not` / `instead of` kept where the contrast corrects nothing the reader believes.
 - Every figure must appear in the facts file. You may not compute, estimate or infer a number that is not there. No arithmetic of any kind, with one exception that rule 8.2 of the writing guide defines: you may round a ratio to one decimal place for the body, and only for the body, leaving the exact value in its reference entry. Counts are never rounded.
 - Mark the arguments, not the facts. An inference or a piece of domain knowledge says so where it appears, in words — "(inference)", "which suggests", "this is a reading of the records". A measured or derived claim carries no marker in the body: its link into the reference section is the offer to check it, and its entry states which of the two it is. The four tiers, the rules, and the two cases that look measured but are not (a category, a score) are in references/evidence-tiers.md — read it and follow it; do not paraphrase it. Rules 2.10 and 8.10 of the writing guide govern how the marker is written.
-- Close the report with `## Reference — checking each figure`: one entry per claim in the body, `### R3 Workflow instance spans`, opening with its tier and carrying the figure and the one command that reproduces it — a derived figure names its inputs and formula instead. Link every claim in the body into its entry by wrapping the figure the claim rests on, `stayed open [357.4 hours](#r1-wall-clock-span)`, so a reader chasing a number reaches for the number; never trail the sentence with a bracketed label. One link per claim, not one per number. Wrap the entries in a `<details>` block whose `<summary>` says what opening it is for, with both tags on lines of their own, so the section is collapsed until a reader opens it or follows a claim's link into it. Entry headings use letters, digits and single spaces only, because GitHub and the plugin's HTML saver strip punctuation differently and a dash or a colon breaks the link in one of them.
+- Close the report with `## Reference`: one entry per claim in the body, `### R3 Workflow instance spans`, opening with its tier and carrying the figure and the one command that reproduces it — a derived figure names its inputs and formula instead. Link every claim in the body into its entry by wrapping the figure the claim rests on, `stayed open [357.4 hours](#r1-wall-clock-span)`, so a reader chasing a number reaches for the number; never trail the sentence with a bracketed label. One link per claim, not one per number. Wrap the entries in a `<details>` block whose `<summary>` says what opening it is for, with both tags on lines of their own, so the section is collapsed until a reader opens it or follows a claim's link into it. Entry headings use letters, digits and single spaces only, because GitHub and the plugin's HTML saver strip punctuation differently and a dash or a colon breaks the link in one of them.
 - Never quote a currency figure, even if asked what the session cost. Cost is in tokens: the log's totalCostUSD comes from an assumed unit price, not from what was billed, and is not always refreshed. Say that converting needs the reader's own rates.
 - Never add up the per-kind token column. One API response can be recorded in several logs, because a fork inherits its parent's transcript, so the bundle total counts each response once and is smaller than those rows summed. Quote the bundle total for the session and a per-kind row for one agent. The facts file states the difference and why; if a reader adds the column up and gets more, that gap is the duplication and not an error.
 - Lead with the focus. The other categories follow in the fixed order: reliability, cost, time, outcomes, harness faults, human loop, rework.
@@ -127,7 +127,7 @@ Two forms. Write the short one unless DEPTH says the user asked for a thorough r
 Exactly these sections, in this order. The reference section is the last of them and the only place a command, a query or a field name may appear; there is no `## Checks` section and no query log in the short form — a reader who wants the whole audit trail is asking for the thorough form, and a writer who adds sections anyway has turned a short report into a long one.
 
 ```markdown
-# Session <name> — <span>
+# Session <name>, <span>
 
 <Three or four short sentences, strongest finding first, one finding per sentence. Do not stack what the session did, how long it ran and what it cost into one sentence. The link wraps the figure: `stayed open [357.4 hours](#r1-wall-clock-span)`.>
 
@@ -154,10 +154,10 @@ Exactly these sections, in this order. The reference section is the last of them
 ## What the logs cannot tell you
 <Three or four lines: quality of the work, money as opposed to tokens, and anything needing external data. Add any caveat the facts file raised about its own figures — notably, when many token-bearing records carry no `message_id` the bundle total may still double-count, and the facts file says how many there were.>
 
-## Reference — checking each figure
+## Reference
 
 <details>
-<summary>Open to check a figure, or follow a claim's link above; each entry carries the one command that reproduces it.</summary>
+<summary>How to check each figure. A figure's link in the report opens its entry here.</summary>
 
 ### R1 Attempts by status
 <Opens with the tier — measured — then 18 of 18 ended ok, then the one command that reproduces it, from the facts file's verification section, indented as a code block. A derived figure names its inputs and formula here instead of, or beside, a command. The tier lives here and not in the body, because this is where someone reproducing the number needs it.>
@@ -175,7 +175,7 @@ Exactly these sections, in this order. The reference section is the last of them
 The same report with every figure argued in full: the seven categories as their own sections in the fixed order (`## Reliability` … `## Rework`, each with the headline figure, its denominator, what it means and one example id), then
 
 ```markdown
-## Reference — checking each figure
+## Reference
 <The same reference section the short form ends with, collapsed the same way and linked from the body the same way: one heading per claim, `### R3 Workflow instance spans`, carrying the headline figure, the one command that reproduces it, and a derived figure's inputs and formula. Measured figures name their query; derived figures name what they are computed from. This section is what makes the rest arguable rather than trusted.>
 
 ## Query log

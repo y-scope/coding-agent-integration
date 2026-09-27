@@ -120,7 +120,7 @@ Rules of thumb: pick the rarest distinctive static text (never a variable or a s
 
 ## When to still use semantic search
 
-With a log shape baseline, semantic search is not the default exploratory tool — the baseline already tells you what exists. The insight pass still runs one mandatory scoped semantic cross-check (reported in the "Semantic Search Coverage" section, with empty/no-hit or meaningless results dropped). Beyond that mandatory pass, use `semantic()` only for:
+With a log shape baseline, semantic search is not the default exploratory tool — the baseline already tells you what exists. The insight pass still runs one mandatory scoped semantic cross-check (reported in the "Semantic search coverage" section, with empty/no-hit or meaningless results dropped). Beyond that mandatory pass, use `semantic()` only for:
 
 | Situation | Why |
 | --- | --- |

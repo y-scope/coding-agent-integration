@@ -1,13 +1,13 @@
 {
   "scale_version": "1.3.1",
   "name": "CLP default session scale",
-  "notes": "These are defaults, not verdicts. Every threshold here is a judgement about what a raw measurement is worth, and a customer is expected to edit them: copy this file, change the ladders, and point the skill at the copy. clp session facts never reads these ladders to score anything - it emits raw values and the components behind them, and an agent applies this file, so the judgement stays visible and overridable. Report the four group means separately and never average them into one composite: the groups have different owners, and a single number hides exactly the signal each owner needs. An axis the script reports as n/a has not been measured, so leave it out of its group's mean and say how many axes the mean rests on - never score it zero. Axes marked cohort_relative mean nothing as an absolute and need a cohort key (the same kind of work, the same repository, a comparable span) before any trend drawn from them is real. A3 and D3 are the same measurement on purpose: a cache miss is both a platform fault and a cost lever, and those have different owners. Every axis carries a `basis` saying what its ladder rests on - definitional, mechanism, observed or judgement - and a `rationale` saying why the rungs fall where they do. Most are `judgement`: a defensible starting point with no measurement behind it, which is exactly where to spend calibration effort. See `calibration` for how to replace one with your own numbers. An axis may also carry `gated_by`, naming a cohort key that has to hold a particular value before the axis means anything: C4 autonomy is scored only for a session that was meant to run unattended, because in a supervised session the same number is a design choice and not a fault. A gated-out axis is left unscored with its reason, exactly like one that could not be measured, so its group's mean rests on fewer axes rather than being dragged down. An axis may also carry `min_denominator`: a rate computed over a handful of observations is noise whatever ladder reads it, so below that count the axis is left unscored rather than rated on a sample too small to mean anything. It is set only where the divisor is a count of things that can plausibly be small; a rate over hundreds of millions of tokens needs no floor. Every cost axis here is token-denominated on purpose. The session log carries a `totalCostUSD` field and this scale deliberately ignores it: it is a derived estimate computed from some unit cost, which is not necessarily what was paid, and it is not always updated, so it goes stale. Tokens are the measurement; turning them into money needs a price list, a plan and a provider, so that conversion belongs to the consumer and their own rates. Do not add a currency axis.",
+  "notes": "These are defaults, and a customer is expected to change them. Every threshold is a judgement about what a raw measurement is worth: copy this file, edit the ladders, and point the skill at the copy. clp session facts never reads these ladders. It emits raw values and their components, and an agent applies this file, so the judgement stays where anyone can see and override it. Report the four group means separately and never average them into one composite. The groups have different owners, and a single number hides the signal each owner needs. An axis the script reports as n/a was not measured: leave it out of its group's mean, say how many axes the mean rests on, and never score it zero. Axes marked cohort_relative mean nothing as an absolute, and a trend drawn from them needs a cohort key first: the same kind of work, the same repository, a comparable span. A3 and D3 are the same measurement because a cache miss is both a platform fault and a cost lever, and those have different owners. Every axis has a `basis` saying what its ladder rests on (definitional, mechanism, observed or judgement) and a `rationale` for where the rungs fall. Most are `judgement`, a defensible starting point with nothing measured behind it, and those are where calibration pays off first; `calibration` says how. An axis may carry `gated_by`, a cohort key that must hold a given value before the axis means anything. C4 autonomy is scored only for a session meant to run unattended, since in a supervised session the same number is a design choice. A gated-out axis is left unscored with its reason, like one that could not be measured, so its group's mean rests on fewer axes instead of being dragged down. An axis may also carry `min_denominator`. A rate over a handful of observations is noise whatever ladder reads it, so below that count the axis is left unscored. The floor is set only where the divisor is a count of things that can plausibly be small; a rate over hundreds of millions of tokens needs none. Every cost axis is in tokens. The session log has a `totalCostUSD` field and this scale ignores it: it is an estimate from some unit cost, not necessarily what was paid, and it is not always updated. Converting tokens to money needs a price list, a plan and a provider, so the consumer does that with their own rates. Do not add a currency axis.",
   "calibration": {
-    "how": "Run clp bundle-review DIR --build --json over your own sessions. Its RATE lines give each signal's median and 90th percentile across the sessions active enough to rate (at least 5), and --trend week|day adds per-period values, each with its volume, its session count and a 95% interval for rates. Set a rung where your own fleet actually sits rather than where this file guesses.",
-    "caution": "A percentile from one or two sessions describes those sessions, not your fleet, and a fleet trend can be one large session - read the session count beside it. Keep a judgement threshold until you have enough volume to beat it.",
-    "cohort": "Calibrate within a cohort - task type, repository, duration band. A throughput or cost threshold taken from one kind of work does not transfer to another.",
-    "basis_to_revisit": "definitional and mechanism rungs follow from what the metric means or how billing works, so they rarely need moving. observed rungs should be re-cut as your sample grows past the one they cite. judgement rungs are guesses; move those first.",
-    "min_denominator": "clp session facts publishes each rate's denominator on its AXIS line, so you can see what a score rests on before you trust it. The floors here follow this project's own convention - clp bundle-review refuses to rate a signal on fewer than 5 sessions - scaled to the kind of thing each axis counts. Raise one if you find a score still swinging on noise."
+    "how": "Run clp bundle-review DIR --build --json over your own sessions. Its RATE lines give each signal's median and 90th percentile across the sessions active enough to rate (at least 5). --trend week|day adds per-period values, each with its volume, its session count and, for rates, a 95% interval. Put each rung where your own fleet sits.",
+    "caution": "A percentile from one or two sessions describes those sessions, not your fleet, and a fleet trend can be one large session. Read the session count beside it. Keep a judgement threshold until you have enough volume to beat it.",
+    "cohort": "Calibrate within a cohort: task type, repository, duration band. A throughput or cost threshold taken from one kind of work does not transfer to another.",
+    "basis_to_revisit": "Definitional and mechanism rungs follow from what the metric means or how billing works, so they rarely need moving. Re-cut observed rungs as your sample grows past the one they cite. Judgement rungs are guesses; move those first.",
+    "min_denominator": "clp session facts publishes each rate's denominator on its AXIS line, so you can see what a score rests on before trusting it. The floors follow this project's own convention, where clp bundle-review refuses to rate a signal on fewer than 5 sessions, scaled to what each axis counts. Raise one if a score still swings on noise."
   },
   "cohort_keys": {
     "supervision": {
@@ -35,7 +35,7 @@
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "definitional",
-      "rationale": "Pinned to 1.0, which is what \"everything that started, finished\" means; the top rungs sit just below it because one bad terminal state in a thousand attempts is not a platform failure. The low rungs fall away steeply because below 0.5 the majority of the work that started produced nothing. Not rated below 20 attempts and agents: with a handful, one bad terminal state moves the score by several rungs.",
+      "rationale": "Pinned to 1.0, which is what \"everything that started, finished\" means. The top rungs sit just below it, because one bad terminal state in a thousand attempts is not a platform failure. The low rungs fall away steeply: below 0.5, most of the work that started produced nothing. Not rated below 20 attempts and agents, where one bad terminal state moves the score by several rungs.",
       "min_denominator": 20,
       "anchors": [
         {"value": 1.0, "means": "every attempt and agent reached a good terminal state"},
@@ -65,7 +65,7 @@
       "direction": "lower_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point: no provider publishes an error budget in these terms, so the rungs are spaced by orders of magnitude rather than measured. Replace them with your provider's own SLO, or with the p90 clp bundle-review reports for failed agents across your own sessions. Not rated below 200 model responses: per-thousand on a few dozen calls is a rate the session never really measured.",
+      "rationale": "No provider publishes an error budget in these terms, so the rungs are spaced by orders of magnitude with nothing measured behind them. Replace them with your provider's own SLO, or with the p90 that clp bundle-review reports for failed agents across your sessions. Not rated below 200 model responses: a per-thousand rate on a few dozen calls was never really measured.",
       "min_denominator": 200,
       "anchors": [
         {"value": 0.0, "means": "no API or timeout failure anywhere in the session"}
@@ -93,7 +93,7 @@
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "mechanism",
-      "rationale": "A cache read is billed at a fraction of a fresh input token, so on a workload where input dominates the bill the hit rate maps almost linearly onto cost - which is why the rungs are evenly spaced in hit rate rather than clustered at one end. The 1 rung at 0.01 exists to separate a cache that is on but ineffective from one that is off entirely.",
+      "rationale": "A cache read is billed at a fraction of a fresh input token. On a workload where input dominates the bill, the hit rate therefore maps almost linearly onto cost, so the rungs are evenly spaced in hit rate. The 1 rung at 0.01 separates a cache that is on but ineffective from one that is off entirely.",
       "anchors": [
         {"value": 0.0, "means": "prompt caching is off or unsupported: every token of every context is billed as fresh input"},
         {"value": 0.9, "means": "a long conversation reusing its prefix on nearly every call"}
@@ -121,7 +121,7 @@
       "direction": "lower_is_better",
       "cohort_relative": false,
       "basis": "definitional",
-      "rationale": "A launch the runtime rejected for a syntax or config fault did no work and was avoidable by inspection, so the 10 rung is exactly 0 rather than a small tolerance. The rungs below only measure how often a caller shipped a script the runtime would not accept. Not rated below 20 launches: on three launches a single rejection reads as a 33% failure rate.",
+      "rationale": "A launch the runtime rejected for a syntax or config fault did no work and could have been caught by inspection, so the 10 rung is exactly 0 with no tolerance. The rungs below measure how often a caller shipped a script the runtime would not accept. Not rated below 20 launches: on three launches, one rejection reads as a 33% failure rate.",
       "min_denominator": 20,
       "anchors": [
         {"value": 0.0, "means": "every launch was accepted"}
@@ -149,7 +149,7 @@
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "definitional",
-      "rationale": "A reported status either matches what the attempts did or it does not, so the only defensible 10 is exactly 1.0. Every rung below counts how often a consumer trusting that status would have been misled about work that failed. Not rated below 10 instances, which is the real defect behind a harsh-looking ladder - on two instances one misreport is 50%, and that is noise rather than dishonesty. The ladder itself stays strict, because a runtime that misreports a status is misreporting it.",
+      "rationale": "A reported status either matches what the attempts did or it does not, so the only defensible 10 is exactly 1.0. Each rung below counts how often a consumer who trusted that status would have been misled about failed work. The ladder stays strict, because a runtime that misreports a status is misreporting it. The floor keeps it fair: it is not rated below 10 instances, since on two instances one misreport is 50%, and that is noise.",
       "min_denominator": 10,
       "anchors": [
         {"value": 1.0, "means": "every instance's reported status matches what its attempts did"}
@@ -177,7 +177,7 @@
       "direction": "lower_is_better",
       "cohort_relative": false,
       "basis": "observed",
-      "rationale": "Anchored to the one session measured end to end for this plugin (ed54042e: 945 errored results in 25,107 completed tool calls, 3.8%), which lands on the 6 rung. n=1, and that session is 85% Bash on a single repository, so the figure characterises that tool mix rather than a fleet; the spacing either side of it is judgement. Not rated below 50 completed tool calls, so a short session's one failed command is not a proficiency finding.",
+      "rationale": "Anchored to the one session measured end to end for this plugin (ed54042e: 945 errored results in 25,107 completed tool calls, 3.8%), which lands on the 6 rung. That is n=1, and the session was 85% Bash on a single repository, so the figure describes that tool mix and says little about a fleet. The spacing either side of it is judgement. Not rated below 50 completed tool calls, so one failed command in a short session is not a proficiency finding.",
       "min_denominator": 50,
       "anchors": [
         {"value": 0.0376, "means": "the one session measured end to end (ed54042e, n=1): 945 errored results in 25,107 completed tool calls"}
@@ -205,10 +205,10 @@
       "direction": "lower_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point pinned to the idea that most searching should go through a tool built for it rather than a shell. The rungs are unmeasured; a repository where no search tool is available should drop this axis rather than score badly on it. Not rated below 50 completed tool calls: a handful of calls says nothing about which tool the agent reaches for.",
+      "rationale": "Most searching should go through a tool built for it instead of a shell, and the ladder is pinned to that idea; the rungs themselves are unmeasured. In a repository where no search tool is available, drop this axis instead of scoring it. Not rated below 50 completed tool calls, since a handful says nothing about which tool the agent reaches for.",
       "min_denominator": 50,
       "anchors": [
-        {"value": 0.849, "means": "the one session measured (ed54042e, n=1): Bash was 84.9% of 25,107 calls and no dedicated search tool was used at all - the behaviour this axis exists to catch"}
+        {"value": 0.849, "means": "the one session measured (ed54042e, n=1): Bash was 84.9% of 25,107 calls and no dedicated search tool was used at all, which is the behaviour this axis looks for"}
       ],
       "ladder": [
         {"score": 10, "max": 0.2},
@@ -233,7 +233,7 @@
       "direction": "lower_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point: the ladder assumes a healthy run retries only a small minority of its attempts, so it is strict at the top and forgiving below 0.25. What would improve it is the median and p90 of stalled attempts across your own sessions, which clp bundle-review reports directly. Not rated below 20 attempts: with fewer, one retry dominates the rate.",
+      "rationale": "The ladder assumes a healthy run retries only a small minority of its attempts, so it is strict at the top and forgiving below 0.25. That is a guess. The median and p90 of stalled attempts across your own sessions would replace it, and clp bundle-review reports both directly. Not rated below 20 attempts, where one retry dominates the rate.",
       "min_denominator": 20,
       "ladder": [
         {"score": 10, "max": 0.02},
@@ -258,7 +258,7 @@
       "direction": "lower_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point, and so far untestable: clp session facts cannot count compactions from a catalog, so no value has ever been measured against this ladder. Treat every rung as provisional until the count exists.",
+      "rationale": "Untested so far. clp session facts cannot count compactions from a catalog, so no value has ever been measured against this ladder, and every rung is provisional until the count exists.",
       "ladder": [
         {"score": 10, "max": 0.0},
         {"score":  9, "max": 0.1},
@@ -282,7 +282,7 @@
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point pinned to the idea that more than half of fanned-out agent time ought to survive; above that the rungs are spaced evenly with nothing measured behind them. How much parallel work is discarded depends on how readily your orchestrator cancels, so calibrate from your own runs.",
+      "rationale": "Pinned to the idea that more than half of fanned-out agent time should survive. Above that the rungs are spaced evenly, with nothing measured behind them. How much parallel work gets discarded depends on how readily your orchestrator cancels, so calibrate from your own runs.",
       "ladder": [
         {"score": 10, "min": 0.95},
         {"score":  9, "min": 0.9},
@@ -306,7 +306,7 @@
       "direction": "higher_is_better",
       "cohort_relative": true,
       "basis": "judgement",
-      "rationale": "A starting point, and cohort-relative: artifacts per model-hour depends entirely on how large an artifact is in the work being done, so these rungs cannot be read as an absolute. Calibrate per cohort - a session stacking small PRs and one writing a subsystem are not on the same scale.",
+      "rationale": "Cohort-relative. Artifacts per model-hour depends on how large an artifact is in the work being done, so these rungs are a starting point and mean nothing as an absolute. Calibrate per cohort: a session stacking small PRs and one writing a subsystem are on different scales.",
       "ladder": [
         {"score": 10, "min": 8.0},
         {"score":  9, "min": 5.0},
@@ -325,12 +325,12 @@
       "id": "C2",
       "group": "C",
       "label": "delivery evidence",
-      "measures": "share of repository-confirmed commits carrying a sha the command itself printed - how well attributed the record of what shipped is, not how much shipped",
+      "measures": "share of repository-confirmed commits carrying a sha the command itself printed; it rates how well the record of what shipped is attributed, not how much shipped",
       "unit": "share",
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A low score means the record of what shipped is weakly attributed, never that less shipped: a commit matched by time and subject is attributed rather than proven, and it is a real commit either way. Printing a sha is the exception rather than the rule in ordinary git usage - a commit made inside a script, a batch or a rebase usually captures no output - so the rungs reward a high proven share (0.90 for nearly everything provable) while treating the ordinary 10-30% as the middle of the range instead of a failure. The rungs are an unmeasured starting point; raise them if your commits are made in a way that always prints a sha. Not rated below 10 repository-confirmed commits: on three commits, none of which printed a sha, the score would be zero on no evidence either way.",
+      "rationale": "A low score means the record of what shipped is weakly attributed. It never means less shipped: a commit matched by time and subject is still a real commit, only attributed instead of proven. Ordinary git usage rarely prints a sha, since a commit made inside a script, a batch or a rebase usually captures no output. So the rungs reward a high proven share (0.90 for nearly everything provable) and put the ordinary 10-30% in the middle of the range. The rungs are an unmeasured starting point; raise them if your commits are always made in a way that prints a sha. Not rated below 10 repository-confirmed commits: on three commits that printed no sha, the score would be zero on no evidence either way.",
       "min_denominator": 10,
       "anchors": [
         {"value": 1.0, "means": "every confirmed commit carries a sha its own command printed"},
@@ -359,7 +359,7 @@
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "definitional",
-      "rationale": "A failing assertion is a failing assertion, so the target is 1.0 and the top rungs cluster just below it. The gap between 0.999 and 0.99 is deliberately narrow because on a suite of thousands, one percent failing is a broken build and not a rough edge. Not rated below 20 assertions: a suite of three tells you nothing about a pass rate.",
+      "rationale": "Every failing assertion is a real failure, so the target is 1.0 and the top rungs cluster just below it. The gap between 0.999 and 0.99 is narrow because on a suite of thousands, one percent failing is a broken build. Not rated below 20 assertions, since a suite of three says nothing about a pass rate.",
       "min_denominator": 20,
       "anchors": [
         {"value": 1.0, "means": "every assertion with a recorded count passed"}
@@ -387,15 +387,15 @@
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "Scored only for a session that was meant to run unattended, where it says how far it actually got without a person. In a supervised or mixed session the same share is a design property rather than a fault, so the axis is skipped instead of marked down. The gate accounts for intent, not quality: the logs show what was delivered, never whether it was any good, so a high score here says only that the session did not wait - not that waiting would have been wrong. The rungs themselves are an unmeasured starting point.",
+      "rationale": "Scored only for a session meant to run unattended, where it shows how far the session got without a person. In a supervised or mixed session the same share is a design property, so the axis is skipped there. The gate is about intent. The logs show what was delivered but never whether it was any good, so a high score says only that the session did not wait, and not that waiting would have been wrong. The rungs are an unmeasured starting point.",
       "anchors": [
         {"value": 1.0, "means": "the session never waited on a person or on nothing"}
       ],
       "gated_by": {
         "cohort_key": "supervision",
         "score_when": ["autonomous"],
-        "skip_reason": "the session was not meant to run unattended, so waiting on a person is not a fault",
-        "undeclared_reason": "supervision mode was not declared, so it cannot be told whether waiting on a person was intended"
+        "skip_reason": "the session was not meant to run unattended, so waiting on a person is expected",
+        "undeclared_reason": "the supervision mode was not declared, so there is no way to tell whether waiting on a person was intended"
       },
       "ladder": [
         {"score": 10, "min": 0.95},
@@ -420,7 +420,7 @@
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point pinned to the idea that a unit which hit one bad attempt should usually still finish. The rungs are unmeasured; the median across your own sessions is the number to replace them with. Not rated below 10 units that hit a bad attempt, since recovery from one or two is chance.",
+      "rationale": "A unit that hit one bad attempt should usually still finish, and the ladder starts from that idea. The rungs are unmeasured; replace them with the median across your own sessions. Not rated below 10 units that hit a bad attempt, since recovering from one or two is chance.",
       "min_denominator": 10,
       "ladder": [
         {"score": 10, "min": 0.98},
@@ -445,7 +445,7 @@
       "direction": "lower_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point spaced by doubling, because token cost per artifact varies between kinds of work by orders of magnitude rather than by percentages. It is effectively cohort-bound even though only C1 carries the flag, so calibrate it per task type before comparing sessions. Not rated below 5 confirmed artifacts, following this project's own floor for rating a signal; cost per artifact on a single artifact is one draw, not a rate.",
+      "rationale": "Spaced by doubling, because token cost per artifact varies between kinds of work by orders of magnitude. It is effectively cohort-bound even though only C1 carries the flag, so calibrate it per task type before comparing sessions. Not rated below 5 confirmed artifacts, following this project's own floor for rating a signal: cost per artifact on a single artifact is one draw.",
       "min_denominator": 5,
       "ladder": [
         {"score": 10, "max": 1000000.0},
@@ -470,7 +470,7 @@
       "direction": "lower_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point: the ladder treats a tenth of the input bill spent on work that reached nothing as the middle of the range. What would improve it is your own fleet's distribution, since how much waste is unavoidable depends on how often your runtime retries and cancels.",
+      "rationale": "The ladder puts a tenth of the input bill spent on work that reached nothing in the middle of the range. That is a guess. Your own fleet's distribution would replace it, since how much waste is unavoidable depends on how often your runtime retries and cancels.",
       "anchors": [
         {"value": 0.0, "means": "every input token went to work that was kept"}
       ],
@@ -492,12 +492,12 @@
       "id": "D3",
       "group": "D",
       "label": "cache recovery",
-      "measures": "cache_read tokens as a share of input tokens (the same measurement as A3, deliberately: it is both a platform fault and a cost lever)",
+      "measures": "cache_read tokens as a share of input tokens (the same measurement as A3, because it is both a platform fault and a cost lever)",
       "unit": "share",
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "mechanism",
-      "rationale": "The same measurement and the same reasoning as A3, deliberately duplicated: a cache read is billed at a fraction of a fresh input token, so the hit rate maps almost linearly onto the input bill. It appears twice because a cache miss is both a platform fault and a cost lever, and those have different owners.",
+      "rationale": "The same measurement and reasoning as A3: a cache read is billed at a fraction of a fresh input token, so the hit rate maps almost linearly onto the input bill. It appears twice because a cache miss is both a platform fault and a cost lever, and those have different owners.",
       "anchors": [
         {"value": 0.0, "means": "prompt caching is off or unsupported: every token of every context is billed as fresh input"},
         {"value": 0.9, "means": "a long conversation reusing its prefix on nearly every call"}
@@ -525,7 +525,7 @@
       "direction": "higher_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "A starting point, and so far untestable: the catalog records no model against a response, so neither the token share by model nor the stall rate to weight it by has ever been measured against this ladder. Every rung is provisional.",
+      "rationale": "Untested so far. The catalog records no model against a response, so neither the token share by model nor the stall rate to weight it by has been measured against this ladder, and every rung is provisional.",
       "ladder": [
         {"score": 10, "min": 0.8},
         {"score":  9, "min": 0.7},
@@ -549,15 +549,15 @@
       "direction": "lower_is_better",
       "cohort_relative": false,
       "basis": "judgement",
-      "rationale": "Scored only for a session driven turn by turn, where one turn or run taking most of the bill is a finding. A batch or mixed workload can legitimately put most of its tokens in one run, so the axis is skipped there rather than marking a design choice as waste. The rungs are an unmeasured starting point; read the value with its components, which name the turn and the run.",
+      "rationale": "Scored only for a session driven turn by turn, where one turn or run taking most of the bill is a finding. A batch or mixed workload can legitimately put most of its tokens in one run, so the axis is skipped there. The rungs are an unmeasured starting point; read the value with its components, which name the turn and the run.",
       "anchors": [
         {"value": 1.0, "means": "one turn or one run accounts for the entire input bill"}
       ],
       "gated_by": {
         "cohort_key": "workload_shape",
         "score_when": ["interactive"],
-        "skip_reason": "the workload was not purely interactive, so one turn or run dominating the bill can be by design rather than a fault",
-        "undeclared_reason": "workload shape was not declared, so it cannot be told whether a dominant turn or run was by design"
+        "skip_reason": "the workload was not purely interactive, so one turn or run can dominate the bill by design",
+        "undeclared_reason": "the workload shape was not declared, so there is no way to tell whether a dominant turn or run was by design"
       },
       "ladder": [
         {"score": 10, "max": 0.03},
