@@ -20,6 +20,7 @@ The reader is skimming for what to do next. Aim for a report that fits on one or
 7. **A table for three or more of anything** — buckets, per-tool rates, one row per category. A table scans faster than the same facts in prose, and a share column is easier to trust beside the raw counts. Skip charts: these reports are read in a terminal or a plain file, where a table is clearer than anything a chart would add.
 8. **Keep every evidence tier and every trap.** Shortening never drops a marker, a derivation's trap, or a caveat that changes how a figure reads. Cut the restatement around them instead.
 9. **Say nothing twice.** If the focus section already made a point, a later section refers back in one clause instead of re-explaining it.
+10. **Do not wrap lines by hand.** One line per paragraph, per list item, per table row and per appendix entry, however long it runs — a 900-character paragraph is normal. The width a paragraph happens to fill is the reader's window, not yours: the saved HTML reflows text to its own column, so a paragraph broken at your column shows those breaks mid-sentence in a wider one, and the source is harder to edit and to diff. Lines break only where the markup does — table rows, headings, code blocks, and the point a list starts. An appendix command goes on one line even at 300 characters; the code block scrolls and wraps on its own.
 
 ## A worked pair
 

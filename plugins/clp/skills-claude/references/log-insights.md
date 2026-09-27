@@ -291,6 +291,9 @@ Rules:
    have to know this tool to understand: assume they have never written a KQL
    query, and say what was looked for in plain words instead of how. The appendix
    is where the how goes, and it is the only section that may carry a query.
+13. Do not wrap lines by hand. One line per paragraph, list item, table row and
+   appendix entry, however long it runs; the renderers reflow text themselves.
+   The section list above is wrapped only because it is an instruction to you.
 
 Write ONLY the Markdown Log Insights Report to
 /tmp/clp-insights-report.md (Write tool), then reply DONE and nothing else.

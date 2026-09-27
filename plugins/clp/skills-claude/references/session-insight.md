@@ -153,6 +153,9 @@ Rules:
   outside the appendix, and no term a reader would have to know this tool to
   understand — write for someone who has never written a query. Say what was
   looked for in plain words, not how. The appendix is where the how goes.
+- Do not wrap lines by hand. One line per paragraph, list item, table row and
+  appendix entry, however long it runs; the renderers reflow text themselves. The
+  sketches below are wrapped only because they are instructions to you.
 
 Format: "Report format" below has both forms — write the short one unless DEPTH says thorough.
 Write the file. Return only its path and a three-line summary.
