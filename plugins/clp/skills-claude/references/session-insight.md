@@ -63,7 +63,7 @@ This is the most useful thing the skill does, and the easiest to get wrong in ei
 
 ## Extras subagent prompt
 
-One subagent, model unset. Fill in `FACTS_FILE` and `BUNDLE`.
+One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in `FACTS_FILE` and `BUNDLE`.
 
 ```
 Read the session facts file at FACTS_FILE. It covers seven fixed categories:
@@ -93,7 +93,7 @@ Return only the proposals. No preamble, no raw JSON, no method notes.
 
 ## Report writer prompt
 
-One subagent, model unset. Fill in the paths and the user's own words.
+One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in the paths, the user's own words, and `DEPTH` — `short` unless the user asked for a thorough report.
 
 ```
 Write the analysis report for a Claude Code session to /tmp/clp-session-report.md
@@ -103,6 +103,7 @@ Deeper check results: RESULTS
 The user's context, in their words: "CONTEXT"
 Their chosen focus: FOCUS
 Extra categories found: EXTRAS
+Report depth: DEPTH
 
 Rules:
 - Every figure must appear in the facts file. You may not compute, estimate,
@@ -137,46 +138,81 @@ Rules:
   another. session-forensics.md has the full list.
 - Report a commit or PR as existing only where the facts file says the
   repository confirmed it, and say how it matched.
+- Write the short form unless DEPTH says thorough. Read references/report-style.md
+  and follow every rule in it: lead each section with the finding, plain words and
+  short sentences, one line per point, a table for three or more of anything.
+  Shortening never drops an evidence tier, a derivation's trap, or a caveat that
+  changes how a figure reads — cut the restatement around them instead, and never
+  say a thing twice.
+- Keep the tooling out of the body. No query text, no field names, no commands
+  above the final section, and no term a reader would have to know this tool to
+  understand — write for someone who has never written a query. Say what was
+  looked for in plain words, not how.
 
-Format: see "Report format" below — follow it exactly.
+Format: "Report format" below has both forms — write the short one unless DEPTH says thorough.
 Write the file. Return only its path and a three-line summary.
 ```
 
 ## Report format
 
+Two forms. Write the short one unless DEPTH says the user asked for a thorough report. Both carry the evidence tiers and each derivation's trap; `report-style.md` governs how either one reads.
+
+### Short form — the default
+
 ```markdown
 # Session <name> — <span>
 
-<Two or three sentences: what the session was working on, over what period,
-and the single most important thing the analysis found.>
+<Two or three sentences: what the session was working on, over what period, and
+the single most important thing the analysis found. The headline figure belongs in
+the first sentence or the second.>
 
 ## <Focus category>
-<Leads. The user's focus or the shift you proposed.>
+<Leads. The user's focus or the shift you proposed: the figure first, then what it
+means, then the one example id worth opening. A short paragraph or a short list.>
 
-## Reliability
-## Cost
-## Time
-## Outcomes
-## Harness faults
-## Human loop
-## Rework
-<The remaining six in fixed order, each: headline figure with its denominator,
-what it means, and one example id to open. A category with nothing notable gets
-one line saying so.>
+## The seven categories
 
+| Category | Headline | Tier |
+|---|---|---|
+| Reliability | <headline with its denominator> | [M] |
+| Cost | | |
+| Time | | |
+| Outcomes | | |
+| Harness faults | | |
+| Human loop | | |
+| Rework | | |
+
+<One row each. A category with nothing notable says so in its row. Anything needing
+more than a row — per-tool error rates, a bucket split, the largest offenders — goes
+directly under the table, and only where it changes what the reader would do.>
+
+## Extra categories
+<Only when the extras subagent proposed some: one bullet each, with the count, one
+example id and the evidence tier. Say they come from the extras pass, not the facts
+file, and never merge their counts into a headline figure.>
+
+## What the logs cannot tell you
+<Three or four lines: quality of the work, money as opposed to tokens, and anything
+needing external data. Add any caveat the facts file raised about its own figures —
+notably, when many token-bearing records carry no `message_id` the bundle total may
+still double-count, and the facts file says how many there were.>
+
+## Reproduce
+<One line, for the reader who wants to check the numbers rather than read them: the
+facts file gives the one command behind each figure. Nothing above this section may
+contain a query, a field name or a command line.>
+```
+
+### Thorough form — only when asked
+
+The same report with every figure argued in full: the seven categories as their own sections in the fixed order (`## Reliability` … `## Rework`, each with the headline figure, its denominator, what it means and one example id), then
+
+```markdown
 ## Checks
 <Each headline figure and the one command that reproduces it, copied from the
 facts file's verification section. Measured figures name their query; derived
 figures name their inputs and formula. This section is what makes the rest
 arguable rather than trusted.>
-
-## What the logs cannot tell you
-<Quality of the work. Whether the outcome was right. What it cost in money, as
-opposed to tokens. Anything needing external data — review acceptance, revert
-rate, post-merge CI. Always present. Add here any caveat the facts file raised
-about its own figures: notably, when many token-bearing records carry no
-`message_id` the bundle total may still double-count, and the facts file says
-how many there were.>
 
 ## Query log
 <Each check that ran, its result, and each that failed or matched nothing.>

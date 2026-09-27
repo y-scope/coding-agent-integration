@@ -131,7 +131,7 @@ Then post the **early numbers**: 3 to 5 lines quoted from the facts file, the fo
 
 ## Spawn the report writer
 
-Every query has run and every number is in the facts file, so the last step only puts them into words. The writing is where a stronger model pays off: a small writer drifts into derived figures (sums, rounded shares) and unsupported causes, and each one costs a correction round later (in a trial with haiku: 18 flagged lines and 15 edits, over three minutes). Spawn ONE subagent (Agent tool), model **opus**; if the Agent tool rejects `opus` as unavailable, use `sonnet`, and tell the user which model is writing. It runs no searches and does no arithmetic. Hand it absolute file paths (it does not inherit `${CLAUDE_PLUGIN_ROOT}`), the schema, the taxonomy, the focus and the user's context (both also in the facts file's first section), and the results table (or its path). It writes the report itself to `/tmp/clp-insights-report.md` and replies only `DONE`, so the report is never regenerated just to be saved. If the file is missing or unusable, tell the user and re-spawn the writer once. Before spawning, open phase 5 with one line naming the model and the time (`[5/5] Writing the report with opus (~2 min)`); the estimate tells the user the wait is expected. Right after spawning it, ask where to save the report (next section).
+Every query has run and every number is in the facts file, so the last step only puts them into words. The writing is where a stronger model pays off: a small writer drifts into derived figures (sums, rounded shares) and unsupported causes, and each one costs a correction round later (in a trial with haiku: 18 flagged lines and 15 edits, over three minutes). Spawn ONE subagent (Agent tool), model **opus**; if the Agent tool rejects `opus` as unavailable, use `sonnet`, and tell the user which model is writing. It runs no searches and does no arithmetic. Hand it absolute file paths (it does not inherit `${CLAUDE_PLUGIN_ROOT}`), the schema, the taxonomy, the focus and the user's context (both also in the facts file's first section), and the results table (or its path). Set its `DEPTH` to `short` unless the user asked for a thorough report: the short form is the default, and a report nobody reads is worth less than a short one they do. It writes the report itself to `/tmp/clp-insights-report.md` and replies only `DONE`, so the report is never regenerated just to be saved. If the file is missing or unusable, tell the user and re-spawn the writer once. Before spawning, open phase 5 with one line naming the model and the time (`[5/5] Writing the report with opus (~2 min)`); the estimate tells the user the wait is expected. Right after spawning it, ask where to save the report (next section).
 
 ## Ask where to save the report (step 9)
 
@@ -196,6 +196,7 @@ Write the Log Insights Report for this CLP archive: ARCHIVE
 Goal: GOAL
 Focus the user chose: FOCUS
 What the user said they already know: USER_CONTEXT
+Report depth: DEPTH (short unless the user asked for a thorough report)
 
 Every query has already run and every number has already been computed. Do NOT
 run searches and do NOT calculate anything: no sums, no percentages, no rates,
@@ -279,37 +280,61 @@ Rules:
 10. Lead with the focus. The user's context is their account, not a finding:
    say whether the files support it, contradict it, or say nothing about it,
    and quote the lines that decide it. Never restate it as a fact.
+11. Write the short form unless DEPTH says thorough. Read
+   references/report-style.md and follow every rule in it: lead each section
+   with the finding, plain words and short sentences, one line per point, a
+   table for three or more of anything. Shortening never drops an evidence
+   tier or a caveat that changes how a figure reads, and never say a thing
+   twice.
+12. Keep the tooling out of the body. No query text, no field names, no command
+   lines in the sections a reader reads for the findings, and no term they would
+   have to know this tool to understand: assume they have never written a KQL
+   query, and say what was looked for in plain words instead of how. Queries
+   belong only in the thorough form's Checks and Query Log, where each one gets
+   a plain clause saying what it looks up.
 
 Write ONLY the Markdown Log Insights Report to
 /tmp/clp-insights-report.md (Write tool), then reply DONE and nothing else.
-The report has these sections:
-1. Summary -- total records, severity counts, top logger/component, what the
-   application appears to be doing (from the dominant templates).
-2. Focus -- the answer to what the user asked for: the focus categories'
-   records and templates, the focus queries' results, and, when the user gave
-   context, whether the records support it, contradict it, or say nothing
-   about it. For a focus of "everything", the high-priority categories.
-3. Log Shape Baseline -- distinct templates, the top templates by frequency, the
-   category table (priority, templates and records per category), and the
-   records no template accounts for. Flag a category the facts mark as one
-   template per record as near-duplicate blobs, not that many behaviours.
-4. Issues & Warnings -- error and warning counts and the top templates from
-   the grouped records, with actionable problems (labelled inference where
-   they are).
-5. Notable Categories -- per category of interest outside the focus, records
-   and representative templates, and what they indicate. Keep this short
-   when the focus is narrow.
-6. Performance Signals -- timing, throughput and slow-operation templates and
-   the counts the facts give.
-7. Configuration & Startup.
-8. Semantic Search Coverage.
-9. Top 3 follow-up KQL queries, derived from templates (mix keyword and
-   semantic), leaning toward the focus.
-10. Query Log -- both tables from RESULTS_TABLE, verbatim (the chat does not
-   show them), then every flagged query with a one-line note.
+
+If DEPTH is short (the default), the report has these sections:
+1. Summary -- what these logs appear to be, with the evidence that identified
+   them ("unidentified" where it could not be named), then total records, the
+   severity counts, the archive span and the top logger/component.
+2. Focus -- the user's question answered first: the focus categories with their
+   records and templates, the focus queries' results, and whether the records
+   support, contradict or are silent on what the user said they knew. For a
+   focus of "everything", the high-priority categories.
+3. Log Shape Baseline -- the distinct template count, the top templates with
+   their counts, and the category table (priority, templates and records per
+   category) with the records no template accounts for.
+4. Issues & Warnings -- error and warning counts, the top warning and error
+   templates from the grouped records, and the actionable problems, labelled
+   inference where they are one. Semantic findings only where they add
+   something to the templates.
+5. What it means for the system -- only where APPLICATION named one and it adds
+   something. Every claim here is labelled "domain knowledge", carries no number
+   that is not already above, and gives way to the records wherever the two
+   disagree.
+6. Next questions -- 2 or 3 questions a reader might ask next, in plain words.
+   No query syntax here: someone reading this may never have written a query.
+   The thorough form gives the queries behind them.
+7. Where the numbers come from -- one line, for the reader who wants to check
+   rather than read: the facts file gives the one command behind each figure,
+   and the two result tables are saved beside the report. Nothing above this
+   section may contain query text, a field name or a command line.
+
+If DEPTH is thorough, use the full section list in "Report format" below
+instead, which adds Notable Categories, Performance Signals, Configuration &
+Startup, Semantic Search Coverage, Checks and the Query Log.
 ```
 
-## Report format (present in this order)
+## Report format
+
+Two forms. Write the short one unless DEPTH says the user asked for a thorough report; the writer prompt above lists the short form's sections. Both carry the evidence tiers and each derivation's caveat, and `report-style.md` governs how either one reads.
+
+### Thorough form — only when asked
+
+Every figure argued in full, in this order:
 
 1. **Summary** — total records, severity counts, archive span, top logger/component. Open with what these logs are, one clause, from APPLICATION: naming the system tells a reader what the rest of the report is about. Say "appears to be" where the identification is an inference, and "unidentified" where it could not be named.
 2. **Focus** — what the user asked for, answered first: the focus categories and queries, and whether the records bear out the user's context.
@@ -320,6 +345,6 @@ The report has these sections:
 7. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
 8. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that template-classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
 9. **What this means for the system** — only where APPLICATION named one, and only where it adds something: what the findings above imply for a system of that kind, and the blast radius of each. Every claim here is labelled "domain knowledge", carries no number that is not already above, and gives way to the records wherever the two disagree. Nothing worth saying — leave the section out rather than filling it.
-10. **Follow-up queries** — 2–3 concrete queries derived from templates.
+10. **Next questions** — 2–3 questions worth answering next, each with the query that answers it. This section and the two below are the only places query text belongs; a reader who has never written one still gets the questions in plain words.
 11. **Checks** — each headline figure with the one command that reproduces it, from the facts file's verification section: measured figures name their query, derived ones their inputs and formula. This is what makes the report arguable instead of trusted.
 12. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.
