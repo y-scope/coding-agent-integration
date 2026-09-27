@@ -112,11 +112,14 @@ Rules:
   domain knowledge. The definition, the rules and the two cases that look
   measured but are not (a category, a score) are in
   references/evidence-tiers.md — read it and follow it; do not paraphrase it.
-- Close the report with the checks, in the form DEPTH calls for: the short form
-  ends with one line pointing at the facts file, where every headline figure has
-  the one command that reproduces it; the thorough form copies those figures and
-  commands in itself, so anyone doubting a number can run it rather than
-  reconstruct it. Do not expand the short form into the thorough one.
+- Close the report with `## Appendix — checking each figure`: one entry per claim
+  in the body, `### A3 Workflow instance spans`, carrying the figure, its tier and
+  the one command that reproduces it — a derived figure names its inputs and
+  formula instead. End every claim in the body with a link to its entry,
+  `[A3](#a3-workflow-instance-spans)`, so a reader can validate a figure they
+  doubt without the body making anyone read a query. Entry headings use letters,
+  digits and single spaces only, because GitHub and the plugin's HTML saver strip
+  punctuation differently and a dash or a colon breaks the link in one of them.
 - Never quote a currency figure, even if asked what the session cost. Cost is in
   tokens: the log's totalCostUSD comes from an assumed unit price, not from what
   was billed, and is not always refreshed. Say that converting needs the
@@ -147,9 +150,9 @@ Rules:
   changes how a figure reads — cut the restatement around them instead, and never
   say a thing twice.
 - Keep the tooling out of the body. No query text, no field names, no commands
-  above the final section, and no term a reader would have to know this tool to
+  outside the appendix, and no term a reader would have to know this tool to
   understand — write for someone who has never written a query. Say what was
-  looked for in plain words, not how.
+  looked for in plain words, not how. The appendix is where the how goes.
 
 Format: "Report format" below has both forms — write the short one unless DEPTH says thorough.
 Write the file. Return only its path and a three-line summary.
@@ -161,7 +164,7 @@ Two forms. Write the short one unless DEPTH says the user asked for a thorough r
 
 ### Short form — the default
 
-Exactly these sections, in this order. There is no `## Checks` section and no query log in the short form: a reader who wants every figure with its query is asking for the thorough form, and a writer who adds them anyway has turned a short report into a long one.
+Exactly these sections, in this order. The appendix is the last of them and the only place a command, a query or a field name may appear; there is no `## Checks` section and no query log in the short form — a reader who wants the whole audit trail is asking for the thorough form, and a writer who adds sections anyway has turned a short report into a long one.
 
 ```markdown
 # Session <name> — <span>
@@ -178,7 +181,7 @@ means, then the one example id worth opening. A short paragraph or a short list.
 
 | Category | Headline | Tier |
 |---|---|---|
-| Reliability | <headline with its denominator> | [M] |
+| Reliability | <headline with its denominator> [A1](#a1-attempts-by-status) | [M] |
 | Cost | | |
 | Time | | |
 | Outcomes | | |
@@ -186,9 +189,10 @@ means, then the one example id worth opening. A short paragraph or a short list.
 | Human loop | | |
 | Rework | | |
 
-<One row each. A category with nothing notable says so in its row. Anything needing
-more than a row — per-tool error rates, a bucket split, the largest offenders — goes
-directly under the table, and only where it changes what the reader would do.>
+<One row each, and each claim in the body ends with a link to its appendix entry.
+A category with nothing notable says so in its row. Anything needing more than a
+row — per-tool error rates, a bucket split, the largest offenders — goes directly
+under the table, and only where it changes what the reader would do.>
 
 ## Extra categories
 <Only when the extras subagent proposed some: one bullet each, with the count, one
@@ -201,22 +205,34 @@ needing external data. Add any caveat the facts file raised about its own figure
 notably, when many token-bearing records carry no `message_id` the bundle total may
 still double-count, and the facts file says how many there were.>
 
-## Reproduce
-<One line, for the reader who wants to check the numbers rather than read them: the
-facts file gives the one command behind each figure. Nothing above this section may
-contain a query, a field name or a command line.>
+## Appendix — checking each figure
+
+<One line: what this is for — a reader who doubts a figure follows its link and runs
+that one command; everyone else skips this section. The facts file carries the rest.>
+
+### A1 Attempts by status
+<[M] 18 of 18 ended ok. Then the one command that reproduces it, from the facts
+file's verification section, indented as a code block. A derived figure names its
+inputs and formula here instead of, or beside, a command.>
+
+### A2 <Plain name, letters digits and single spaces only>
+<The next claim's check. One entry per claim in the body, in the order the claims
+appear; figures one check establishes share the single entry they both link to.>
 ```
+
+**Entry headings must be letters, digits and single spaces only** (`### A3 Workflow instance spans`, not `A3 — Workflow instance spans: 22.9 and 15.2 min`). Both GitHub and the plugin's HTML saver turn a heading into an anchor and strip punctuation differently, so an em dash or a colon yields a link that resolves in one and not the other.
 
 ### Thorough form — only when asked
 
 The same report with every figure argued in full: the seven categories as their own sections in the fixed order (`## Reliability` … `## Rework`, each with the headline figure, its denominator, what it means and one example id), then
 
 ```markdown
-## Checks
-<Each headline figure and the one command that reproduces it, copied from the
-facts file's verification section. Measured figures name their query; derived
-figures name their inputs and formula. This section is what makes the rest
-arguable rather than trusted.>
+## Appendix — checking each figure
+<The same appendix the short form ends with, and the same links from the body into
+it: one heading per claim, `### A3 Workflow instance spans`, carrying the headline
+figure, the one command that reproduces it, and a derived figure's inputs and
+formula. Measured figures name their query; derived figures name what they are
+computed from. This section is what makes the rest arguable rather than trusted.>
 
 ## Query log
 <Each check that ran, its result, and each that failed or matched nothing.>

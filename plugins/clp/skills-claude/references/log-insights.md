@@ -289,16 +289,16 @@ Rules:
 12. Keep the tooling out of the body. No query text, no field names, no command
    lines in the sections a reader reads for the findings, and no term they would
    have to know this tool to understand: assume they have never written a KQL
-   query, and say what was looked for in plain words instead of how. Queries
-   belong only in the thorough form's Checks and Query Log, where each one gets
-   a plain clause saying what it looks up.
+   query, and say what was looked for in plain words instead of how. The appendix
+   is where the how goes, and it is the only section that may carry a query.
 
 Write ONLY the Markdown Log Insights Report to
 /tmp/clp-insights-report.md (Write tool), then reply DONE and nothing else.
 
 If DEPTH is short (the default), the report has these sections and no others --
-no Checks section and no Query Log, which belong to the thorough form: a writer
-who adds them has turned a short report into a long one.
+no Query Log, which belongs to the thorough form: a writer who adds one has turned
+a short report into a long one. The appendix is the last section and the only place
+a query, a field name or a command line may appear.
 1. Summary -- what these logs appear to be, with the evidence that identified
    them ("unidentified" where it could not be named), then total records, the
    severity counts, the archive span and the top logger/component.
@@ -320,19 +320,22 @@ who adds them has turned a short report into a long one.
 6. Next questions -- 2 or 3 questions a reader might ask next, in plain words.
    No query syntax here: someone reading this may never have written a query.
    The thorough form gives the queries behind them.
-7. Where the numbers come from -- one line, for the reader who wants to check
-   rather than read: the facts file gives the one command behind each figure,
-   and the two result tables are saved beside the report. Nothing above this
-   section may contain query text, a field name or a command line.
+7. Appendix -- checking each figure. One entry per claim in the body, headed
+   `### A3 Workflow instance spans`, carrying the figure, its tier and the one
+   command that reproduces it. End every claim in the body with a link to its
+   entry, `[A3](#a3-workflow-instance-spans)`, so a reader can validate a figure
+   they doubt without anyone having to read a query. Entry headings use letters,
+   digits and single spaces only, because GitHub and the plugin's HTML saver strip
+   punctuation differently and a dash or a colon breaks the link in one of them.
 
 If DEPTH is thorough, use the full section list in "Report format" below
 instead, which adds Notable Categories, Performance Signals, Configuration &
-Startup, Semantic Search Coverage, Checks and the Query Log.
+Startup and Semantic Search Coverage, and a Query Log.
 ```
 
 ## Report format
 
-Two forms. Write the short one unless DEPTH says the user asked for a thorough report; the writer prompt above lists the short form's sections. Both carry the evidence tiers and each derivation's caveat, and `report-style.md` governs how either one reads.
+Two forms. Write the short one unless DEPTH says the user asked for a thorough report; the writer prompt above lists the short form's sections. Both carry the evidence tiers and each derivation's caveat, and `report-style.md` governs how either one reads. Both end with the same appendix, and both link every claim in the body into it.
 
 ### Thorough form — only when asked
 
@@ -347,6 +350,6 @@ Every figure argued in full, in this order:
 7. **Configuration & Startup** — config/init templates grounded in the baseline (if any).
 8. **Semantic Search Coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that template-classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
 9. **What this means for the system** — only where APPLICATION named one, and only where it adds something: what the findings above imply for a system of that kind, and the blast radius of each. Every claim here is labelled "domain knowledge", carries no number that is not already above, and gives way to the records wherever the two disagree. Nothing worth saying — leave the section out rather than filling it.
-10. **Next questions** — 2–3 questions worth answering next, each with the query that answers it. This section and the two below are the only places query text belongs; a reader who has never written one still gets the questions in plain words.
-11. **Checks** — each headline figure with the one command that reproduces it, from the facts file's verification section: measured figures name their query, derived ones their inputs and formula. This is what makes the report arguable instead of trusted.
+10. **Next questions** — 2–3 questions worth answering next, each with the query that answers it. This section and the appendix below are the only places query text belongs; a reader who has never written one still gets the questions in plain words.
+11. **Appendix — checking each figure** — one heading per claim in the body, `### A3 Workflow instance spans`, with the figure, its tier and the one command that reproduces it, from the facts file's verification section: measured figures name their query, derived ones their inputs and formula. Every claim in the body links to its entry, `[A3](#a3-workflow-instance-spans)`, so a reader can validate a figure they doubt without the body making anyone read a query. Entry headings carry letters, digits and single spaces only — both GitHub and the plugin's HTML saver make an anchor from the heading, and they strip punctuation differently. This is what makes the report arguable instead of trusted.
 12. **Query Log** — both results tables verbatim (baseline and plan; the chat does not show them), then every flagged query with a one-line note, and any query run beyond the plan with its result.
