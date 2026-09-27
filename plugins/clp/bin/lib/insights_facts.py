@@ -87,16 +87,16 @@ INFERENCE = "[I]"
 DOMAIN = "[K]"
 
 TIERS = {
-    MEASURED: "measured - counted off the records by one query. The query is in the Verification "
-              "section, and it is the query that actually ran.",
-    DERIVED: "derived - arithmetic over measured values: a share, a sum of counts, a duration between "
-             "two timestamps. The line names its inputs; Verification gives the formula and why it "
-             "answers the question.",
-    INFERENCE: "inference - a claim about what caused these records or what they mean. Not "
-               "reproducible: it is an argument from the figures, and a reader can reject it without "
-               "disputing a number.",
-    DOMAIN: "domain knowledge - a claim about how this kind of system behaves, not taken from these "
-            "records at all.",
+    MEASURED: "measured: counted off the records by one query. The Verification section gives that "
+              "query exactly as it ran.",
+    DERIVED: "derived: arithmetic over measured values, such as a share, a sum of counts or the time "
+             "between two timestamps. The line names its inputs, and Verification gives the formula "
+             "and why it answers the question.",
+    INFERENCE: "inference: a claim about what caused these records or what they mean. Nothing "
+               "reproduces it. It is an argument from the figures, so a reader can reject it and "
+               "still accept every number.",
+    DOMAIN: "domain knowledge: a claim about how this kind of system usually behaves, drawn from "
+            "outside these records.",
 }
 
 
@@ -104,8 +104,8 @@ TIERS = {
 # the results file recorded neither the command nor the KQL, so there is nothing to
 # rebuild it from. Saying which file is missing what is the reason; "unstated" is
 # not, because it claims a figure cannot be checked while giving no reason at all.
-NO_REASON = ("no reason was recorded for this figure. That is a defect in clp facts, not a "
-             "property of the figure: report it rather than trusting the figure or discarding it.")
+NO_REASON = ("no reason was recorded for this figure, which is a bug in clp facts. Report it, and "
+             "neither trust the figure nor throw it away.")
 
 NO_QUERY_RECORDED = ("the results file recorded neither a command nor the KQL for this entry, so the "
                      "query that produced the count cannot be rebuilt from it. Re-run the plan with "
@@ -115,7 +115,7 @@ NO_QUERY_RECORDED = ("the results file recorded neither a command nor the KQL fo
 def verification_tail(unverifiable):
     """The sentence that closes the Verification section."""
     if not unverifiable:
-        return "Every one of them is."
+        return ""
     if unverifiable == 1:
         return "The other one says what it needs instead."
     return f"The other {unverifiable} say what they need instead."
@@ -476,19 +476,19 @@ def main(argv=None) -> int:
     w("# Facts (computed in code; every figure below is exact)\n")
     if overlap_note:
         w(f"> **Input problem:** {overlap_note}\n")
-    w("**What the markers mean.** Every figure carries one, and the four kinds do not overlap:\n")
+    w("Every figure carries one of four markers, and no figure fits two of them:\n")
     for marker in (MEASURED, DERIVED, INFERENCE, DOMAIN):
         w(f"- `{marker}` {TIERS[marker]}")
     w("")
     w("A percentage in parentheses is always derived, from that line's count over the total records "
       "above, so it takes no marker of its own. In a table the markers are in the column headings. A "
-      "`[baseline #N]` or `[plan #N]` names the query that produced the line; the Verification section "
-      "at the end lists those commands, with the plugin's `clp` named by basename - run them with "
-      "the plugin's `bin/` on $PATH.\n")
-    w("A line with no marker is not a figure: it is a heading, a caption, a note on where something "
-      "came from, or the user's own words quoted back. The Focus section below is the clearest case - "
-      "what the user said is input to the analysis, not a measurement from it, and the four tiers "
-      "above describe only what this file claims about the records.\n")
+      "`[baseline #N]` or `[plan #N]` names the query that produced the line, and the Verification "
+      "section at the end lists those commands. They call the plugin's `clp` by its bare name, so run "
+      "them with the plugin's `bin/` on $PATH.\n")
+    w("A line with no marker states no figure. It is a heading, a caption, a note on where something "
+      "came from, or the user's own words quoted back, as in the Focus section below. What the user "
+      "said is input to the analysis, and the four markers describe only what this file claims about "
+      "the records.\n")
     w("## Totals")
     w(f"- {MEASURED} Total records: {total:,}" if total else "- Total records: unavailable")
     if total:
@@ -500,9 +500,9 @@ def main(argv=None) -> int:
         add_check("Distinct templates", DERIVED, f"{sum(c['templates'] for c in totals.values()):,}",
                   None,
                   derivation="the `templates` counts of the category table, summed.",
-                  note="a template count comes from the log-shape store, not from a query over the "
-                       f"archive, so it is checked against `{args.category_totals}` rather than by "
-                       "re-counting: no KQL filter can name a template.")
+                  note="a template count comes from the log-shape store, and no KQL filter can name a "
+                       f"template, so the count is checked against `{args.category_totals}` instead "
+                       "of being re-counted.")
         w(f"- {DERIVED} Distinct templates: {sum(c['templates'] for c in totals.values()):,} "
           "(sum of the category table below)")
     span_text, span_check = time_span(args.archive_dir)
@@ -512,8 +512,8 @@ def main(argv=None) -> int:
                   derivation="the last timestamp minus the first, both recorded by clp-s at "
                              "compression. It answers \"what period do these logs cover\" because "
                              "clp-s took them from every record, not from a sample.",
-                  trap="it is the span the records cover, not the span anything was running: a gap in "
-                       "the middle is invisible here.")
+                  trap="it runs from the first record to the last. Nothing here says the system ran "
+                       "that whole time, and a stretch with no records does not show.")
     names = ", ".join(f"{role} = `{schema[role]}`" for role in ("timestamp", "severity", "logger", "message") if schema.get(role))
     payload = ", ".join(f"`{p}`" for p in schema.get("payload", []) or [])
     tree_note = ""
@@ -557,8 +557,8 @@ def main(argv=None) -> int:
             w(f"- The user's question, verbatim: \"{focus['question']}\"")
         if focus.get("context"):
             w(f"- What the user said they already know, verbatim: \"{focus['context']}\". This is the "
-              "user's account, not a finding: say whether the records below support it, contradict it, "
-              "or say nothing about it.")
+              "user's account and still needs checking: say whether the records below support it, "
+              "contradict it, or say nothing about it.")
         else:
             w("- The user gave no background about these logs.")
         for cat in focus.get("categories", []):
@@ -566,7 +566,7 @@ def main(argv=None) -> int:
             if c:
                 w(f"- {MEASURED} `{cat}`: {c['templates']:,} templates, {c['records']:,} records "
                   f"({pct(c['records'], total)}); classifier priority {c.get('priority') or '-'}"
-                  + (f" - {INFERENCE} {c['why']}" if c.get("why") else ""))
+                  + (f"; {INFERENCE} {c['why']}" if c.get("why") else ""))
         mine = [r for r in results if r.get("origin") == "focus"]
         if mine:
             w("- Focus queries (their own counts):")
@@ -644,9 +644,9 @@ def main(argv=None) -> int:
             add_check(f"{title}: {field} other than " + ", ".join(map(str, values)), MEASURED,
                       f"{c:,}", one_command(entry, args.archive_dir),
                       note=NO_QUERY_RECORDED,
-                      derivation="one negated count query, not the total minus the values above: a "
-                                 "record with no value for this field is in neither, and that is how "
-                                 "the sum check below can find it.")
+                      derivation="one negated count query. Subtracting the values above from the "
+                                 "total would give a different number, because a record with no value "
+                                 "for this field is in neither, which is how the sum check below finds it.")
             if fetched_records:
                 counts = defaultdict(int)
                 for rec in fetched_records:
@@ -683,7 +683,7 @@ def main(argv=None) -> int:
                 # also overlapped, or the reader cannot tell which cause applies.
                 w(f"- {DERIVED} check: the lines above sum to {counted:,}, more than the {total:,} "
                   f"records, so {INFERENCE} `{field}` is multi-valued in some records"
-                  + (" -- each entry above was counted once, so the overlapping inputs noted "
+                  + ("; each entry above was counted once, so the overlapping inputs noted "
                      "at the top do not explain this excess" if overlap_note else ""))
         w("")
 
@@ -705,7 +705,7 @@ def main(argv=None) -> int:
         per_value = bool(total) and rec_sum > total
         base = rec_sum if per_value else total
         unit = "Values" if per_value else "Records"
-        w("## Categories (exact: the stored per-template counts, summed; no keyword involved)")
+        w("## Categories (exact counts: the stored per-template counts, summed)")
         w(f"| Category | Priority | Templates {MEASURED} | {unit} {MEASURED} "
           f"| Share of {unit.lower()} {DERIVED} |")
         w("|---|---|---|---|---|")
@@ -716,12 +716,12 @@ def main(argv=None) -> int:
         add_check(f"{unit} the categories account for", DERIVED, f"{rec_sum:,}", None,
                   derivation="the per-category counts above, summed; each category's own count is the "
                              "stored per-template counts of the templates in it, summed.",
-                  note="a per-template count comes from the log-shape store, not from a query over the "
-                       f"archive: check it against `{args.category_totals}`, because a template is not "
-                       "something a KQL filter can name.")
+                  note="a per-template count comes from the log-shape store, and no KQL filter can "
+                       f"name a template, so check it against `{args.category_totals}`.")
         whys = [(cat, c) for cat, c in totals.items() if c.get("why") and c.get("priority") == "high"]
         if whys:
-            w("\nWhy the classifier ranked these categories high (its judgement, not a finding):")
+            w("\nWhy the classifier ranked these categories high (its judgement, to be checked "
+              "against the counts):")
             for cat, c in whys:
                 w(f"- {INFERENCE} `{cat}`: {c['why']}")
         if per_value:
@@ -734,8 +734,9 @@ def main(argv=None) -> int:
         blobs = [(cat, c) for cat, c in totals.items() if c["templates"] > 500 and c["templates"] > 0.9 * c["records"]]
         for cat, c in blobs:
             w(f"- {DERIVED} `{cat}` has {c['templates']:,} templates for {c['records']:,} records: about "
-              f"one template per record. {INFERENCE} That is large near-duplicate messages that never "
-              "collapse into one recurring template, not that many different behaviours.")
+              f"one template per record. {INFERENCE} Large near-duplicate messages that never collapse "
+              "into one recurring template produce this, so the template count overstates how many "
+              "different things happened.")
         w("")
 
     # -- top templates
@@ -754,9 +755,9 @@ def main(argv=None) -> int:
             return None
         return f"grep -m1 -F -- '{head}' {store}"
 
-    template_note = ("a per-template count is the log-shape store's own count. A template is not "
-                     "something a KQL filter can name, so it cannot be re-counted against the archive "
-                     "in one query; the command reads the stored record instead.")
+    template_note = ("a per-template count is the log-shape store's own count. No KQL filter can name "
+                     "a template, so one query cannot re-count it against the archive, and the command "
+                     "reads the stored record.")
     if top_json:
         w(f"## Top {min(args.top, len(top_json['overall']))} templates by records, with their category "
           "(stored per-template counts)")
@@ -806,13 +807,13 @@ def main(argv=None) -> int:
             except (TypeError, ValueError):
                 pass
             g["example"] = g["example"] or text.replace("\n", " <NL> ")[:260]
-        w(f"## The fetched non-dominant-severity records, grouped by message shape (numbers masked as N, quoted names as \"S\")")
+        w(f"## Fetched records outside the most common severity, grouped by message shape (numbers masked as N, quoted names as \"S\")")
         w(f"{MEASURED} {len(fetched_all):,} records fetched; {DERIVED} {len(groups):,} distinct shapes "
-          "after masking each message's numbers and quoted names. First/last are the timestamps of "
-          "these records only, not the archive's span.")
+          "after masking each message's numbers and quoted names. The first and last timestamps below "
+          "belong to these records only; the archive's span is under Totals.")
         for (severity, shp), g in sorted(groups.items(), key=lambda kv: -kv[1]["n"])[: args.top]:
             span = f", {fmt_ts(g['first'])} to {fmt_ts(g['last'])}" if g["first"] is not None else ""
-            w(f"- {DERIVED} **{g['n']:,} x [{severity}]**{span}\n  - shape: `{shp}`\n"
+            w(f"- {DERIVED} {g['n']:,} x [{severity}]{span}\n  - shape: `{shp}`\n"
               f"  - example: `{g['example']}`")
         w("")
         add_check("Distinct message shapes among the fetched records", DERIVED, f"{len(groups):,}",
@@ -820,18 +821,18 @@ def main(argv=None) -> int:
                   derivation="the fetched records grouped by severity and by the message with its "
                              "numbers masked to N and its short quoted strings to \"S\". It answers "
                              "\"how many different things are happening here\" because two records that "
-                             "differ only in an id or a count are one event, not two.",
-                  trap="the masking is a regex, not the log's own template: a message whose only "
-                       "variable part is an unquoted word keeps that word, so it splits into as many "
-                       "shapes as it has words there.",
-                  note=("the masking and the grouping happen in this script, not in the query, so no "
-                        "command prints the shape count. `" + fetched_one_command + "` reproduces the "
+                             "differ only in an id or a count are the same event.",
+                  trap="the masking is a regex and knows nothing of the log's own templates. A message "
+                       "whose only variable part is an unquoted word keeps that word, so it splits into "
+                       "one shape per distinct word in that position.",
+                  note=("the masking and the grouping happen in this script, so no command prints the "
+                        "shape count. `" + fetched_one_command + "` reproduces the "
                         f"{len(fetched_all):,} records it grouped; the shapes themselves are listed "
                         "above.") if fetched_one_command else
                        ("more than one follow-up query contributed these records, so no single command "
                         "fetches the same set; each follow-up's own command is in the pool's results "
-                        "file, and the grouping happens in this script rather than in a query."))
-        add_check("Records fetched behind the non-dominant severities", MEASURED,
+                        "file, and the grouping happens in this script."))
+        add_check("Records fetched outside the most common severity", MEASURED,
                   f"{len(fetched_all):,}", fetched_one_command,
                   note="" if fetched_one_command else
                        "more than one follow-up query contributed these records, so no single command "
@@ -841,8 +842,9 @@ def main(argv=None) -> int:
     sem = [r for r in results if r.get("method") == "semantic"]
     if sem:
         w("## Semantic entries")
-        w(f"{DOMAIN} A semantic query ranks records by meaning rather than matching a field, so its row "
-          "count is what the embedding model judged relevant and not a count of anything the log says.")
+        w(f"{DOMAIN} A semantic query ranks records by meaning instead of matching a field. Its row "
+          "count is how many records the embedding model judged relevant, which is the model's "
+          "judgement and not a count of anything the log says.")
         for r in sem:
             w(f"- {MEASURED} [{r['table']} #{r['index']}] {r.get('label')}: status {r.get('status')}, "
               f"{r.get('count') or 0:,} rows; kql `{r.get('kql')}`")
@@ -851,7 +853,7 @@ def main(argv=None) -> int:
             add_check(f"[{r['table']} #{r['index']}] {r.get('label')}", MEASURED,
                       f"{r.get('count') or 0:,} rows", one_command(r, args.archive_dir),
                       trap="a semantic query's row count depends on the embedding model and its "
-                           "threshold, so re-running it is reproducible only against the same model.",
+                           "threshold, so a re-run gives the same count only with the same model.",
                       note=NO_QUERY_RECORDED)
         w("")
     flagged = [r for r in results if r.get("non_selective") or r.get("status") in ("error", "timeout", "zero") or r.get("retried")]
@@ -866,12 +868,10 @@ def main(argv=None) -> int:
 
     # -- Verification: the long form of every headline figure's provenance
     if checks:
-        w("## Verification - the one command behind each figure")
-        w("Copy a command, run it, and compare. These are the commands the query pool ran, with the "
-          "plugin's `clp` named by basename, so run them with the plugin's `bin/` on $PATH. A figure "
-          "no single command reproduces says so and says what to run instead; a command that only looks "
-          "like a check is worse than none, because a reader who runs it and gets a different number "
-          "concludes the figure is wrong.\n")
+        w("## Verification: the one command behind each figure")
+        w("Copy a command, run it, and compare. These are the commands the query pool ran. They call "
+          "the plugin's `clp` by its bare name, so run them with the plugin's `bin/` on $PATH. A figure "
+          "that no single command reproduces says what to run instead.\n")
         unverifiable = 0
         for c in checks:
             w(f"- **{c['name']}** `{c['tier']}` = {c['value']}")
@@ -885,8 +885,8 @@ def main(argv=None) -> int:
                 unverifiable += 1
                 w(f"  - **Not checkable in one command**: {c.get('note') or NO_REASON}")
         w("")
-        w(f"{len(checks) - unverifiable} of {len(checks)} figures above are reproduced by a single "
-          "command. " + verification_tail(unverifiable))
+        w((f"{len(checks) - unverifiable} of {len(checks)} figures above are reproduced by a single "
+           "command. " + verification_tail(unverifiable)).strip())
         w("")
 
     with open(args.out, "w", encoding="utf-8") as f:

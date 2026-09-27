@@ -9,8 +9,8 @@ Usage:
   clp <SUBCOMMAND> [...]        one step of that flow, or one drill-down, on its own
 
 TARGET is a log file, a folder of log files, a CLP archive directory, a session bundle directory,
-or a Claude Code session id. With no TARGET it lists the sessions it can see and stops, because
-guessing which logs someone meant is not a thing a command should do.
+or a Claude Code session id. With no TARGET it lists the sessions it can see and stops; it never
+guesses which logs you meant.
 
 TARGET is the one argument that is not a subcommand, and the first argument is read as one only
 when it cannot be a subcommand: a name in the table below is always that subcommand, an argument
@@ -18,20 +18,20 @@ holding a '/', a '.' or a '~', naming something that exists, or shaped like a se
 TARGET, and anything else is a mistyped subcommand and is named as one. No subcommand holds any of
 those characters, so `clp searhc` says what it did not understand while `clp ./searhc` is a target.
 
-There is one pipeline -- acquire, structure, categorise, measure, report -- and it runs on logs.
-A Claude Code session is not a different kind of thing from a vLLM worker log; it is logs from a
-particular application. So the only question asked is which application produced these logs, and
-then whether that application has a registered optimisation:
+There is one pipeline (acquire, structure, categorise, measure, report), and it runs on logs. A
+Claude Code session is logs from one particular application, just as a vLLM worker log is. So the
+only question asked is which application produced these logs, and then whether that application
+has a registered optimisation:
 
   claude-code   the specialised route. Its file layout, its record graph and its seven categories
                 are known in advance, so acquire also builds the graph of launches, retries and lost
                 results, and categorise has nothing to discover and nothing to cache.
-  codex, vllm   recognised, and on the general route. What being recognised buys them is the right
-                acquire -- a Codex rollout compressed as a session so its payload arrays become
-                columns, a vLLM text log structurized -- not a different analysis.
+  codex, vllm   recognised, and on the general route. Recognition gets them the right acquire: a
+                Codex rollout is compressed as a session so its payload arrays become columns, and a
+                vLLM text log is structurized. The analysis after that is the general one.
   anything else the general route on its own terms: discover the structure and the categories from
-                the logs, and cache the classification per application. An application earns more
-                by being registered here, not by adding a mode.
+                the logs, and cache the classification per application. An application gets a
+                specialised route by being registered here.
 
 The application is read from the records, never from the path: an archive's from its merged schema
 tree, a file's from the first 128 KiB that clp detect reads. A path, a directory layout or a
@@ -43,25 +43,23 @@ What it does:
   prepare     compress what is not compressed, and for a Claude Code session run the launch count
               that decides whether a bundle is needed and build one when it is. Idempotent: pointed
               at something already prepared it reports that and does no work.
-  hand off    print the next command as NEXT=. The stages that need a model and a user -- the
-              category pass, the focus questions, the report -- belong to the skill, and are not
+  hand off    print the next command as NEXT=. The stages that need a model and a user (the
+              category pass, the focus questions, the report) belong to the skill and are not
               attempted here.
 
 It runs its own subcommands and reimplements none of them: `clp list-sessions`, `clp detect`,
 `clp compress session`, `clp compress folder`, `clp schema`, `clp search` and `clp bundle`. Every
 one it runs is printed as a RAN= line.
 
-It is a door into the flow, not a lid on the toolbox. The subcommands used after a finding --
-`clp search`, `clp bundle sql|evidence|who`, `clp schema` -- stay first-class, and the DRILL=
-lines name them for the artefacts in hand.
+The subcommands used after a finding (`clp search`, `clp bundle sql|evidence|who`, `clp schema`)
+still work on their own, and the DRILL= lines name them for the artefacts in hand.
 
 Options:
   --app NAME            Assert the application (claude-code, codex, vllm). Refused when the records
                         say a different one; it stands when they match none.
   --general             Take the general route even for an application that has a specialised one.
-                        The acquire stage stays the application's -- a session log is still
-                        compressed as a session -- because acquire is about which application wrote
-                        the logs, not about which route reads them.
+                        Acquire still follows the application, so a session log is still compressed
+                        as a session; --general changes only which route reads the result.
   --claude-home DIR     The Claude home: the directory that HOLDS projects/, tasks/ and
                         file-history/ (default ~/.claude), not projects/ itself.
   --archives-root DIR   Parent directory for archives. Passed to `clp compress`, whose
@@ -152,8 +150,8 @@ def choose_route(classified, args):
                            "application need")
     if app.route == A.SPECIALISED and args.general:
         return A.GENERAL, (f"the general route, forced by --general over {app.name}'s specialised "
-                           f"one: the same discovery and caching runs on these logs as on any "
-                           f"others, which is the point of them being logs")
+                           f"one, so these logs get the same discovery and caching as any other "
+                           f"application's")
     if app.route == A.SPECIALISED:
         return A.SPECIALISED, (f"{app.name}'s specialised route: it is registered, so the pipeline "
                                f"skips {app.skips}")
@@ -250,9 +248,8 @@ def prepare_archive(classified, args, runner, prep):
         suggested = classified["detect"]["suggest"]
         if len(suggested) != 1:
             raise A.AnalyzeError(
-                "clp detect found files that need different compression settings, and one "
-                "archive takes one --timestamp-key, so which of these to make is not this "
-                "command's call:\n  "
+                "clp detect found files that need different compression settings. One archive "
+                "takes one --timestamp-key, so this command will not pick between them:\n  "
                 + "\n  ".join(A.quoted(s) for s in suggested) +
                 "\n  Point clp at one group's files, or run the commands above and point it "
                 "at each archive.")
@@ -351,9 +348,9 @@ def prepare_bundle(classified, args, runner, prep, archive):
 
     if main_log is None or not os.path.isfile(main_log):
         out("BUNDLE_WHY", f"{launches} records launched an agent or a workflow, so a bundle would "
-                          f"say what they did -- but the session log this archive was made from is "
-                          f"not reachable, so it cannot be built. The measure stage still runs on "
-                          f"the archive alone.")
+                          f"say what they did. The session log this archive was made from is not "
+                          f"reachable, so no bundle can be built, and the measure stage runs on the "
+                          f"archive alone.")
         return None
 
     argv = A.command("bundle", bundle_dir, "build", "--session-id", session_id)
@@ -435,7 +432,8 @@ def parse_args(argv):
         raise SystemExit(0)
     if rest:
         print(f"error: unknown argument: {rest[0]}\n"
-              f"  This wrapper takes the options above and passes nothing else through.",
+              f"  clp takes only the options listed in `clp --help` and passes nothing else "
+              f"through.",
               file=sys.stderr)
         raise SystemExit(2)
     if args.force and args.dry_run:

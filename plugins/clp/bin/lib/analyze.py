@@ -122,9 +122,9 @@ CLAUDE_CODE = Application(
              "isSidechain", "userType", "version", "entrypoint", "message", "toolUseResult",
              "requestId"),
     min_markers=6,
-    skips=("the categorise stage, because its seven categories are known in advance -- nothing to "
-           "discover and nothing to cache -- and acquire instead builds the graph of launches, "
-           "retries and lost results that plain logs have no analogue for"),
+    skips=("the categorise stage, because its seven categories are known in advance and there is "
+           "nothing to discover or cache. Acquire also builds the graph of launches, retries and "
+           "lost results, which plain logs do not have"),
 )
 
 CODEX = Application(
@@ -306,7 +306,7 @@ def detect(runner, paths, extensions=None, recursive=True):
             listed = sorted(os.listdir(paths[0])) if os.path.isdir(paths[0]) else []
             hint = ("\n  It holds " + (f"{len(listed)} entries: " + ", ".join(listed[:10])
                                        if listed else "nothing") +
-                    ".\n  Logs would be files with one of those extensions; pass "
+                    ".\n  Only files with one of those extensions count as logs. Pass "
                     "--extensions '*' to take every file, or point at the log files themselves.")
         raise AnalyzeError(f"that target is not logs: {first}.{hint}")
     return parse_detect(out)
@@ -354,7 +354,7 @@ def app_of_detected(report):
         seen = sorted({f"{f['name']}: {f['format']}" for f in report["files"]})
         raise AnalyzeError("that target is not logs. clp detect found nothing it could "
                            "compress:\n  " + "\n  ".join(seen) +
-                           "\n  Logs would be JSON records or text lines; point at those instead.")
+                           "\n  Point it at files of JSON records or text lines instead.")
     found = {}
     for entry in usable:
         app, why = (identify_from_format(entry["bundled"]) if entry["bundled"]
@@ -364,11 +364,10 @@ def app_of_detected(report):
         app, why, name = next(iter(found.values()))
         if app:
             return app, f"{why} (read from {os.path.basename(name)})"
-        return None, ("no registered application's records match: "
+        return None, ("no registered application matches these "
                       + (f"{usable[0]['format']} records carrying "
                          + ", ".join(usable[0]["roots"][:8]) if usable[0]["roots"]
-                         else f"{usable[0]['format']} with {usable[0]['format']} lines "
-                              f"no bundled format matches"))
+                         else f"{usable[0]['format']} lines, and no bundled format does either"))
     return None, ("the files are not all one application (" +
                   ", ".join(sorted(found)) + "), so the general route takes them together")
 
@@ -523,7 +522,7 @@ def classify(target, runner, claude_home=None, extensions=None, recursive=True):
             why,
         ]
         result["why"] = (f"{app.name} logs, read from the files' own records: {why}" if app
-                         else f"logs from no registered application: {why}")
+                         else f"unrecognised logs: {why}")
         return result
 
     raise AnalyzeError(f"{target} is neither a file nor a directory, so it cannot hold logs.")
@@ -563,7 +562,7 @@ def _classify_log_file(result, path, runner, claude_home=None):
                 "it does not sit in a Claude home (projects/<project>/<id>.jsonl), so the agent "
                 "transcripts, tasks and file snapshots that a bundle needs are out of reach")
     result["why"] = (f"{app.name} logs, read from the file's own records: {why}" if app
-                     else f"logs from no registered application: {why}")
+                     else f"unrecognised logs: {why}")
     return result
 
 

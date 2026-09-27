@@ -357,8 +357,8 @@ def denominator_verdict(spec, denominator):
         return True, None
     if denominator >= floor:
         return True, None
-    return False, (f"rated over only {denominator} observations, below the {floor} this axis needs; "
-                   "a rate on that few is noise, so it is left unscored rather than rated")
+    return False, (f"only {denominator} observations, and this axis needs {floor}. A rate over so "
+                   "few is noise, so it is not scored")
 
 
 def gate_verdict(spec, cohort):
@@ -550,7 +550,7 @@ def print_table(doc):
         print(f"{axis['id']:<4} {basis:<5} {axis['label'][:26]:<26} {fmt_value(axis['value']):>12} "
               f"{(axis['unit'] or '-')[:24]:<24} {axis['score']:>4}{star} {rung_text(axis)}")
     if any(a["cohort_relative"] for a in doc["axes"]):
-        print("     * cohort-relative: comparable only inside a cohort, never as an absolute")
+        print("     * cohort-relative: compare it only with sessions in the same cohort")
     print()
     for group in doc["groups"]:
         mean = "null" if group["mean"] is None else f"{group['mean']:.1f}"
@@ -562,7 +562,8 @@ def print_table(doc):
         mix = ", ".join(f"{n} {basis}" for basis, n in summary.items())
         print(f"BASIS   of {sum(summary.values())} scored axes: {mix}")
         if summary.get("judgement"):
-            print("        judgement rungs are reasoned, not measured - calibrate those first")
+            print("        judgement rungs are reasoned guesses with no measurement behind them; "
+                  "calibrate those first")
     if doc["unscored"]:
         print()
         for axis in doc["unscored"]:
@@ -691,7 +692,7 @@ def refuse(scale_path, problems):
     print(f"error: the scale {scale_path} is not valid, so nothing was scored:", file=sys.stderr)
     for line in problems:
         print(line, file=sys.stderr)
-    print("Fix the scale, or point --scale at one that validates. The default scale is not "
-          "substituted for a broken one, because that would hide the problem.", file=sys.stderr)
+    print("Fix the scale, or point --scale at one that validates. A broken scale is never swapped "
+          "for the default, because that would hide the problem.", file=sys.stderr)
     return 2
 

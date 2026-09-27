@@ -44,5 +44,22 @@ class DetailsPassthrough(unittest.TestCase):
         self.assertNotIn("<!doctype html>", R.build_page(md, [], fragment=True))
 
 
+class NamesFromTheTitle(unittest.TestCase):
+    """The saved file and the browser tab are named after what the report is about."""
+
+    def test_a_log_report_is_named_after_its_subject(self):
+        md = "# Log insights: cockroach.node1.log\n\nText.\n"
+        self.assertRegex(R.default_name(md, None), r"^log-insights-cockroach\.node1\.log-\d{8}-\d{4}$")
+        self.assertIn("<title>cockroach.node1.log log insights</title>", R.build_page(md, []))
+
+    def test_a_session_report_is_named_after_its_session(self):
+        md = "# Session 61e8bbf7, 2026-09-01 to 2026-09-16\n\nText.\n"
+        self.assertRegex(R.default_name(md, None), r"^log-insights-session-61e8bbf7-\d{8}-\d{4}$")
+        self.assertIn("<title>Session 61e8bbf7, 2026-09-01 to 2026-09-16</title>", R.build_page(md, []))
+
+    def test_an_explicit_name_wins(self):
+        self.assertRegex(R.default_name("# Session x, y\n", "mine"), r"^log-insights-mine-")
+
+
 if __name__ == "__main__":
     unittest.main()
