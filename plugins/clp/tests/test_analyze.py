@@ -325,6 +325,18 @@ class TheCommandItself(unittest.TestCase):
         self.assertIn("not logs", proc.stderr)
         self.assertIn("--extensions", proc.stderr)
 
+    def test_text_no_format_matches_asks_for_a_parser_not_a_choice_of_settings(self):
+        """Zero compression commands is a different problem from several of them."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "app.log"), "w", encoding="utf-8") as handle:
+                handle.write("hello world line one\nsecond plain line here\nthird line\n")
+            proc = self.run_it(tmp, "--dry-run", "--quiet")
+        self.assertEqual(proc.returncode, 1)
+        self.assertNotIn("different compression settings", proc.stderr)
+        self.assertIn("nothing here it can compress", proc.stderr)
+        self.assertIn("app.log: text with no bundled converter", proc.stderr)
+        self.assertIn(f"clp detect {tmp} --parser FILE", proc.stderr)
+
     def test_force_and_dry_run_contradict_each_other(self):
         proc = self.run_it("--force", "--dry-run")
         self.assertEqual(proc.returncode, 2)

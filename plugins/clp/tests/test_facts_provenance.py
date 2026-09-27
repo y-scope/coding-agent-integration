@@ -325,6 +325,44 @@ class SessionFactsProvenance(unittest.TestCase):
         self.assertIn("## 10. Verification", text)
         self.assertNotIn("Axis A1", text)
 
+    def test_the_cache_hit_rate_divides_by_the_whole_prompt(self):
+        """Anthropic's input_tokens excludes cached tokens, so a well-cached call reads far more
+        from the cache than it reports as input. Dividing by input alone gave ratios above 1."""
+        db = sqlite3.connect(os.path.join(self.dir, "catalog.sqlite"))
+        db.execute("UPDATE events SET tokens_cache_read = 9000, tokens_cache_write = 300 WHERE uuid = 'u5'")
+        db.commit()
+        db.close()
+        text, stdout = self.run_facts("--axes")
+        a3 = next(a for a in session_score.parse_axes_output(stdout)["axes"] if a["id"] == "A3")
+        # input 500 + 700 (m1 counted once), cache_read 9,000, cache_write 300
+        self.assertAlmostEqual(a3["value"], 9000 / 10500, places=4)
+        self.assertEqual(a3["denominator"], 10500)
+        self.assertIn("9,000 / 10,500 = 85.7143%", text)
+
+    def outcomes_against(self, commits):
+        """Section 5 when the repository confirms `commits`; the fixture's output claims one."""
+        cat = session_facts.Catalog(os.path.join(self.dir, "catalog.sqlite"))
+        out = []
+        repo = {"repo": "/w", "commits": commits, "prs": [], "commits_in_span": len(commits)}
+        session_facts.section_outcomes(cat, None, "not run", repo, "given", out.append,
+                                       {"bundle": self.dir}, {}, [], 10)
+        return "\n".join(out)
+
+    def test_commit_counts_that_agree_say_so(self):
+        text = self.outcomes_against([{"match": "exact"}])
+        self.assertIn("1 : 1 = 1.00x. The session's own output and the repository agree.", text)
+        self.assertNotIn("overcounts", text)
+        self.assertNotIn("not a reliable record", text)
+
+    def test_commit_counts_that_differ_say_which_way(self):
+        text = self.outcomes_against([{"match": "exact"}] * 3)
+        self.assertIn("3 : 1 = 3.00x. Reading only the session's own output undercounts the commits "
+                      "by that factor.", text)
+        self.assertIn("not a reliable record", text)
+        text = self.outcomes_against([])
+        self.assertIn("0 : 1 = 0.00x. Reading only the session's own output overcounts the commits.",
+                      text)
+
 
 class InsightsFactsProvenance(unittest.TestCase):
     """clp facts: markers, and the KQL behind each count."""

@@ -124,7 +124,8 @@ AXES = {
     "A2": {"group": "A", "label": "provider stability", "unit": "errors_per_1k_responses",
            "measures": "API and timeout failures per 1,000 model responses"},
     "A3": {"group": "A", "label": "cache efficiency", "unit": "share",
-           "measures": "cache_read tokens as a share of input tokens"},
+           "measures": "cache_read tokens as a share of all prompt tokens (input + cache_read + "
+                       "cache_write)"},
     "A4": {"group": "A", "label": "config correctness", "unit": "share",
            "measures": "share of launches the runtime rejected for a config or syntax fault"},
     "A5": {"group": "A", "label": "runtime honesty", "unit": "share",
@@ -168,7 +169,7 @@ AXES = {
     # the bill), and those are different owners, so the duplication is the point:
     # it has to appear on the platform's card and on the bill payer's card.
     "D3": {"group": "D", "label": "cache recovery", "unit": "share",
-           "measures": "cache_read tokens as a share of input tokens (the same measurement as A3, "
+           "measures": "cache_read tokens as a share of all prompt tokens (the same measurement as A3, "
                        "because it is both a platform fault and a cost lever)"},
     "D4": {"group": "D", "label": "model-mix fitness", "unit": "share",
            "measures": "share of input tokens on the cheapest model, weighted by one minus its stall rate"},
@@ -1155,8 +1156,10 @@ def section_cost(cat, w, F, keys, alerts, top, multi, single_note, totals):
       "response *per log*, and one response can be written to more than one log, so the bundle-wide "
       "total below is deduplicated by `message_id` while each per-kind row is left as that log's own "
       "accounting.")
-    w(f"{DOMAIN} `tokens_input` is the whole context sent with the call, so a long conversation's "
-      "input total is far larger than its context window.")
+    w(f"{DOMAIN} In the Anthropic usage format these logs use, `tokens_input` is only the part of "
+      "the prompt that was neither read from nor written to the prompt cache. The whole prompt is "
+      "input + cache read + cache write, and on a well-cached thread input is the smallest of the three. "
+      "A provider that does not cache counts the whole prompt as input.")
     w("")
     w(f"| Archive kind | Responses {MEASURED} | Input {MEASURED} | Output {MEASURED} "
       f"| Cache read {MEASURED} | Cache write {MEASURED} |")
@@ -1223,21 +1226,28 @@ def section_cost(cat, w, F, keys, alerts, top, multi, single_note, totals):
         w(f"- {DERIVED} `{kind}` is {frac(tin or 0, kind_in, 'input tokens')} and "
           f"{frac(n, kind_resp, 'records')}.")
 
-    hit = (total_cr / total_in) if total_in else None
+    # The whole prompt: `input` excludes what the cache served or stored (see the note above).
+    prompt = total_in + (total_cr or 0) + (total_cw or 0)
+    hit = (total_cr / prompt) if prompt else None
+    F["prompt_tokens"] = prompt
     F["cache_hit_rate"] = hit
     keys["CACHE_HIT_RATE"] = f"{hit:.4f}" if hit is not None else "n/a"
-    w(f"- {DERIVED} Cache hit rate (cache_read / input): {num(total_cr)} / {num(total_in)} = "
+    w(f"- {DERIVED} Cache hit rate (cache_read / (input + cache_read + cache_write)): "
+      f"{num(total_cr)} / {num(prompt)} = "
       + (f"{hit:.4%}" if hit is not None else "n/a")
       + (". Nothing was ever served from cache, so every token of every context was billed as fresh "
          "input." if hit == 0 else ""))
     if hit is not None:
         add_check(F, "Cache hit rate", DERIVED, f"{hit:.4%}", dedup_sql,
-                  derivation=f"cache_read {num(total_cr)} over input {num(total_in)}, both from the one "
-                             "deduplicated query. It answers \"how much of the context we sent did we "
-                             "avoid paying full price for\" because cache_read is the part of the input "
-                             "the provider served from a cache instead of reading afresh.",
-                  trap="cache_read is a subset of input, not a figure beside it, so the ratio is a "
-                       "share and can never exceed 1.")
+                  derivation=f"cache_read {num(total_cr)} over the whole prompt {num(prompt)}, which is "
+                             f"input {num(total_in)} + cache_read {num(total_cr)} + cache_write "
+                             f"{num(total_cw)}, all from the one deduplicated query. It answers \"how "
+                             "much of the prompt we sent did we avoid paying full price for\" because "
+                             "cache_read is the part the provider served from a cache instead of "
+                             "reading afresh.",
+                  trap="`input` here excludes the cached tokens, so cache_read is added to the "
+                       "denominator. Divided by `input` alone, a well-cached thread comes out far "
+                       "above 1.")
     w(f"- {DERIVED} Input:output ratio: {num(total_in)} : {num(total_out)} = "
       + (f"{total_in / total_out:.1f}:1" if total_out else "n/a")
       + f". {DOMAIN} Input dominates the bill, so waste and cache both matter more than output length.")
@@ -1646,13 +1656,17 @@ def section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, 
               sql_check(F["bundle"], "SELECT action, COUNT(*) AS commands, SUM(confirmed) AS "
                                      "self_confirmed, SUM(failed) AS failed FROM actions GROUP BY 1"))
     if confirmed_commits is not None:
-        w(f"  - {DERIVED} Ratio, repository-confirmed to output-claimed commits: "
-          f"{num(confirmed_commits)} : {num(commit_claimed)} = "
-          + (f"{confirmed_commits / commit_claimed:.2f}x" if commit_claimed else "n/a")
-          + ". Reading only the session's own output "
-          + ("undercounts" if confirmed_commits > commit_claimed else "overcounts")
-          + " the commits by that factor.")
-        w(f"    - {INFERENCE} The session's own output is not a reliable record of what landed.")
+        line = (f"  - {DERIVED} Ratio, repository-confirmed to output-claimed commits: "
+                f"{num(confirmed_commits)} : {num(commit_claimed)} = "
+                + (f"{confirmed_commits / commit_claimed:.2f}x" if commit_claimed else "n/a") + ".")
+        if confirmed_commits == commit_claimed:
+            # Agreement is a finding too, and the inference below would contradict it.
+            w(line + " The session's own output and the repository agree.")
+        else:
+            gap = "undercounts" if confirmed_commits > commit_claimed else "overcounts"
+            factor = " by that factor" if confirmed_commits and commit_claimed else ""
+            w(line + f" Reading only the session's own output {gap} the commits{factor}.")
+            w(f"    - {INFERENCE} The session's own output is not a reliable record of what landed.")
     if confirmed_prs is not None:
         w(f"  - {DERIVED} Ratio, GitHub-confirmed to output-claimed PRs: {num(confirmed_prs)} : "
           f"{num(pr_claimed)} = "
@@ -2139,18 +2153,21 @@ def section_axes(w, F):
                                 f"{DEDUP_SQL})) AS responses"))
 
     hit = F.get("cache_hit_rate")
-    cache_components = (f"cache_read {num(F.get('cache_read'))} of input {num(F.get('total_input'))} "
-                        f"tokens ({pct(F.get('cache_read') or 0, F.get('total_input') or 0)})")
-    cache_because = ("cache_read is the part of the input the provider served from a cache instead of "
-                     "reading afresh, so the ratio is exactly the fraction of the context nobody had to "
+    cache_components = (f"cache_read {num(F.get('cache_read'))} of {num(F.get('prompt_tokens'))} prompt "
+                        f"tokens ({pct(F.get('cache_read') or 0, F.get('prompt_tokens') or 0)}), the "
+                        f"prompt being input {num(F.get('total_input'))} + cache_read + cache_write "
+                        f"{num(F.get('cache_write'))}")
+    cache_because = ("cache_read is the part of the prompt the provider served from a cache instead of "
+                     "reading afresh, so the ratio is exactly the fraction of the prompt nobody had to "
                      "pay full price for")
     cache_check = sql_check(
-        bundle, f"SELECT SUM(cr) AS cache_read, SUM(ti) AS input FROM (SELECT MAX(tokens_input) AS ti, "
-                f"tokens_cache_read AS cr FROM events WHERE tokens_input IS NOT NULL GROUP BY "
-                f"{DEDUP_SQL})")
+        bundle, f"SELECT SUM(cr) AS cache_read, SUM(ti) + SUM(cr) + SUM(cw) AS prompt, SUM(ti) AS input, "
+                f"SUM(cw) AS cache_write FROM (SELECT MAX(tokens_input) AS ti, "
+                f"COALESCE(tokens_cache_read, 0) AS cr, COALESCE(tokens_cache_write, 0) AS cw "
+                f"FROM events WHERE tokens_input IS NOT NULL GROUP BY {DEDUP_SQL})")
     put("A3", hit, cache_components if hit is not None else "no input tokens",
         "no response records input tokens, so there is nothing to divide by",
-        denominator=F.get("total_input") or None, because=cache_because, check=cache_check)
+        denominator=F.get("prompt_tokens") or None, because=cache_because, check=cache_check)
 
     launches = F.get("launches") or 0
     rejected = F.get("launch_rejected_config") or 0
@@ -2372,7 +2389,7 @@ def section_axes(w, F):
     # The same measurement as A3, on purpose - see the comment on AXES["D3"].
     put("D3", hit, cache_components if hit is not None else "no input tokens",
         "no response records input tokens, so there is nothing to divide by",
-        denominator=F.get("total_input") or None, because=cache_because, check=cache_check)
+        denominator=F.get("prompt_tokens") or None, because=cache_because, check=cache_check)
 
     put("D4", None, "no model is recorded against any response",
         "the catalog records no model for the responses, so neither the token share by model nor "

@@ -1,5 +1,5 @@
 {
-  "scale_version": "1.3.1",
+  "scale_version": "1.4.0",
   "name": "CLP default session scale",
   "notes": "These are defaults, and a customer is expected to change them. Every threshold is a judgement about what a raw measurement is worth: copy this file, edit the ladders, and point the skill at the copy. clp session facts never reads these ladders. It emits raw values and their components, and an agent applies this file, so the judgement stays where anyone can see and override it. Report the four group means separately and never average them into one composite. The groups have different owners, and a single number hides the signal each owner needs. An axis the script reports as n/a was not measured: leave it out of its group's mean, say how many axes the mean rests on, and never score it zero. Axes marked cohort_relative mean nothing as an absolute, and a trend drawn from them needs a cohort key first: the same kind of work, the same repository, a comparable span. A3 and D3 are the same measurement because a cache miss is both a platform fault and a cost lever, and those have different owners. Every axis has a `basis` saying what its ladder rests on (definitional, mechanism, observed or judgement) and a `rationale` for where the rungs fall. Most are `judgement`, a defensible starting point with nothing measured behind it, and those are where calibration pays off first; `calibration` says how. An axis may carry `gated_by`, a cohort key that must hold a given value before the axis means anything. C4 autonomy is scored only for a session meant to run unattended, since in a supervised session the same number is a design choice. A gated-out axis is left unscored with its reason, like one that could not be measured, so its group's mean rests on fewer axes instead of being dragged down. An axis may also carry `min_denominator`. A rate over a handful of observations is noise whatever ladder reads it, so below that count the axis is left unscored. The floor is set only where the divisor is a count of things that can plausibly be small; a rate over hundreds of millions of tokens needs none. Every cost axis is in tokens. The session log has a `totalCostUSD` field and this scale ignores it: it is an estimate from some unit cost, not necessarily what was paid, and it is not always updated. Converting tokens to money needs a price list, a plan and a provider, so the consumer does that with their own rates. Do not add a currency axis.",
   "calibration": {
@@ -88,7 +88,7 @@
       "id": "A3",
       "group": "A",
       "label": "cache efficiency",
-      "measures": "cache_read tokens as a share of input tokens",
+      "measures": "cache_read tokens as a share of all prompt tokens (input + cache_read + cache_write)",
       "unit": "share",
       "direction": "higher_is_better",
       "cohort_relative": false,
@@ -492,7 +492,7 @@
       "id": "D3",
       "group": "D",
       "label": "cache recovery",
-      "measures": "cache_read tokens as a share of input tokens (the same measurement as A3, because it is both a platform fault and a cost lever)",
+      "measures": "cache_read tokens as a share of all prompt tokens (the same measurement as A3, because it is both a platform fault and a cost lever)",
       "unit": "share",
       "direction": "higher_is_better",
       "cohort_relative": false,
