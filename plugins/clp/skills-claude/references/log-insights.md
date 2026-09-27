@@ -198,9 +198,7 @@ Focus the user chose: FOCUS
 What the user said they already know: USER_CONTEXT
 Report depth: DEPTH (short unless the user asked for a thorough report)
 
-Every query has already run and every number has already been computed. Do NOT
-run searches and do NOT calculate anything: no sums, no percentages, no rates,
-no durations. Read the files below (cat, head) and write the report from them.
+Every query has already run and every number has already been computed. Do NOT run searches and do NOT calculate anything: no sums, no percentages, no rates, no durations. Read the files below (cat, head) and write the report from them.
 
 SCHEMA (field names in this archive):
   timestamp: <TS>   severity: <SEV>   logger: <LOGGER>   message: <MSG>
@@ -210,144 +208,46 @@ TAXONOMY (categories):
 <PASTE taxonomy>
 
 FILES
-  FACTS_FILE: computed in code; every figure in it is exact. It holds the
-    user's focus and context with the focus queries' results (first), the
-    totals, the severity and logger breakdowns, the category table (with its
-    sum and the records no template accounts for), the top templates overall
-    (each with its category) and within each category, the fetched warnings and
-    errors grouped by message shape, the semantic entries, and the flagged
-    queries.
-  TEMPLATES_FILE: longer template texts per category, for describing what a
-    category does; <*> marks variables, " <NL> " an embedded newline, a
-    trailing "…" a template cut for length. Take every count from the facts,
-    never from this file.
-  RESULTS_TABLE: two tables, the baseline queries and the plan's keyword
-    probes, each with its counts and numbered from 1 (cite "baseline #N" or
-    "plan #N").
-    The probes are loose keyword filters: prefer the facts' category records
-    over a probe's count, and say so when a probe is flagged non-selective.
-    Entries marked "(focus)" ran for the user's focus.
+  FACTS_FILE: computed in code; every figure in it is exact. It holds the user's focus and context with the focus queries' results (first), the totals, the severity and logger breakdowns, the category table (with its sum and the records no template accounts for), the top templates overall (each with its category) and within each category, the fetched warnings and errors grouped by message shape, the semantic entries, and the flagged queries.
+  TEMPLATES_FILE: longer template texts per category, for describing what a category does; <*> marks variables, " <NL> " an embedded newline, a trailing "…" a template cut for length. Take every count from the facts, never from this file.
+  RESULTS_TABLE: two tables, the baseline queries and the plan's keyword probes, each with its counts and numbered from 1 (cite "baseline #N" or "plan #N"). The probes are loose keyword filters: prefer the facts' category records over a probe's count, and say so when a probe is flagged non-selective. Entries marked "(focus)" ran for the user's focus.
 
 APPLICATION: what these logs appear to be and the evidence for it, from phase 1 -- or "unidentified" when the fingerprint was too generic to name.
 
 Rules:
-Before you write, read both style files and follow both: the plugin's writing
-guide (`writing-guide/rules.md`, from the plugin root) for the prose, whose Parts
-0, 1 and 2 apply to everything and whose Part 8 is the one for a report, and
-`references/report-style.md` for the report's own shape. Where a rule seems to be
-in both, the writing guide's wording is the definition.
+Before you write, read both style files and follow both: the plugin's writing guide (`writing-guide/rules.md`, from the plugin root) for the prose, whose Parts 0, 1 and 2 apply to everything and whose Part 8 is the one for a report, and `references/report-style.md` for the report's own shape. Where a rule seems to be in both, the writing guide's wording is the definition.
 
-1. Every number, percentage, count and timestamp in the report must appear
-   verbatim in FACTS_FILE (or in RESULTS_TABLE for a query's own count). If a
-   figure you want is not there, leave it out; never derive one. The one
-   exception is rule 8.2 of the writing guide: a ratio may be rounded to one
-   decimal place in the body, never in its reference entry, and a count is
-   never rounded at all.
-2. The archive's time span is the facts' "Time span" line: quote it as it
-   is, and where it says unavailable, say it is unavailable. The timestamps
-   in the grouped records cover those records only; say "first/last seen
-   among the fetched records", never present them as the archive's span.
-3. Do not state a rate, a duration, or a cause as fact. A cause or a
-   recommendation is inference: label it "inference".
-3a. Label every claim with its evidence tier: measured, derived, inference or
-   domain knowledge. The definition, the rules, and the two cases that look
-   measured but are not -- a category is classification output while its
-   counts are measured; a score is a policy mapping -- are in
-   references/evidence-tiers.md. Read it and follow it; do not paraphrase it.
-3b. APPLICATION is what these logs appear to be, with the evidence that
-   identified it. Use what you know about that system to say why a finding
-   matters -- what a gossip failure means for a distributed database, what a
-   growing queue means for an inference server, what the blast radius of each
-   is. Lead with it where the user asked for significance or impact.
-   Three limits, and they are strict. Label it "domain knowledge", separately
-   from "inference", so a reader can tell a claim about this system from a
-   claim about these records. It may never supply a number, a rate or a
-   duration: those come from FACTS_FILE or they do not appear. And it may
-   never overrule a measurement -- where what you know about the system
-   disagrees with what the records show, report the records and say the
-   expectation did not hold.
-3c. Where APPLICATION says the identification is uncertain, say so once and
-   keep the domain knowledge to what holds for the family of systems it could
-   be, or leave it out. A confident explanation built on a misidentified
-   application is the worst output here: it reads as insight and points the
-   reader away from what the logs actually say.
-4. Name the top warning and error templates from the grouped records, with
-   their counts, exactly as the facts list them.
-5. Report semantic findings only when they add something to the templates,
-   with their kql; otherwise one line saying semantic search surfaced nothing
-   beyond the baseline.
-6. A count belongs to the one line it is printed on. Quote it as the facts give
-   it; never add two counts together, and never give one group's count to
-   another group.
-7. Records with no value in a field are listed apart from the field's values;
-   never nest them under one of the values or its total.
-8. A follow-up KQL query may filter only on the fields the facts list, and on
-   semantic("..."). Categories, templates and the taxonomy are not fields:
-   never write `category:` or similar.
-9. Describe only what the files show. No characterisation of the environment
-   (for example "production-grade") that no line supports.
-10. Lead with the focus. The user's context is their account, not a finding:
-   say whether the files support it, contradict it, or say nothing about it,
-   and quote the lines that decide it. Never restate it as a fact.
-11. Write the short form unless DEPTH says thorough. Read
-   references/report-style.md and follow every rule in it: lead each section
-   with the finding, plain words and short sentences, one line per point, a
-   table for three or more of anything. Shortening never drops an evidence
-   tier or a caveat that changes how a figure reads, and never say a thing
-   twice.
-12. Keep the tooling out of the body. No query text, no field names, no command
-   lines in the sections a reader reads for the findings, and no term they would
-   have to know this tool to understand: assume they have never written a KQL
-   query, and say what was looked for in plain words instead of how. The reference
-   section is where the how goes, and it is the only section that may carry a query.
-13. Do not wrap lines by hand. One line per paragraph, list item, table row and
-   reference entry, however long it runs; the renderers reflow text themselves.
-   The section list above is wrapped only because it is an instruction to you.
+1. Every number, percentage, count and timestamp in the report must appear verbatim in FACTS_FILE (or in RESULTS_TABLE for a query's own count). If a figure you want is not there, leave it out; never derive one. The one exception is rule 8.2 of the writing guide: a ratio may be rounded to one decimal place in the body, never in its reference entry, and a count is never rounded at all.
+2. The archive's time span is the facts' "Time span" line: quote it as it is, and where it says unavailable, say it is unavailable. The timestamps in the grouped records cover those records only; say "first/last seen among the fetched records", never present them as the archive's span.
+3. Do not state a rate, a duration, or a cause as fact. A cause or a recommendation is inference: label it "inference".
+3a. Label every claim with its evidence tier: measured, derived, inference or domain knowledge. The definition, the rules, and the two cases that look measured but are not -- a category is classification output while its counts are measured; a score is a policy mapping -- are in references/evidence-tiers.md. Read it and follow it; do not paraphrase it.
+3b. APPLICATION is what these logs appear to be, with the evidence that identified it. Use what you know about that system to say why a finding matters -- what a gossip failure means for a distributed database, what a growing queue means for an inference server, what the blast radius of each is. Lead with it where the user asked for significance or impact. Three limits, and they are strict. Label it "domain knowledge", separately from "inference", so a reader can tell a claim about this system from a claim about these records. It may never supply a number, a rate or a duration: those come from FACTS_FILE or they do not appear. And it may never overrule a measurement -- where what you know about the system disagrees with what the records show, report the records and say the expectation did not hold.
+3c. Where APPLICATION says the identification is uncertain, say so once and keep the domain knowledge to what holds for the family of systems it could be, or leave it out. A confident explanation built on a misidentified application is the worst output here: it reads as insight and points the reader away from what the logs actually say.
+4. Name the top warning and error templates from the grouped records, with their counts, exactly as the facts list them.
+5. Report semantic findings only when they add something to the templates, with their kql; otherwise one line saying semantic search surfaced nothing beyond the baseline.
+6. A count belongs to the one line it is printed on. Quote it as the facts give it; never add two counts together, and never give one group's count to another group.
+7. Records with no value in a field are listed apart from the field's values; never nest them under one of the values or its total.
+8. A follow-up KQL query may filter only on the fields the facts list, and on semantic("..."). Categories, templates and the taxonomy are not fields: never write `category:` or similar.
+9. Describe only what the files show. No characterisation of the environment (for example "production-grade") that no line supports.
+10. Lead with the focus. The user's context is their account, not a finding: say whether the files support it, contradict it, or say nothing about it, and quote the lines that decide it. Never restate it as a fact.
+11. Write the short form unless DEPTH says thorough. Read references/report-style.md and follow every rule in it: lead each section with the finding, plain words and short sentences, one line per point, a table for three or more of anything. Shortening never drops an evidence tier or a caveat that changes how a figure reads, and never say a thing twice.
+12. Keep the tooling out of the body. No query text, no field names, no command lines in the sections a reader reads for the findings, and no term they would have to know this tool to understand: assume they have never written a KQL query, and say what was looked for in plain words instead of how. The reference section is where the how goes, and it is the only section that may carry a query.
+13. Do not wrap lines by hand. One line per paragraph, list item, table row and reference entry, however long it runs; the renderers reflow text themselves. The section list above is wrapped only because it is an instruction to you.
 
 Write ONLY the Markdown Log Insights Report to
 /tmp/clp-insights-report.md (Write tool), then reply DONE and nothing else.
 
-If DEPTH is short (the default), the report has these sections and no others --
-no Query Log, which belongs to the thorough form: a writer who adds one has turned
-a short report into a long one. The reference section is the last of them and the
-only place a query, a field name or a command line may appear. A legend line sits
-directly under the title, before section 1, reading
+If DEPTH is short (the default), the report has these sections and no others -- no Query Log, which belongs to the thorough form: a writer who adds one has turned a short report into a long one. The reference section is the last of them and the only place a query, a field name or a command line may appear. A legend line sits directly under the title, before section 1, reading
 `*[M] measured, [D] derived, [I] inference, [K] domain knowledge.*`
-1. Summary -- what these logs appear to be, with the evidence that identified
-   them ("unidentified" where it could not be named), then total records, the
-   severity counts, the archive span and the top logger/component.
-2. Focus -- the user's question answered first: the focus categories with their
-   records and templates, the focus queries' results, and whether the records
-   support, contradict or are silent on what the user said they knew. For a
-   focus of "everything", the high-priority categories.
-3. Log Shape Baseline -- the distinct template count, the top templates with
-   their counts, and the category table (priority, templates and records per
-   category) with the records no template accounts for.
-4. Issues & Warnings -- error and warning counts, the top warning and error
-   templates from the grouped records, and the actionable problems, labelled
-   inference where they are one. Semantic findings only where they add
-   something to the templates.
-5. What it means for the system -- only where APPLICATION named one and it adds
-   something. Every claim here is labelled "domain knowledge", carries no number
-   that is not already above, and gives way to the records wherever the two
-   disagree.
-6. Next questions -- 2 or 3 questions a reader might ask next, in plain words.
-   No query syntax here: someone reading this may never have written a query.
-   The thorough form gives the queries behind them.
-7. Reference -- checking each figure. One entry per claim in the body, headed
-   `### R3 Workflow instance spans`, carrying the figure, its tier and the one
-   command that reproduces it. End every claim in the body with a link to its
-   entry, `[R3](#r3-workflow-instance-spans)`, so a reader can validate a figure
-   they doubt without anyone having to read a query. Wrap the entries in a
-   `<details>` block whose `<summary>` says what opening it is for, with both tags
-   on lines of their own, so the entries stay collapsed until a reader opens them
-   or follows a claim's link in. Entry headings use letters, digits and single
-   spaces only, because GitHub and the plugin's HTML saver strip punctuation
-   differently and a dash or a colon breaks the link in one of them.
+1. Summary -- what these logs appear to be, with the evidence that identified them ("unidentified" where it could not be named), then total records, the severity counts, the archive span and the top logger/component.
+2. Focus -- the user's question answered first: the focus categories with their records and templates, the focus queries' results, and whether the records support, contradict or are silent on what the user said they knew. For a focus of "everything", the high-priority categories.
+3. Log Shape Baseline -- the distinct template count, the top templates with their counts, and the category table (priority, templates and records per category) with the records no template accounts for.
+4. Issues & Warnings -- error and warning counts, the top warning and error templates from the grouped records, and the actionable problems, labelled inference where they are one. Semantic findings only where they add something to the templates.
+5. What it means for the system -- only where APPLICATION named one and it adds something. Every claim here is labelled "domain knowledge", carries no number that is not already above, and gives way to the records wherever the two disagree.
+6. Next questions -- 2 or 3 questions a reader might ask next, in plain words. No query syntax here: someone reading this may never have written a query. The thorough form gives the queries behind them.
+7. Reference -- checking each figure. One entry per claim in the body, headed `### R3 Workflow instance spans`, carrying the figure, its tier and the one command that reproduces it. End every claim in the body with a link to its entry, `[R3](#r3-workflow-instance-spans)`, so a reader can validate a figure they doubt without anyone having to read a query. Wrap the entries in a `<details>` block whose `<summary>` says what opening it is for, with both tags on lines of their own, so the entries stay collapsed until a reader opens them or follows a claim's link in. Entry headings use letters, digits and single spaces only, because GitHub and the plugin's HTML saver strip punctuation differently and a dash or a colon breaks the link in one of them.
 
-If DEPTH is thorough, use the full section list in "Report format" below
-instead, which adds Notable Categories, Performance Signals, Configuration &
-Startup and Semantic Search Coverage, and a Query Log.
+If DEPTH is thorough, use the full section list in "Report format" below instead, which adds Notable Categories, Performance Signals, Configuration & Startup and Semantic Search Coverage, and a Query Log.
 ```
 
 ## Report format

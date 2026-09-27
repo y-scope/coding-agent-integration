@@ -142,6 +142,7 @@ Trailers carrying real information stay: `Fixes #N`, `Co-Authored-By:` naming an
 - An existing hard-wrapped file keeps its convention. Rewrap only the paragraphs that you were already editing. Table rows are never wrapped.
 - Commit message bodies vary by repo, so confirm rather than assuming.
 - An analysis report is a new Markdown file, so it is not wrapped by hand: one line per paragraph, list item, table row and reference entry, however long it runs. The renderers reflow text to their own column, and a paragraph broken at the author's column shows those breaks mid-sentence wherever the reader's column is wider.
+- A prompt embedded in a Markdown file is not wrapped either, and this is the one that drifts back. A writer imitates the shape of its instructions, so a rule against hand-wrapping, itself hard-wrapped at eighty columns, teaches the opposite of what it says. Column-aligned blocks are not wrapping and stay as they are: a table, a hanging-indent reference of syntax forms, a code sample.
 
 ## Sound
 
