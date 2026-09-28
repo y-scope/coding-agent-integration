@@ -1,6 +1,6 @@
 # Log shape insight reference (`analyze-logs`, general route steps 6–9)
 
-Read this when a classification exists (`/tmp/log-shape-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE); the context question below is asked at step 6, before it does. It covers the three questions to the user, the summary, building the insight inputs, the core plan's pool and the focus queued into it, the facts, the report writer's prompt, saving the report, and the report format. It is the general route's command reference: the route's stages are top-level subcommands of `clp` (`clp bootstrap`, `clp baseline-plan`, `clp extract`, `clp run`, `clp focus`, `clp facts`).
+Read this when a classification exists (`/tmp/log-shape-classification.json`, either fresh from step 6 or fetched from the cache on UPTODATE); the context question below is asked at step 6, before it does. It covers the questions to the user, the summary, building the insight inputs, the core plan's pool and the focus queued into it, the facts, the report writer's prompt, saving the report, and the report format. It is the general route's command reference: the route's stages are top-level subcommands of `clp` (`clp bootstrap`, `clp baseline-plan`, `clp extract`, `clp run`, `clp focus`, `clp facts`).
 
 ## Ask what the user already knows (step 6)
 
@@ -10,6 +10,16 @@ Ask right after spawning the classifier, so the user answers while it runs (on U
 - "Chasing a problem" — something went wrong; the automatic "Other" field is where they say what (a symptom, a time, a component).
 - "Checking something specific" — a question they want answered.
 - "Just exploring" — no background; the whole picture is what they want.
+
+Ask a second question in the same call, header "Reader", not multi-select. Name the system from phase 1's identification, or say "the system that wrote these logs" when it could not be named:
+
+- question: "How well do you know <the system>? Pick one, or tell me in your own words."
+- "I know it well" — "The report uses terms like <three or four terms from these logs> without explaining them. If those read as familiar, this is you."
+- "Explain as I go" — the report adds a sentence or two of background wherever a finding needs it, so it runs longer.
+
+Fill in the example terms from the logs themselves: the system's own words as they recur in the templates you already have: the cluster representatives step 5 printed or, on UPTODATE, `/tmp/log-shape-templates-by-category.txt`. Examples are "lease transfer", "raft snapshot" or "gossip" for CockroachDB. Favour the words in warnings and errors, since the findings are likeliest to use those. Never use this plugin's vocabulary. The terms let the user judge themselves against the report they will actually get.
+
+The first option sets `READER` to `expert` and the second to `newcomer`. An answer typed into "Other" is the third choice: pass it to the writer verbatim as `READER`, since the user's description of what they know says more than either label. `references/report-style.md`, "Who the reader is", says what each one changes. When no one can answer, `READER` is `expert`.
 
 Keep the answer, verbatim, for the focus question and `clp focus --context`. When the user picks "Chasing a problem" or "Checking something specific" without saying what, ask what in the focus question's "Other" field; do not ask a third question. Never pass it to the classifier: the classification is cached per app and reused for every later capture, while the answer is about this one. When no one can answer (a headless run, or AskUserQuestion unavailable), skip both questions.
 
@@ -68,7 +78,7 @@ Then post the **summary**, while the pool runs. Keep it to about ten lines, ever
 
 ## Ask for the focus, and queue it (step 8)
 
-Ask in one AskUserQuestion, header "Focus", not multi-select (on UPTODATE, the context question above goes in the same call as its first question):
+Ask in one AskUserQuestion, header "Focus", not multi-select (on UPTODATE, the context and reader questions above go in the same call, ahead of it):
 
 - question: "What should the report focus on?"
 - first option, marked "(Recommended)": the categories the user's context points at, when it points at any ("request-handling + service-discovery — matches 'requests dropping'"); otherwise "Everything".
@@ -188,7 +198,7 @@ For a claude.ai page, add `artifact` to `--format` (or run it alone with `--form
 
 ## Report writer prompt template
 
-Fill in `ARCHIVE`, `GOAL`, `FOCUS` (the chosen categories, the user's own question, or "everything"), `USER_CONTEXT` (the context answer verbatim, or "none"), `FACTS_FILE` (`/tmp/clp-insights-facts.md`), `TEMPLATES_FILE` (`/tmp/log-shape-templates-by-category.txt`), `RESULTS_TABLE` (the two saved tables, `/tmp/clp-insights-baseline-table.md` and `/tmp/clp-insights-plan-table.md`), the schema fields, and the taxonomy:
+Fill in `ARCHIVE`, `GOAL`, `FOCUS` (the chosen categories, the user's own question, or "everything"), `USER_CONTEXT` (the context answer verbatim, or "none"), `READER` (`expert`, `newcomer`, or the user's own words, from the reader question), `FACTS_FILE` (`/tmp/clp-insights-facts.md`), `TEMPLATES_FILE` (`/tmp/log-shape-templates-by-category.txt`), `RESULTS_TABLE` (the two saved tables, `/tmp/clp-insights-baseline-table.md` and `/tmp/clp-insights-plan-table.md`), the schema fields, and the taxonomy:
 
 ```
 Write the Log Insights Report for this CLP archive: ARCHIVE
@@ -196,6 +206,7 @@ Goal: GOAL
 Focus the user chose: FOCUS
 What the user said they already know: USER_CONTEXT
 Report depth: DEPTH (short unless the user asked for a thorough report)
+Reader: READER
 
 Every query has already run and every number has already been computed. Do NOT run searches and do NOT calculate anything: no sums, no percentages, no rates, no durations. Read the files below (cat, head) and write the report from them.
 
@@ -232,6 +243,7 @@ Before you save the file, run the sound pass over your draft: read `writing-guid
 9. Describe only what the files show. No characterisation of the environment (for example "production-grade") that no line supports.
 10. Lead with the focus. The user's context is their account, not a finding: say whether the files support it, contradict it, or say nothing about it, and quote the lines that decide it. Never restate it as a fact.
 11. Write the short form unless DEPTH says thorough. Read references/report-style.md and follow every rule in it: lead each section with the finding, plain words and short sentences, one line per point, a table for three or more of anything. Shortening never drops an argument's marker or a caveat that changes how a figure reads, and never say a thing twice.
+11a. Write for READER, as "Who the reader is" in references/report-style.md describes. An expert gets the system's terms named and not explained. A newcomer gets one or two sentences on a term the first time a finding uses it, and one sentence on why each finding matters, labelled "domain knowledge" under rule 3b's limits. Anything else in READER is the user's own description of what they know: name what it covers, and explain what it doesn't. Where APPLICATION is uncertain, rule 3c limits the background the same way. Either way, explain only what a finding uses.
 12. Keep the tooling out of the body. No query text, no field names, no command lines in the sections a reader reads for the findings, and no term they would have to know this tool to understand: assume they have never written a KQL query, and say what was looked for in plain words instead of how. The reference section is where the how goes, and it is the only section that may carry a query.
 13. Do not wrap lines by hand. One line per paragraph, list item, table row and reference entry, however long it runs; the renderers reflow text themselves. The section list above is wrapped only because it is an instruction to you.
 
