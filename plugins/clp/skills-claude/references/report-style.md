@@ -10,6 +10,21 @@ Write the **short form**. It is the default on every run. Write the **thorough f
 
 The reader is skimming for what to do next. Aim for a report whose body fits on one or two screens; no section longer than a short paragraph. A category with nothing to say gets one line saying so, not a paragraph explaining the absence.
 
+## Who the reader is
+
+The run asks the user how well they know the system that wrote the logs, and the writer's prompt carries the answer as `READER`: `expert`, `newcomer`, or the user's own description in their words.
+
+- **`expert`** is the default, and the report every other rule in this file describes. The reader knows the system, so a term of it is named and not explained: a Claude Code user knows what a fork or a cache read is, and a CockroachDB operator knows what a lease is.
+- **`newcomer`** keeps the same sections, the same order and the same findings, and adds the background each finding needs, where it needs it. The first time a term of the system appears, one or two sentences say what it is. Each finding gets one sentence on why it matters. The body may run past two screens to fit them.
+- **The user's own words**, such as "I run Postgres but I'm new to CockroachDB" or "skip the basics, explain the caching", describe what the reader knows. Name what falls inside it, and explain what falls outside it the way a newcomer's report would. Where the words leave a term uncovered, go by what they imply about the reader; a DBA new to CockroachDB knows what a transaction is and not what a range lease is.
+
+What stays the same for every reader:
+
+- **Explain only what a finding uses.** No glossary section, no tour of the system, and no background for a category with nothing to say. A newcomer who reads a paragraph on how caching works and then finds no caching finding has been lectured, not helped.
+- **A definition is not an argument; an explanation often is.** "A cache read is the part of a prompt the provider already had" says what a word means and needs no marker. "So the session paid full price for most of its prompts" is a claim about this system's behaviour, and it is domain knowledge that says so, under rule 2 below.
+- **Background never carries a number.** Every figure still comes from the facts file, whoever the reader is.
+- **The tooling stays out either way.** Rule 4 is about this plugin's vocabulary, which no reader should need. This section is about the vocabulary of the system the logs came from.
+
 ## The report's own rules
 
 Parts 0, 1 and 2 of `writing-guide/rules.md` cover how the sentences read, and its Part 8 covers how a report lands on someone skimming it — the headings, the rounding, the placement of a trap or a citation, and what a table owes its reader. These five cover what a report is, on top of both.

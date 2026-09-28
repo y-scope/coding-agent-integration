@@ -1,6 +1,6 @@
 # Session insight — categories, questions, prompts, report
 
-Read this at step 2 of the `analyze-logs` skill's specialised route. It holds the seven categories, the wording of the three questions, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
+Read this at step 2 of the `analyze-logs` skill's specialised route. It holds the seven categories, the wording of the questions to the user, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
 
 Every figure quoted anywhere in this pass comes from the facts file that `clp session facts` writes. Nothing here recomputes a number.
 
@@ -36,7 +36,18 @@ Right after spawning the extras subagent (step 3). One AskUserQuestion, header `
 > - **Evaluating it for scoring** — you want the 0–10 scorecard to compare against other sessions. Runs the scoring pass as well as the checks.
 > - **Just exploring** — no particular suspicion. Queues nothing extra; you pick a focus once the checks come back.
 
-Keep the answer for the summary, the focus question and the report writer. Treat it as a claim to check against the records, never as a fact: a person's account of their own session is frequently wrong about *which* thing was slow or broken, and correcting that is the point of step 4.
+Ask a second question in the same call, header `Reader`:
+
+> **How well do you know Claude Code sessions? Pick one, or tell me in your own words.**
+>
+> - **I know them well** — the report uses terms like <three or four terms from this session> without explaining them. If those read as familiar, this is you.
+> - **Explain as I go** — the report adds a sentence or two of background wherever a finding needs it, so it runs longer.
+
+Fill in the example terms from this session's facts file, which step 2 already wrote. Take the ones its findings are likely to use: the categories that raised an alert first, then the largest figures. Use the words Claude Code itself uses, such as "cache reads", "forked agents", "stalled attempts" or "runtime interrupts", and never this plugin's own vocabulary. The terms let the user judge themselves against the report they will actually get.
+
+The first option sets `READER` to `expert` and the second to `newcomer`. An answer typed into "Other" is the third choice: pass it to the writer verbatim as `READER`, since the user's description of what they know says more than either label. `references/report-style.md`, "Who the reader is", says what each one changes. When no one can answer, `READER` is `expert`.
+
+Keep the context answer for the summary, the focus question and the report writer. Treat it as a claim to check against the records, never as a fact: a person's account of their own session is frequently wrong about *which* thing was slow or broken, and correcting that is the point of step 4.
 
 ## Ask for the focus
 
@@ -84,7 +95,7 @@ Return only the proposals. No preamble, no raw JSON, no method notes.
 
 ## Report writer prompt
 
-One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in the paths, the user's own words, and `DEPTH` — `short` unless the user asked for a thorough report.
+One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in the paths, the user's own words, `DEPTH` — `short` unless the user asked for a thorough report — and `READER`, from the `Reader` question: `expert`, `newcomer`, or the user's own words.
 
 ```
 Write the analysis report for a Claude Code session to /tmp/clp-session-report.md
@@ -95,6 +106,7 @@ The user's context, in their words: "CONTEXT"
 Their chosen focus: FOCUS
 Extra categories found: EXTRAS
 Report depth: DEPTH
+Reader: READER
 
 Rules:
 - Read both style files before you write, and follow both: the plugin's writing guide (`writing-guide/rules.md`, from the plugin root) for the prose — Parts 0, 1 and 2 apply to everything, and Part 8 is the one for a report — and `references/report-style.md` for the report's own shape. Where a rule seems to be in both, the writing guide's wording is the definition.
@@ -111,6 +123,7 @@ Rules:
 - Do not conclude a workflow succeeded from status "completed"; do not read an order of work from phase_order edges; do not claim one agent's output fed another. session-forensics.md has the full list.
 - Report a commit or PR as existing only where the facts file says the repository confirmed it, and say how it matched.
 - Write the short form unless DEPTH says thorough. Read references/report-style.md and follow every rule in it: lead each section with the finding, plain words and short sentences, one line per point, a table for three or more of anything. Shortening never drops an argument's marker, a derivation's trap, or a caveat that changes how a figure reads — cut the restatement around them instead, and never say a thing twice.
+- Write for READER, as "Who the reader is" in references/report-style.md describes. An expert gets the terms of Claude Code named and not explained. A newcomer gets one or two sentences on a term the first time a finding uses it, and one sentence on why each finding matters, with the explanation of how Claude Code behaves labelled as domain knowledge. Anything else in READER is the user's own description of what they know: name what it covers, and explain what it doesn't. Either way, explain only what a finding uses.
 - Keep the tooling out of the body. No query text, no field names, no commands outside the reference section, and no term a reader would have to know this tool to understand — write for someone who has never written a query. Say what was looked for in plain words, not how. The reference section is where the how goes.
 - Do not wrap lines by hand. One line per paragraph, list item, table row and reference entry, however long it runs; the renderers reflow text themselves. The sketches below are wrapped only because they are instructions to you.
 
