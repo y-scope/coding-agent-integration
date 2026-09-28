@@ -92,7 +92,6 @@ import re
 import sqlite3
 import subprocess
 import sys
-import textwrap
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -374,8 +373,17 @@ def minutes_between(start, end):
     return (b - a).total_seconds() / 60.0
 
 
-def wrap(text, width=96):
-    return "\n".join(textwrap.wrap(text, width)) if text else ""
+def para(text):
+    """One paragraph on one line, whatever shape the source string had.
+
+    The facts file is Markdown, so it is not hard-wrapped -- and this file is
+    read by the model that then writes the report, which imitates the shape of
+    what it reads. Wrapping these paragraphs at a column taught every report to
+    wrap too. The call sites build their text from adjacent string literals for
+    the source's sake, so the joins land mid-sentence; collapsing runs of
+    whitespace is what turns that back into one line.
+    """
+    return " ".join(str(text).split()) if text else ""
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +718,7 @@ def main(argv=None) -> int:
                    "no agent or workflow nodes")
 
     w("# Session trajectory facts (computed in code; every figure below is exact)\n")
-    w(wrap("Each section's figures are computed from the bundle's catalog, from clp session turns, "
+    w(para("Each section's figures are computed from the bundle's catalog, from clp session turns, "
            "or from clp bundle outcomes/repo, and every count carries the denominator it is a share of. "
            "Quote them; do not re-derive them. A figure that could not be computed says so and why."))
     w("")
@@ -719,12 +727,12 @@ def main(argv=None) -> int:
     for marker in (MEASURED, DERIVED, INFERENCE, DOMAIN):
         w(f"- `{marker}` {TIERS[marker]}")
     w("")
-    w(wrap("A percentage in parentheses is always derived, from the two counts printed beside it, so "
+    w(para("A percentage in parentheses is always derived, from the two counts printed beside it, so "
            "it takes no marker of its own. In a table the markers are in the column headings. A line "
            "with no marker is orientation, such as a heading, a source note or an instruction to the "
            "writer, and asserts nothing about the session."))
     w("")
-    w(wrap("Section 10 lists every headline figure again with the one command that reproduces it. "
+    w(para("Section 10 lists every headline figure again with the one command that reproduces it. "
            "The commands call this plugin's `clp` without a path, so put the plugin's `bin/` on "
            "$PATH before running them. " + CATALOG_NOTE))
     w("")
@@ -2421,20 +2429,20 @@ def section_axes(w, F):
 
     # -- render
     w("## 9. Scoring inputs (raw measurements; this script does not score them)")
-    w(wrap("Each row is one axis's raw value and the numerator and denominator behind it. This "
+    w(para("Each row is one axis's raw value and the numerator and denominator behind it. This "
            "section has no scores and no group means. What a value on an axis is worth is a judgement "
            "that differs between customers, so it lives in the scale file (scoring-scale.json), and "
            "an agent applies it. An axis that could not be measured says n/a and why. A scorer leaves "
            "it out of its group, because n/a is not a zero, and counting it would mark the session "
            "down for something nobody measured."))
     w("")
-    w(wrap(f"Every axis value is {DERIVED} derived, since each is a ratio or a rate over measured "
+    w(para(f"Every axis value is {DERIVED} derived, since each is a ratio or a rate over measured "
            "counts. The marker goes on the value, and the Components column holds the derivation: "
            "the numerator, the denominator, and why that ratio answers the axis's question. Section "
            "10 gives each axis the one command that reproduces its numerator and denominator "
            "together, or says why no single command can."))
     w("")
-    w(wrap("The scale reports the four groups separately and never averages them into one number. "
+    w(para("The scale reports the four groups separately and never averages them into one number. "
            "Each group has a different owner (infra and the gateway, the model and harness, the work "
            "itself, and whoever pays the bill), and one combined number would hide what each owner "
            "needs to see."))
@@ -2492,10 +2500,10 @@ def section_verification(w, F, axis_rows):
     if not checks:
         return
     w("## 10. Verification: the one command behind each figure")
-    w(wrap("Copy a command, run it, and compare. The commands call this plugin's `clp` without a "
+    w(para("Copy a command, run it, and compare. The commands call this plugin's `clp` without a "
            "path, so put the plugin's `bin/` on $PATH first. " + CATALOG_NOTE))
     w("")
-    w(wrap("A figure two tools have to answer together gets no command: it says which two, and what "
+    w(para("A figure two tools have to answer together gets no command: it says which two, and what "
            "each one checks. A command that only looks like a check is worse than none, because a "
            "reader who runs it and gets a different number concludes the figure is wrong."))
     w("")
