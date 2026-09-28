@@ -16,9 +16,15 @@ Run a restricted clp-s KQL search and return results on stdout.
 
 ARCHIVES_DIR may be one archive, a directory holding one archive, or a directory
 holding several (for example a bundle of logs compressed into one --output-dir).
-With several, each archive is searched in turn and the results are concatenated;
---count and --unique rows carry "archive_id", --limit caps the total, and
---archive-id picks one archive.
+With several the archives are searched concurrently and the results are
+concatenated in archive order -- the same rows a one-at-a-time search returns,
+in the same order. One clp-s process saturates one core and holds that archive's
+dictionaries resident (measured: ~7 GB for a 786 MB archive), so the number at
+once is whichever runs out first: archives, cores, or memory. CLP_SEARCH_JOBS
+overrides it, and CLP_SEARCH_JOBS=1 restores one at a time. --count and --unique
+rows carry "archive_id", --archive-id picks one archive, and --limit caps the
+total -- a global cap, so with it the archives are searched in turn and the
+search stops once enough records have come back.
 
 Allowed search controls:
   --tge TS                 Find records with UNIX epoch timestamp >= TS ms.
@@ -484,12 +490,82 @@ if [[ ${#archive_dirs[@]} -eq 1 ]]; then
   exit $?
 fi
 
+# How many archives to search at once. One clp-s process saturates one core and
+# holds the archive's dictionaries resident while it runs (measured: ~7 GB for a
+# 786 MB archive, roughly 9x its on-disk size), so the cap is whichever runs out
+# first: archives, cores, or memory. CLP_SEARCH_JOBS overrides it, and 1 restores
+# the one-at-a-time behavior.
+search_concurrency() {
+  local archives="$1"
+  if [[ -n "${CLP_SEARCH_JOBS:-}" ]]; then
+    if [[ "$CLP_SEARCH_JOBS" =~ ^[0-9]+$ && "$CLP_SEARCH_JOBS" -ge 1 ]]; then
+      (( CLP_SEARCH_JOBS < archives )) && { echo "$CLP_SEARCH_JOBS"; return; }
+      echo "$archives"; return
+    fi
+    echo "warning: ignoring CLP_SEARCH_JOBS=$CLP_SEARCH_JOBS: want a positive integer" >&2
+  fi
+  local cores mem_kb budget=1 largest=0 dir bytes
+  cores="$(nproc 2>/dev/null || echo 1)"
+  # MemAvailable, not MemFree: page cache is reclaimable and most of a box's
+  # memory is usually in it after a compression run.
+  mem_kb="$(awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo 2>/dev/null || echo 0)"
+  for dir in "${archive_dirs[@]}"; do
+    bytes="$(du -sk -- "$dir" 2>/dev/null | cut -f1)"
+    [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > largest )) && largest="$bytes"
+  done
+  # Reserve 9x the largest archive per process, with a 1 GiB floor so a tiny
+  # archive does not claim a whole core's worth of headroom it cannot use.
+  local per_kb=$(( largest * 9 ))
+  (( per_kb < 1048576 )) && per_kb=1048576
+  (( mem_kb > 0 )) && budget=$(( mem_kb / per_kb ))
+  (( budget < 1 )) && budget=1
+  local jobs="$archives"
+  (( cores < jobs )) && jobs="$cores"
+  (( budget < jobs )) && jobs="$budget"
+  echo "$jobs"
+}
+
 # Several archives. clp-s reads a directory of archives itself, but not one that also
 # holds the sidecar file, and its --count and --unique rows already carry archive_id,
 # so searching each archive and concatenating gives the same rows. --limit is a
 # global cap: each archive is asked for what is still needed, and the search stops
 # once enough records have come back.
 status=0
+
+# Without --limit every archive is searched whatever the others return, so they
+# run concurrently and each writes to its own pair of files. Output is replayed
+# in archive order afterwards, so the rows and the Command: lines come back in
+# the same order as a one-at-a-time search -- only faster.
+if [[ -z "$limit" ]]; then
+  jobs="$(search_concurrency "${#archive_dirs[@]}")"
+  if [[ "$jobs" -gt 1 ]]; then
+    echo "Searching ${#archive_dirs[@]} archives, ${jobs} at a time" >&2
+    declare -a out_files=() err_files=()
+    for i in "${!archive_dirs[@]}"; do
+      out_files[i]="$(mktemp)"
+      err_files[i]="$(mktemp)"
+    done
+    i=0
+    n="${#archive_dirs[@]}"
+    while (( i < n )); do
+      pids=()
+      for (( j = 0; j < jobs && i < n; j++, i++ )); do
+        search_archive "${archive_dirs[i]}" >"${out_files[i]}" 2>"${err_files[i]}" &
+        pids+=("$!")
+      done
+      for pid in "${pids[@]}"; do
+        wait "$pid" || status=$?
+      done
+    done
+    for i in "${!archive_dirs[@]}"; do
+      cat "${err_files[i]}" >&2
+      cat "${out_files[i]}"
+      rm -f "${err_files[i]}" "${out_files[i]}"
+    done
+    exit "$status"
+  fi
+fi
+
 remaining="$limit"
 for dir in "${archive_dirs[@]}"; do
   if [[ -z "$limit" ]]; then

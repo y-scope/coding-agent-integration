@@ -329,6 +329,21 @@ fi
 sample_ms_per_mib=45
 dump_ms_per_mib=180
 dump_us_per_log_shape=100
+# The record families are the only stage that queries, and they were missing
+# from this estimate entirely -- which is how a 2.4 GB HDFS archive was told to
+# expect 8 min and spent 28. The stage costs a --unique probe per candidate
+# field it has to rank (the dearest query the engine runs) and then one count
+# per value of the field it picks. Measured on that archive (2,475 MiB, 216M
+# records, searching its 4 archives concurrently): a --unique over the whole
+# capture is ~67 ms/MiB, a count ~3.5 ms/MiB. Two probes is the usual number
+# once single-valued fields are refused, and 16 counts stands in for a field
+# whose values are worth partitioning on -- 21 on that archive, fewer on most.
+# Both are nominal: a field with many values costs more, and the probe budget
+# caps only the probes.
+unique_ms_per_mib=67
+count_ms_per_mib=4
+nominal_probes=2
+nominal_family_counts=16
 bootstrap_started="$(date +%s)"
 archive_bytes="$(directory_file_bytes "$archives_dir")"
 if [[ "$stored" -eq 1 ]]; then
@@ -340,6 +355,9 @@ else
       + archive_log_shapes * dump_us_per_log_shape / 1000000 ))
   fi
 fi
+estimate_seconds=$(( estimate_seconds
+  + archive_bytes * (nominal_probes * unique_ms_per_mib
+                     + nominal_family_counts * count_ms_per_mib) / 1000 / 1048576 ))
 [[ "$estimate_seconds" -ge 2 ]] || estimate_seconds=2
 if [[ "$estimate_seconds" -lt 60 ]]; then
   estimate_text="under a minute"

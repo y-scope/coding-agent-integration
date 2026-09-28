@@ -3,10 +3,7 @@ Vendored verbatim from the `humanizer` skill, version 3.0.0.
 Source:  https://github.com/blader/humanizer  (SKILL.md)
 Licence: MIT. The full licence text is at the bottom of this file.
 
-Do not paraphrase this file when applying it, and do not edit it to fit a house
-style. It is here so that the plugin's report writers get the rules exactly as
-written, without a network call and without a lossy summary in between. The
-plugin's own adaptation for analysis reports lives in `sound.md` beside it.
+Do not paraphrase this file when applying it, and do not edit it to fit a house style. It is here so that the plugin's report writers get the rules exactly as written, without a network call and without a lossy summary in between. The plugin's own adaptation for analysis reports lives in `sound.md` beside it.
 
 To refresh: curl -sL https://raw.githubusercontent.com/blader/humanizer/main/SKILL.md
 -->

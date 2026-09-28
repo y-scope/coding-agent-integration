@@ -107,6 +107,17 @@ DIST_FIELD_TYPES = ("VarString", "Integer", "Boolean")
 # Distinct values a field may have and still partition the records readably.
 DEFAULT_MAX_PARTITION_VALUES = 64
 
+# Seconds of --unique probing after which a field that already qualifies is
+# taken rather than tie-broken against the candidates still unmeasured.
+# --unique is the dearest query the engine runs -- it scans and deduplicates
+# every matching record, measured at ~22x a --count over the same data -- and
+# fields that tie on coverage and depth are usually siblings under one parent,
+# which leaves the ranking no cheaper way to separate them than probing each.
+# 60 seconds sits above any probe on an archive of ordinary size, so the
+# ranking there is exactly what it was, and well under the point where a large
+# archive spends minutes choosing between partitions that would both have done.
+DEFAULT_PARTITION_PROBE_BUDGET = 60.0
+
 # Share of the records a field must carry to partition them, and not 1.0: on a
 # bundle of five session archives `type` covers 111,187 of 111,223 records, and
 # refusing it over those 36 buys an approximate answer for 716 queries in place

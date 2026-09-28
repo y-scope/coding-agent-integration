@@ -61,6 +61,19 @@ Options:
   --max-discriminator-leaves N
                         Leaves a disjunction discriminator may OR together
                         (default: 12; existence method only).
+  --partition-probe-budget S
+                        Seconds of --unique probing after which a field that
+                        already partitions the records is taken, rather than
+                        tie-broken against the candidates left (default: 60).
+                        Fields tying on coverage and depth are usually siblings
+                        under one parent and only their value counts separate
+                        them, which costs one --unique each -- the dearest
+                        query the engine runs, ~22x a --count over the same
+                        data. Below the budget every candidate is still
+                        measured, so ordinary archives rank as they always did;
+                        0 takes the first field that qualifies. A field with a
+                        single distinct value never qualifies at any budget: it
+                        puts every record in one family.
   --search-wrapper P    Search wrapper: one executable (default: `clp
                         search`).
 
@@ -235,6 +248,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
@@ -246,6 +260,7 @@ from schema_tree import (  # noqa: E402
     DEFAULT_MAX_FAMILY_QUERIES,
     DEFAULT_MAX_PARTITION_VALUES,
     DEFAULT_MIN_PARTITION_COVERAGE,
+    DEFAULT_PARTITION_PROBE_BUDGET,
     family_candidates,
     field_counts,
     load_trees,
@@ -424,7 +439,7 @@ def field_values(wrapper, archives_dir, field):
 
 
 def choose_partition_field(trees, wrapper, archives_dir, max_values, max_children,
-                           min_coverage):
+                           min_coverage, probe_budget=DEFAULT_PARTITION_PROBE_BUDGET):
     """(root_records, chosen, reason, queries): the field whose values partition
     the records -- {"path", "values", "records"} -- or the reason there is none.
 
@@ -433,6 +448,24 @@ def choose_partition_field(trees, wrapper, archives_dir, max_values, max_childre
     latter has, because what a field misses lands in the residual. Each candidate
     costs one --unique query, and there are rarely more than a handful, a field
     having to carry nearly every record to be a candidate at all.
+
+    Two things bound that cost, because --unique is the most expensive query the
+    engine runs: it scans and deduplicates every matching record, measured at
+    ~22x a --count over the same data (165s against 7.4s on one 786 MB archive
+    of a 216M-record capture).
+
+    A field with one distinct value is not a candidate. Its values put every
+    record in one family, which is the archive back again rather than a
+    partition of it, and because the ranking prefers the fewest values such a
+    field wins over every real candidate whenever it appears -- spending a probe
+    on each of them and then returning the one answer that carries no
+    information.
+
+    And once some field has qualified, probing stops as soon as `probe_budget`
+    seconds have gone on probes. Where probes are quick the budget never trips
+    and every candidate is measured, so small archives rank exactly as they did;
+    where each one costs minutes it buys a partition that works rather than the
+    tidiest one.
     """
     root_records, candidates, closest = value_partition_fields(
         trees, max_children, min_coverage)
@@ -447,6 +480,8 @@ def choose_partition_field(trees, wrapper, archives_dir, max_values, max_childre
             f" so no field's values can account for them{near}"), 0
     measured = []
     queries = 0
+    single_valued = []
+    started = time.monotonic()
     for candidate in candidates:
         # Candidates arrive best-coverage-first, then shallowest, so once one
         # qualifies nothing covering less (or covering the same from deeper) can
@@ -455,20 +490,35 @@ def choose_partition_field(trees, wrapper, archives_dir, max_values, max_childre
         prefix = (-candidate["records"], candidate["depth"])
         if measured and prefix > (measured[0][0], measured[0][1]):
             break
+        # Something already qualifies and the probes have cost more than the
+        # budget: take it rather than spend another --unique breaking a tie.
+        if measured and time.monotonic() - started >= probe_budget:
+            break
         queries += 1
         values = field_values(wrapper, archives_dir, candidate["path"])
         if values is None:
             continue
-        if 0 < len(values) <= max_values:
+        if len(values) == 1:
+            single_valued.append(candidate["path"])
+            continue
+        if 2 <= len(values) <= max_values:
             measured.append((-candidate["records"], candidate["depth"], len(values),
                              len(candidate["path"]), candidate["path"], values,
                              candidate["records"]))
             measured.sort()
     if not measured:
         names = ", ".join(c["path"] for c in candidates[:5])
-        return root_records, None, (
-            f"every scalar field covering the records has more than {max_values}"
-            f" distinct values (tried {len(candidates)}: {names})"), queries
+        why = (f"every scalar field covering the records has more than {max_values}"
+               f" distinct values (tried {len(candidates)}: {names})")
+        if single_valued:
+            only = ", ".join(single_valued)
+            carries = "carry" if len(single_valued) > 1 else "carries"
+            rest = (f"; the rest have more than {max_values}"
+                    if len(single_valued) < queries else "")
+            why = (f"no scalar field covering the records splits them: {only}"
+                   f" {carries} one distinct value, so every record would land in"
+                   f" one family{rest}")
+        return root_records, None, why, queries
     best = measured[0]
     return root_records, {"path": best[4], "values": best[5], "records": best[6]}, \
         None, queries
@@ -482,7 +532,7 @@ def print_record_families(trees, wrapper, archives_dir, families_file, args):
     try:
         root_records, chosen, no_value_field, field_queries = choose_partition_field(
             trees, wrapper, archives_dir, args.max_partition_values, args.max_children,
-            args.min_partition_coverage,
+            args.min_partition_coverage, args.partition_probe_budget,
         )
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -631,6 +681,8 @@ def main():
                         default=DEFAULT_MAX_PARTITION_VALUES)
     parser.add_argument("--min-partition-coverage", type=float,
                         default=DEFAULT_MIN_PARTITION_COVERAGE)
+    parser.add_argument("--partition-probe-budget", type=float,
+                        default=DEFAULT_PARTITION_PROBE_BUDGET)
     parser.add_argument("--search-wrapper")
     args = parser.parse_args()
     # One path, not an argv: a caller replacing the search with its own program gives one
