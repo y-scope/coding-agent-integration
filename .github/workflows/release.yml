@@ -39,7 +39,7 @@ jobs:
           claude plugin validate .
           claude plugin validate ./plugins/clp
           scripts/validate-codex-plugin.sh ./plugins/clp
-          plugins/clp/bin/clp session facts --check-scale
+          plugins/clp/bin/clp session measure --check-scale
 
       - name: Build marketplace.tar.gz
         run: |

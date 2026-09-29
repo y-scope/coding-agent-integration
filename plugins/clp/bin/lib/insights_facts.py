@@ -71,7 +71,7 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 # Provenance.
 #
-# The same four tiers clp session facts uses, so a reader who has seen one facts
+# The same four tiers clp session measure uses, so a reader who has seen one facts
 # file already knows how to read the other. They do not overlap: a figure is read
 # off the records, or computed from figures that were, or it is an argument about
 # cause, or an argument about how this kind of system behaves.

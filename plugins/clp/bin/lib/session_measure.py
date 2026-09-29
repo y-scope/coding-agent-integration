@@ -1,5 +1,5 @@
 """
-clp session facts - compute every number of a session-trajectory report in
+clp session measure - compute every number of a session-trajectory report in
 code, so the report writer only has to put them into words.
 
 This is the trajectory twin of clp facts, and it exists for the
@@ -256,7 +256,7 @@ DEDUP_SQL = "CASE WHEN message_id IS NULL THEN 'row#' || id ELSE 'msg:' || messa
 # What section 10 prints if a figure reaches it with no command and no reason. It
 # names the defect rather than implying the figure is unverifiable: a bare
 # "unstated" would claim a figure cannot be checked while giving no reason at all.
-NO_REASON = ("no reason was recorded for this figure. That is a bug in clp session facts, and it "
+NO_REASON = ("no reason was recorded for this figure. That is a bug in clp session measure, and it "
              "says nothing about the figure itself. Report the bug, and neither trust the figure "
              "nor discard it.")
 

@@ -392,9 +392,9 @@ def hand_off(route, archive, bundle, dry_run=False):
     placeholder = "<ARCHIVE>" if dry_run else ""
     if route == A.SPECIALISED:
         if bundle:
-            out("NEXT", A.quoted(A.command("session", "facts", "--bundle", bundle)))
+            out("NEXT", A.quoted(A.command("session", "measure", "--bundle", bundle)))
         elif archive or placeholder:
-            out("NEXT", A.quoted(A.command("session", "facts", "--archive",
+            out("NEXT", A.quoted(A.command("session", "measure", "--archive",
                                            archive or placeholder)))
         else:
             out("NEXT", "")

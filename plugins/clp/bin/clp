@@ -3,7 +3,7 @@
 clp - one command for analysing logs with CLP, and for every step of that flow.
 
 `clp <TARGET>` is the analysis router, and every other step is a subcommand:
-`clp search`, `clp session facts`, `clp bundle <dir> sql`, and the rest. The
+`clp search`, `clp session measure`, `clp bundle <dir> sql`, and the rest. The
 table, the implementations' names and the rule that tells a TARGET from a
 subcommand all live in lib/commands.py; each implementation lives in lib/ next
 to it. bin/clp-s is not a command here -- it is the engine binary the wrappers

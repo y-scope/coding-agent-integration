@@ -24,11 +24,11 @@ import unittest
 BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "bin")
 sys.path.insert(0, os.path.join(BIN, "lib"))
 import bundle  # noqa: E402
-import session_facts  # noqa: E402
+import session_measure  # noqa: E402
 import session_score  # noqa: E402
 
-MARKERS = (session_facts.MEASURED, session_facts.DERIVED,
-           session_facts.INFERENCE, session_facts.DOMAIN)
+MARKERS = (session_measure.MEASURED, session_measure.DERIVED,
+           session_measure.INFERENCE, session_measure.DOMAIN)
 
 # A bullet that states no figure takes no marker: it says where a number came
 # from, or that there is no number to have. Everything else must be marked.
@@ -64,7 +64,7 @@ def figure_lines(text, heading):
 
 
 class SessionFactsProvenance(unittest.TestCase):
-    """clp session facts against a hand-made catalog, checks included."""
+    """clp session measure against a hand-made catalog, checks included."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -140,7 +140,7 @@ class SessionFactsProvenance(unittest.TestCase):
 
     def run_facts(self, *extra):
         out = os.path.join(self.tmp.name, "facts.md")
-        p = subprocess.run([os.path.join(BIN, "clp"), "session", "facts", "--bundle", self.dir,
+        p = subprocess.run([os.path.join(BIN, "clp"), "session", "measure", "--bundle", self.dir,
                             "--out", out, *extra], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         with open(out, "r", encoding="utf-8") as fh:
@@ -179,8 +179,8 @@ class SessionFactsProvenance(unittest.TestCase):
     def test_a_table_puts_its_markers_in_the_column_headings(self):
         """A marker column would push the figures off a narrow screen, so a table
         marks its columns instead of its rows."""
-        self.assertIn(f"| Input {session_facts.MEASURED} |", self.text)
-        self.assertIn(f"| Share of units {session_facts.DERIVED} |", self.text)
+        self.assertIn(f"| Input {session_measure.MEASURED} |", self.text)
+        self.assertIn(f"| Share of units {session_measure.DERIVED} |", self.text)
 
     # -- the checks
 
@@ -237,7 +237,7 @@ class SessionFactsProvenance(unittest.TestCase):
 
     def test_the_headline_derived_figures_state_a_formula_and_why_it_answers_the_question(self):
         for name in ("Attempt ok rate", "Assertion pass rate"):
-            self.assertIn(f"**{name}** `{session_facts.DERIVED}`", self.text)
+            self.assertIn(f"**{name}** `{session_measure.DERIVED}`", self.text)
         self.assertIn("It answers ", self.text)
         self.assertIn("  - Trap: ", self.text)
 
@@ -252,11 +252,11 @@ class SessionFactsProvenance(unittest.TestCase):
                             {"match": "time"}, {"match": "none"}],
                 "prs": [{"prs": ["https://example.invalid/pr/1"]}]}
         out, F = [], {"checks": [], "bundle": self.dir}
-        cat = session_facts.Catalog(os.path.join(self.dir, "catalog.sqlite"))
-        session_facts.section_outcomes(cat, None, "not run", repo, "clp bundle repo --json",
+        cat = session_measure.Catalog(os.path.join(self.dir, "catalog.sqlite"))
+        session_measure.section_outcomes(cat, None, "not run", repo, "clp bundle repo --json",
                                       out.append, F, {}, [], 10)
         text = "\n".join(out)
-        self.assertIn(f"- {session_facts.MEASURED} **Commits the repository confirms: 3 of 4", text)
+        self.assertIn(f"- {session_measure.MEASURED} **Commits the repository confirms: 3 of 4", text)
         traps = [c["trap"] for c in F["checks"] if c["name"] == "Commits the repository confirms"]
         self.assertEqual(len(traps), 1, [c["name"] for c in F["checks"]])
         self.assertIn("attributed, not proven", traps[0])
@@ -276,7 +276,7 @@ class SessionFactsProvenance(unittest.TestCase):
                 continue
             if cells[3] == "n/a":
                 continue
-            self.assertTrue(cells[3].startswith(session_facts.DERIVED),
+            self.assertTrue(cells[3].startswith(session_measure.DERIVED),
                             f"axis value is unmarked: {line[:80]}")
             seen += 1
         self.assertGreater(seen, 5, "no axis rows were inspected")
@@ -341,10 +341,10 @@ class SessionFactsProvenance(unittest.TestCase):
 
     def outcomes_against(self, commits):
         """Section 5 when the repository confirms `commits`; the fixture's output claims one."""
-        cat = session_facts.Catalog(os.path.join(self.dir, "catalog.sqlite"))
+        cat = session_measure.Catalog(os.path.join(self.dir, "catalog.sqlite"))
         out = []
         repo = {"repo": "/w", "commits": commits, "prs": [], "commits_in_span": len(commits)}
-        session_facts.section_outcomes(cat, None, "not run", repo, "given", out.append,
+        session_measure.section_outcomes(cat, None, "not run", repo, "given", out.append,
                                        {"bundle": self.dir}, {}, [], 10)
         return "\n".join(out)
 
@@ -426,9 +426,9 @@ class InsightsFactsProvenance(unittest.TestCase):
         text = self.run_facts(self.split())
         for marker in MARKERS:
             self.assertIn(f"`{marker}`", text, f"{marker} is not explained")
-        self.assertIn(f"- {session_facts.MEASURED} INFO: 80", text)
-        self.assertIn(f"- {session_facts.MEASURED} everything other than INFO: 20", text)
-        self.assertIn(f"- {session_facts.DERIVED} check: the lines above sum to", text)
+        self.assertIn(f"- {session_measure.MEASURED} INFO: 80", text)
+        self.assertIn(f"- {session_measure.MEASURED} everything other than INFO: 20", text)
+        self.assertIn(f"- {session_measure.DERIVED} check: the lines above sum to", text)
 
     def test_each_count_cites_the_query_that_produced_it(self):
         text = self.run_facts(self.split())
@@ -533,7 +533,7 @@ class InsightsFactsProvenance(unittest.TestCase):
             json.dump({"timestampKey": "timestamp",
                        "timeRange": {"beginMs": 1700000000000, "endMs": 1700086400000}}, fh)
         text = self.run_facts(self.split())
-        self.assertIn(f"- {session_facts.DERIVED} Time span:", text)
+        self.assertIn(f"- {session_measure.DERIVED} Time span:", text)
         command = [c for c in check_commands(text) if c.startswith("python3 ")][0]
         p = subprocess.run(shlex.split(command), capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
