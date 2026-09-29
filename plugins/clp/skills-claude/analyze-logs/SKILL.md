@@ -131,7 +131,7 @@ The seven categories are fixed, because a Claude Code session has a fixed record
    "${CLAUDE_PLUGIN_ROOT}/bin/clp" session measure --bundle /tmp/yscope-clp-bundles/<SESSION_ID>
    ```
 
-   In the same Bash call, read what the records are made of: every field path with its type and record count, the paths stored under more than one type, and each record `type` with its count. It takes a few seconds, and it neither reads nor writes the classification cache:
+   In the same Bash call, read what the records are made of: every field path with its type and record count, the paths stored under more than one type, each record `type` with its count, and each type split into its kinds (the attachment types, the system subtypes) with theirs. It takes a few seconds, and it neither reads nor writes the classification cache:
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/clp" bootstrap --fields-only --heartbeat 0 --out-dir /tmp/clp-session-bootstrap /tmp/yscope-clp-bundles/<SESSION_ID>/archives

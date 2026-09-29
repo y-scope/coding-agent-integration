@@ -82,17 +82,19 @@ Read the session facts file at FACTS_FILE. It covers seven fixed categories: rel
 Your job is to find what those seven miss in this particular session — and usually there is nothing, which is a fine answer.
 
 Start from the inventory in INVENTORY_DIR, which `clp bootstrap --fields-only` read from every record of the session:
-  clp-insights-record-families.ndjson   each record `type` with its count, and the records no type covers
+  clp-insights-record-families.ndjson   each record `type` with its count; then the "kind" rows, which split a type
+                                        into its kinds (the attachment types, the system subtypes, ...), each with
+                                        its count and the KQL `predicate` that selects it; the "kind_residual" row
+                                        is the records no kind covers
   clp-insights-schema-tree.txt          every field path with its type and record count (FIELD lines)
   clp-insights-type-drift.ndjson        the paths stored under more than one type
-A record type, a field or a drifting path that the facts file never mentions is where to look first.
+The kinds are every record once, so a kind the facts file never mentions is where to look first, then a field or a drifting path it never mentions.
 
-Look for: record kinds, attachment types or subtypes the facts file does not account for; error or interrupt shapes that do not fit the categories above; tool or harness behaviours that recur but are not counted; anything in the catalog's launch_error or attrs fields that has no home in the seven.
+Look for: record kinds the facts file does not account for; error or interrupt shapes that do not fit the categories above; tool or harness behaviours that recur but are not counted; anything in the catalog's launch_error or attrs fields that has no home in the seven.
 
 Useful commands (write every path in full, `clp`'s own included, since this agent does not inherit the plugin root):
   clp bundle BUNDLE sql "SELECT ..."   (schema is in session-forensics.md)
-  clp search --unique attachment.type ARCHIVE '*'
-  clp search --unique subtype ARCHIVE '*'
+  clp search --limit 5 ARCHIVE '<a kind row's predicate>'   (a few records of one kind)
 
 Return at most THREE proposed extra categories. For each: a name, one sentence on what it covers, the count of records or nodes behind it, and one example id or uuid someone can open. Propose nothing that is already a headline figure of one of the seven. Return "none" if the seven cover this session.
 

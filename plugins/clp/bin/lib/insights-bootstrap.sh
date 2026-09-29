@@ -58,9 +58,10 @@ Options:
   --dump             Dump the dictionary even when the archive is stored, e.g.
                      to get LOG_SHAPES_FILE (the full template text).
   --fields-only      Read only what the records are made of: stage 1, the type
-                     drift, the per-field counts and the record families. It
-                     skips the dictionary and the classification cache, neither
-                     reading nor writing it, and prints none of the keys that
+                     drift, the per-field counts, the record families and
+                     their kinds (RECORD_KIND_COUNT). It skips the dictionary
+                     and the classification cache, neither reading nor
+                     writing it, and prints none of the keys that
                      come from them (LOG_SHAPE_COUNT, FREQS, CACHE_MODE and the
                      rest). For logs whose categories are known in advance, such
                      as a Claude Code session bundle, where a template is free
@@ -164,7 +165,15 @@ Summary keys printed on stdout (grep-able):
                             field counts above do not)
   RECORD_FAMILIES_FILE=     one NDJSON row per family, then the residual, the
                             discarded candidates with the relation that ruled
-                            each out, and the subtrees no query can select
+                            each out, and the subtrees no query can select;
+                            under --fields-only also the kind rows below
+  RECORD_KIND_COUNT=        --fields-only: kinds of record, each family split
+                            by a field only it carries whose values change
+                            which fields a record holds (attachment.type in a
+                            session), a family no such field splits counting as
+                            one. Also a partition: the "kind" rows in
+                            RECORD_FAMILIES_FILE plus its "kind_residual" row
+                            are every record once
   CLASSIFICATION_FILE=      cached plan, fetched for you (UPTODATE only)
   BASE_CLASSIFICATION_FILE= base entry, fetched for you (GROWTH only)
   BOOTSTRAP_TIMINGS sample=Ns dump=Ns cache=Ns total=Ns
@@ -617,22 +626,31 @@ record_family_count="UNAVAILABLE"
 record_family_residual=""
 record_family_queries=""
 record_family_method=""
+record_kind_count=""
+record_kind_queries=""
 if [[ -s "$tree_raw_file" ]]; then
   families_started="$(date +%s)"
   echo "[bootstrap] partitioning the records into families (counting queries)..."
+  # A fields-only run also splits each family into kinds (clp schema --kinds): the
+  # attachment family of a session into its attachment types, and so on. Its
+  # categories are known in advance, so the kinds are what is left to learn.
+  kinds_flag=()
+  [[ "$fields_only" -eq 1 ]] && kinds_flag=(--kinds)
   if "${TREE_BIN[@]}" --tree-file "$tree_raw_file" \
        --record-families --record-families-file "$record_families_file" \
-       "$archives_dir" > "$record_families_out_file" 2>/dev/null; then
+       "${kinds_flag[@]}" "$archives_dir" > "$record_families_out_file" 2>/dev/null; then
     record_family_count="$(sed -n 's/^RECORD_FAMILY_COUNT=//p' "$record_families_out_file")"
     record_family_queries="$(sed -n 's/^RECORD_FAMILY_QUERIES=//p' "$record_families_out_file")"
     record_family_residual="$(sed -n 's/^RECORD_FAMILY_RESIDUAL count=\([0-9]*\).*/\1/p' \
       "$record_families_out_file")"
     record_family_method="$(sed -n 's/^RECORD_FAMILY_METHOD=//p' "$record_families_out_file")"
+    record_kind_count="$(sed -n 's/^RECORD_KIND_COUNT=//p' "$record_families_out_file")"
+    record_kind_queries="$(sed -n 's/^RECORD_KIND_QUERIES=//p' "$record_families_out_file")"
   fi
   if [[ "$record_family_count" =~ ^[0-9]+$ ]]; then
     echo "[bootstrap] record families: ${record_family_count} families," \
-         "${record_family_residual} records in the residual," \
-         "${record_family_queries} queries in $(( $(date +%s) - families_started ))s"
+         "${record_kind_count:+${record_kind_count} kinds, }${record_family_residual} records in the residual," \
+         "$(( record_family_queries + ${record_kind_queries:-0} )) queries in $(( $(date +%s) - families_started ))s"
   else
     echo "[bootstrap] record families: unavailable after" \
          "$(( $(date +%s) - families_started ))s"
@@ -670,6 +688,7 @@ if [[ "$record_family_count" =~ ^[0-9]+$ ]]; then
   echo "RECORD_FAMILY_RESIDUAL=$record_family_residual"
   echo "RECORD_FAMILY_QUERIES=$record_family_queries"
   echo "RECORD_FAMILIES_FILE=$record_families_file"
+  [[ -n "$record_kind_count" ]] && echo "RECORD_KIND_COUNT=$record_kind_count"
 else
   echo "RECORD_FAMILY_COUNT=UNAVAILABLE"
   echo "RECORD_FAMILY_HINT=the counting queries that prove a partition could not run (see $record_families_out_file); the per-field counts in FIELD_COUNTS_FILE overlap and are not a partition"
