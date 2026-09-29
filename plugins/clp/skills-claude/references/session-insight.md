@@ -74,12 +74,18 @@ This is the most useful thing the skill does, and the easiest to get wrong in ei
 
 ## Extras subagent prompt
 
-One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in `FACTS_FILE` and `BUNDLE`.
+One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in `FACTS_FILE`, `INVENTORY_DIR` and `BUNDLE`.
 
 ```
 Read the session facts file at FACTS_FILE. It covers seven fixed categories: reliability, cost, time, outcomes, harness faults, human loop, rework.
 
 Your job is to find what those seven miss in this particular session — and usually there is nothing, which is a fine answer.
+
+Start from the inventory in INVENTORY_DIR, which `clp bootstrap --fields-only` read from every record of the session:
+  clp-insights-record-families.ndjson   each record `type` with its count, and the records no type covers
+  clp-insights-schema-tree.txt          every field path with its type and record count (FIELD lines)
+  clp-insights-type-drift.ndjson        the paths stored under more than one type
+A record type, a field or a drifting path that the facts file never mentions is where to look first.
 
 Look for: record kinds, attachment types or subtypes the facts file does not account for; error or interrupt shapes that do not fit the categories above; tool or harness behaviours that recur but are not counted; anything in the catalog's launch_error or attrs fields that has no home in the seven.
 

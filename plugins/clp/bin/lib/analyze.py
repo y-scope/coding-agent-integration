@@ -8,7 +8,7 @@ particular application. So the only question this module asks is:
 
 and then: does that application have a registered optimisation? Claude Code does, because its file
 layout, its record graph and its categories are all known in advance, so the categorise stage has
-nothing to discover and the acquire stage has a graph to build. Every other application takes the
+nothing to classify and the acquire stage has a graph to build. Every other application takes the
 general route, which discovers structure and categories and caches the classification per
 application -- which is what an optimisation is an optimisation *of*. A second application can earn
 its own route later by being registered here; it does not need a new mode.
@@ -123,7 +123,7 @@ CLAUDE_CODE = Application(
              "requestId"),
     min_markers=6,
     skips=("the categorise stage, because its seven categories are known in advance and there is "
-           "nothing to discover or cache. Acquire also builds the graph of launches, retries and "
+           "nothing to classify or cache. Acquire also builds the graph of launches, retries and "
            "lost results, which plain logs do not have"),
 )
 

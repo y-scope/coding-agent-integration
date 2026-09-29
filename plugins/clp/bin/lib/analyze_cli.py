@@ -25,7 +25,7 @@ has a registered optimisation:
 
   claude-code   the specialised route. Its file layout, its record graph and its seven categories
                 are known in advance, so acquire also builds the graph of launches, retries and lost
-                results, and categorise has nothing to discover and nothing to cache.
+                results, and categorise has nothing to classify and nothing to cache.
   codex, vllm   recognised, and on the general route. Recognition gets them the right acquire: a
                 Codex rollout is compressed as a session so its payload arrays become columns, and a
                 vLLM text log is structurized. The analysis after that is the general one.
