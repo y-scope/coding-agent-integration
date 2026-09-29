@@ -1,7 +1,7 @@
 {
   "name": "clp",
   "version": "0.25.0",
-  "description": "Compress, search, and decompress Claude Code and Codex session log archives with CLP.",
+  "description": "Analyze logs with CLP: compress raw logs or Claude Code and Codex sessions, search them with KQL, and write an insights report.",
   "author": {
     "name": "YScope"
   },
