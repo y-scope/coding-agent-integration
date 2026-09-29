@@ -1,6 +1,6 @@
 # YScope CLP Coding-Agent Plugins
 
-Open-source Claude Code and Codex plugins for compressing, searching, and decompressing coding-agent session log archives with [CLP](https://github.com/y-scope/clp) (Compressed Log Processor).
+Open-source Claude Code and Codex plugins for analyzing logs with [CLP](https://github.com/y-scope/clp) (Compressed Log Processor): compress raw logs or coding-agent sessions, search them with KQL, and write an insights report.
 
 This repo contains the **plugin payload only**. The compiled installer that ships the `clp-s` binary and the deploy tooling live in a separate private repository.
 
@@ -8,7 +8,7 @@ This repo contains the **plugin payload only**. The compiled installer that ship
 
 | Plugin | Surface |
 | --- | --- |
-| `clp@yscope` | List recent Claude Code and Codex session JSONL files, compress one selected session with `clp-s c --timestamp-key timestamp`, search local CLP archives with KQL (including `semantic("...")` similarity search), and decompress a local CLP archive directory. |
+| `clp@yscope` | Analyze logs end to end: compress raw log files, folders, or Claude Code and Codex sessions; search local CLP archives with KQL (including `semantic("...")` similarity search); write an insights report; and decompress a local CLP archive directory. |
 
 The plugin exposes a curated subset of `clp-s` capabilities. It does not expose full-project compression, reducers, network/file output handlers, results-cache writes, indexing, conversion, remote decompression, metadata sinks, or arbitrary `clp-s` option passthrough. See [`plugins/clp/README.md`](plugins/clp/README.md) for the full API surface.
 
