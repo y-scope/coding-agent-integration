@@ -316,7 +316,9 @@ def parse_detect(out):
     """clp detect' report as {"files": [...], "suggest": [...]}.
 
     A file entry carries name, format (its `format:` word), bundled (the bundled text format it
-    matched, if any), roots (top-level field names of its JSON records), timestamp and skip.
+    matched, if any), roots (top-level field names of its JSON records), timestamp and skip. The
+    roots come from the `roots:` line, which lists every top-level field; the `fields:` line lists
+    only the first 30 paths, so it is read only when a report has no `roots:` line.
     """
     files, suggest, current = [], [], None
     for line in out.splitlines():
@@ -337,6 +339,10 @@ def parse_detect(out):
                      for part in line.split(":", 1)[1].split(" · ")]
             current["roots"] = sorted({p.split(".")[0] for p in paths
                                        if p and not p.startswith("(+")})
+        elif line.startswith("roots:"):
+            # Printed after `fields:`, so it replaces the partial set read from there.
+            names = [part.strip().split(" (")[0] for part in line.split(":", 1)[1].split(" · ")]
+            current["roots"] = sorted({n for n in names if n and not n.startswith("(+")})
         elif line.startswith("timestamp:"):
             current["timestamp"] = line.split(":", 1)[1].strip()
         elif line.startswith("skip:"):

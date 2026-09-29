@@ -16,7 +16,8 @@ What it does with each file's first 128 KiB (--read-bytes):
   JSON  It parses JSON objects one after another. Two or more (or one that
         fills the whole file) make it JSON: one object per line, or objects
         spanning lines. It reports the structure -- every field path with its
-        type and how many of the parsed records have it -- and the field that
+        type and how many of the parsed records have it (the first 30), then
+        every top-level field, most common first -- and the field that
         holds a timestamp in every record, and prints the first records with
         every string cut to 128 characters, so they are still valid JSON.
   text  Otherwise it is text. The lines are checked against the bundled
@@ -68,6 +69,7 @@ JSON_NAMES = (".json", ".jsonl", ".ndjson")
 TEXT_CHARS = 256          # a printed text line keeps this many characters
 JSON_STRING_CHARS = 128   # every string in a printed JSON record is cut to this
 MAX_FIELDS = 30           # field paths listed per JSON file
+MAX_ROOTS = 100           # top-level fields listed per JSON file, most common first
 
 COMPRESSED_MAGIC = [
     (b"\x1f\x8b", "gzip"),
@@ -347,6 +349,16 @@ def describe_json(info, objects, spans_lines, stopped, whole, show_records):
     listed = [f"{p}: {'|'.join(e['types'])}" + ("" if e["seen"] == len(records) else f" ({e['seen']} of {len(records)})")
               for p, e in list(fields.items())[:MAX_FIELDS]]
     info["fields"] = " · ".join(listed) + (f" · (+{len(fields) - MAX_FIELDS} more)" if len(fields) > MAX_FIELDS else "")
+    # The top-level fields get a line of their own, because they are what `clp <TARGET>` recognises an
+    # application by, and the paths above can push them out of sight: a Claude Code session opening with
+    # file-history snapshots, one nested path per backed-up file, filled all 30 before `uuid` appeared.
+    roots = {}
+    for record in records:
+        for key in record:
+            roots[key] = roots.get(key, 0) + 1
+    ranked = sorted(roots.items(), key=lambda kv: -kv[1])[:MAX_ROOTS]
+    info["roots"] = " · ".join(k + ("" if n == len(records) else f" ({n} of {len(records)})") for k, n in ranked) + (
+        f" · (+{len(roots) - MAX_ROOTS} more)" if len(roots) > MAX_ROOTS else "")
     usable = timestamp_fields(records, fields)
     if usable:
         path, kind, value = usable[0]
@@ -485,7 +497,7 @@ def main(argv=None):
         shown = os.path.relpath(path, base) if base and path.startswith(base + os.sep) else path
         print(f"\n== {shown} ({human(r['bytes'])}; {r['read']})")
         print(f"format:     {r['format']}" + (f": {r['evidence']}" if r.get("evidence") else ""))
-        for label in ("parser", "fields", "timestamp"):
+        for label in ("parser", "fields", "roots", "timestamp"):
             if r.get(label):
                 print(f"{label + ':':<11} {r[label]}")
         for label, items in (("records:", r.get("records", [])), ("lines:", r.get("lines", []))):

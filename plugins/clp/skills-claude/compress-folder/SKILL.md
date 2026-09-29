@@ -32,7 +32,7 @@ Compression is two steps with a decision between them: `clp detect` reads the fi
 
    It first says whether each path is a file or a folder (and how many files a folder matched). Per file it then prints one of:
 
-   - `format: json` — JSON objects parsed one after another (two or more make it JSON). `fields:` lists every field path with its type, and how many records have it when not all do; `timestamp:` names the field that holds a timestamp in every record and the kind of value (ISO 8601 string, epoch number, epoch as a string); `records:` shows the first records as valid JSON with every string cut to 128 characters.
+   - `format: json` — JSON objects parsed one after another (two or more make it JSON). `fields:` lists the first 30 field paths with their types, and how many records have each when not all do; `roots:` lists every top-level field, most common first; `timestamp:` names the field that holds a timestamp in every record and the kind of value (ISO 8601 string, epoch number, epoch as a string); `records:` shows the first records as valid JSON with every string cut to 128 characters.
    - `format: text` — `lines:` shows the first 20 lines, each cut to 256 characters. If the lines match a bundled format that `--structurize` converts on its own (`vllm-sflow`, `vllm-raw`), the format line says so.
    - `compressed`, `binary`, `empty`.
 

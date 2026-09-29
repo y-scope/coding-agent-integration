@@ -78,6 +78,39 @@ class ReadingTheDetectorsReport(unittest.TestCase):
         self.assertIs(app, A.CLAUDE_CODE)
         self.assertIn("sessionId, uuid", why)
 
+    def test_the_roots_line_is_read_when_the_field_paths_are_cut_short(self):
+        report = A.parse_detect(SESSION_REPORT.replace(
+            "timestamp:  no field",
+            "roots:      type · sessionId (79 of 82) · uuid (70 of 82) · snapshot (12 of 82)\n"
+            "timestamp:  no field"))
+        self.assertEqual(report["files"][0]["roots"], ["sessionId", "snapshot", "type", "uuid"])
+
+    def test_a_session_opening_with_file_snapshots_is_still_claude_code(self):
+        # Each snapshot record carries one nested path per backed-up file, so the detector's
+        # 30 listed field paths run out before the records that carry uuid are reached.
+        records = [{"type": "ai-title", "aiTitle": "t", "sessionId": "s"}]
+        for i in range(12):
+            files = {f"/w/f{j}.py": {"backupFileName": None, "version": 1, "backupTime": "x"}
+                     for j in range(10)}
+            records.append({"type": "file-history-snapshot", "messageId": f"m{i}",
+                            "isSnapshotUpdate": False,
+                            "snapshot": {"messageId": f"m{i}", "trackedFileBackups": files}})
+        for i in range(20):
+            records.append({"type": "user", "sessionId": "s", "uuid": f"u{i}", "parentUuid": None,
+                            "timestamp": "2026-09-29T00:00:00Z", "cwd": "/w", "gitBranch": "main",
+                            "isSidechain": False, "userType": "external", "version": "2.1",
+                            "entrypoint": "cli", "message": {"role": "user", "content": "hi"}})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "s.jsonl")
+            with open(path, "w") as fh:
+                fh.write("".join(json.dumps(r) + "\n" for r in records))
+            out = subprocess.run([os.path.join(BIN, "clp"), "detect", path],
+                                 capture_output=True, text=True, check=True).stdout
+        fields = next(line for line in out.splitlines() if line.startswith("fields:"))
+        self.assertNotIn("uuid", fields, "the fixture no longer pushes uuid out of the listed paths")
+        app, why = A.app_of_detected(A.parse_detect(out))
+        self.assertIs(app, A.CLAUDE_CODE, why)
+
     def test_the_suggested_command_is_carried_through_unchanged(self):
         report = A.parse_detect(VLLM_REPORT)
         self.assertEqual(report["suggest"], [["clp", "compress", "folder", "--path",
