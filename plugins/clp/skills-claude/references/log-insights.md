@@ -125,7 +125,7 @@ Then close phase 4 in one or two lines: how many checks ran, and each `error`, `
 
 ## Compute the facts, and post the early numbers (step 9)
 
-Every number of the report is computed in code, because a small model asked to add up a table or pick the right count gets them wrong (in a trial: 49 warnings for 92, 5,370 templates for 11,558, and a 9.5-minute span for a 74-hour log). Once the pool is done, run `clp facts` (this route's numbers; one Claude Code session's are `clp session facts`, a different subcommand):
+Every number of the report is computed in code, because a small model asked to add up a table or pick the right count gets them wrong (in a trial: 49 warnings for 92, 5,370 templates for 11,558, and a 9.5-minute span for a 74-hour log). Once the pool is done, run `clp facts` (this route's numbers; one Claude Code session's are `clp session measure`, a different subcommand):
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp" facts --schema-json '<the SCHEMA= line from the extract>' \

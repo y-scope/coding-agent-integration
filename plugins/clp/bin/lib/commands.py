@@ -80,10 +80,10 @@ SUBCOMMANDS = {
         {
             "turns": ("session_turns_cli.py",
                       "where a session's time went, per turn"),
-            "facts": ("session_facts.py",
-                      "compute every number of a session-trajectory report in code"),
+            "measure": ("session_measure.py",
+                        "run the seven category checks and write every figure of the report"),
             "score": ("session_score.py",
-                      "apply a scale to the facts' axis measurements and emit the scores as JSON"),
+                      "apply a scale to the measured axis values and emit the scores as JSON"),
         }), "measure and score one Claude Code session"),
     "bundle": ("bundle_cli.py",
                "one session bundle: its catalog, and the records behind it"),
@@ -122,7 +122,7 @@ SESSION_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
 def command(subcommand, *args):
     """argv for `clp <subcommand> ...`, as a user would type it.
 
-    `subcommand` may name a nested one ("compress folder", "session facts").
+    `subcommand` may name a nested one ("compress folder", "session measure").
     """
     return [CLP, *subcommand.split(), *[str(a) for a in args]]
 

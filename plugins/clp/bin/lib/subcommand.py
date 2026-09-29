@@ -8,7 +8,7 @@ implementation's own argv, untouched.
 
 A subcommand whose implementation is a `Group` has subcommands of its own, and
 dispatch recurses into it with the typed name added to the program name, so
-`clp session facts` reaches session_facts.py as prog "clp session facts".
+`clp session measure` reaches session_measure.py as prog "clp session measure".
 
 Each Python implementation is a module with a `main()` that reads `sys.argv`, so
 the dispatcher rewrites `sys.argv[0]` to "<prog> <sub>" before calling it:

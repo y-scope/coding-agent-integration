@@ -51,7 +51,7 @@ Check that every subcommand in the table is reachable — the table in `bin/lib/
 for sub in list-sessions detect search decompress schema kql bundle bundle-review \
            bootstrap baseline-plan extract run focus facts shape-cache shape-cluster \
            "compress session" "compress folder" \
-           "session turns" "session facts" "session score" \
+           "session turns" "session measure" "session score" \
            "report check" "report save"; do
   # shellcheck disable=SC2086
   ./plugins/clp/bin/clp $sub --help >/dev/null || echo "FAILED: clp $sub"

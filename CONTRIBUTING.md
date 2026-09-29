@@ -134,16 +134,16 @@ The table in `bin/lib/commands.py` gives each subcommand a name and a one-line b
 | **Passthrough** | restricted calls into the `clp-s` binary, adding validation and nothing else | `clp search`, `clp compress session`, `clp compress folder`, `clp decompress`, `clp list-sessions`, `clp detect`, `clp compress status` |
 | **Derived reading** | computes something the records do not state, from one archive | `clp schema` (fields, type drift, record families), `clp session turns` (turn boundaries and the time split) |
 | **Session model** | reconstructs a whole session from its many files, as archives plus a catalog of how they connect | `clp bundle`, `clp bundle-review` |
-| **Measurement** | computes every figure a report may quote, so no model does arithmetic | `clp session facts`, `clp facts` |
+| **Measurement** | computes every figure a report may quote, so no model does arithmetic | `clp session measure`, `clp facts` |
 | **Policy and orchestration** | applies thresholds, or drives a pipeline | `clp session score` + `scoring-scale.json`, `clp bootstrap`, `clp baseline-plan`, `clp focus`, `clp run`, `clp extract`, `clp report`, `clp kql`, `clp shape-cache`, `clp shape-cluster` |
 
 Three things that follow from the tiers, and are easy to get wrong:
 
 **A passthrough may not compute.** If a change would have `clp search` derive, summarise or interpret anything, it belongs in a derived-reading subcommand that calls it. Keeping that boundary is why `clp search` can be trusted as the single query path.
 
-**Measurement may not judge.** `clp session facts` publishes values and never scores them; the thresholds live in `scoring-scale.json` because what counts as acceptable is the customer's policy, not a property of the data. A penalty, a weighting or a rung in Python is a bug, not a shortcut.
+**Measurement may not judge.** `clp session measure` publishes values and never scores them; the thresholds live in `scoring-scale.json` because what counts as acceptable is the customer's policy, not a property of the data. A penalty, a weighting or a rung in Python is a bug, not a shortcut.
 
-**`clp facts` and `clp session facts` are deliberately not merged.** They look alike and they are not: one reads a query-plan's results, the other a bundle's catalog. What they share is a *contract* — the report writer may quote no figure absent from the facts file — and that contract is worth stating in both places rather than abstracting into a base neither fits.
+**`clp facts` and `clp session measure` are deliberately not merged.** Both write a facts file, and they are not alike: `clp session measure` runs its own checks, while `clp facts` runs none; one reads a query-plan's results, the other a bundle's catalog. What they share is a *contract* — the report writer may quote no figure absent from the facts file — and that contract is worth stating in both places rather than abstracting into a base neither fits.
 
 ### Naming
 
@@ -151,7 +151,7 @@ A subcommand name says what it does and nothing about where its code came from: 
 
 "shape" survives in `clp shape-cache` and `clp shape-cluster` because the subject genuinely is log shapes — the dictionary, the clustering, the classification cache, and the baseline *method* documented in `references/log-shape-baseline.md`.
 
-Files on disk are not renamed along with the subcommands. `clp extract` still writes `/tmp/clp-insights-query-plan.txt` and `clp session facts` still writes `/tmp/clp-session-facts.md`, because a path is a contract with whatever reads it next — including a run that started before your change. Rename one only if you are changing every reader in the same commit.
+Files on disk are not renamed along with the subcommands. `clp extract` still writes `/tmp/clp-insights-query-plan.txt` and `clp session measure` still writes `/tmp/clp-session-facts.md`, because a path is a contract with whatever reads it next — including a run that started before your change. Rename one only if you are changing every reader in the same commit.
 
 ## What to change for each kind of edit
 
@@ -205,7 +205,7 @@ A few things to check before opening a PR, in addition to the preflight commands
 - New flags appear in the implementation's allowlist in `bin/lib/`, the corresponding `SKILL.md` in **both** product trees, and `plugins/clp/README.md`.
 - A new subcommand is in `SUBCOMMANDS` in `bin/lib/commands.py`, and `plugins/clp/bin/clp` with no arguments prints it in the table with a blurb that fits on one line.
 - A change that exposes new behavior is reflected in that subcommand's `--help` (or equivalent) text.
-- A change to `plugins/clp/scoring-scale.json` passes `plugins/clp/bin/clp session facts --check-scale` (the release workflow runs it too). Every axis needs a `basis` and a `rationale`: a threshold nobody can justify is not a threshold. Moving a rung is a behavior change — bump `scale_version`, since scores from before and after are not comparable.
+- A change to `plugins/clp/scoring-scale.json` passes `plugins/clp/bin/clp session measure --check-scale` (the release workflow runs it too). Every axis needs a `basis` and a `rationale`: a threshold nobody can justify is not a threshold. Moving a rung is a behavior change — bump `scale_version`, since scores from before and after are not comparable.
 
 ## Release process
 
