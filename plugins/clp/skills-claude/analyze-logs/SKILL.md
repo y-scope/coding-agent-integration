@@ -32,7 +32,7 @@ End-to-end analysis of any logs with CLP: prepare the target, find out which app
 
 There is one pipeline — acquire, categorise, measure, report — and it runs on logs. A Claude Code session is not a different kind of thing from a vLLM worker log; it is logs from a particular application. So this skill asks one question first, with one command, and the answer picks the route:
 
-- **`ROUTE=specialised`** — a Claude Code session. Its file layout, its record graph and its seven categories are known in advance, so there is nothing to discover and nothing to cache: the run is the seven fixed checks, a subagent looking for what they miss, a focus question, and optional scoring.
+- **`ROUTE=specialised`** — a Claude Code session. Its file layout, its record graph and its seven categories are known in advance, so there is nothing to classify and nothing to cache: the run is the seven fixed checks, a subagent looking for what they miss, a focus question, and optional scoring.
 - **`ROUTE=general`** — anything else, on its own terms. Discover the structure and the categories from the logs with the **log shape baseline** method: dump the archive's log shape dictionary (the complete vocabulary of distinct message templates, `<*>` marking variables — tens to a few hundred templates no matter how many millions of records), classify those *real* templates into categories, cache the classification per application, and derive every later query from a template that is guaranteed to exist. No blind keyword batteries.
 
 Both routes share this skill's opening (the one command, and reading what it reports) and its close (the report, the check, saving it, the closing message). Everything between them is the route's own, and each route has its own five phases — do not blend them.
@@ -123,7 +123,7 @@ Compress the log, bundle every agent and workflow that ran under it, check the s
 
 **Its five phases:** `[1/5] Compress`, `[2/5] Map the session`, `[3/5] Run the checks`, `[4/5] Focus`, `[5/5] Report`. Phases 1 and 2 are both done by step 1's one command — compressing the log is phase 1, and the bundle it builds *is* the map — so close them together there rather than announcing a phase that nothing further runs in. A session with no launches gets no bundle: say so in the phase 2 line.
 
-The seven categories are fixed, because a Claude Code session has a fixed record structure: there is nothing to discover and nothing to cache, so there is no classification step and the run is fast. A subagent looks for anything the fixed set misses and proposes it as an extra category.
+The seven categories are fixed, because a Claude Code session has a fixed record structure: there is nothing to classify and nothing to cache, so there is no classification step and the run is fast. What the records are made of is still read, in a few seconds, because Claude Code adds record types and fields between releases. A subagent starts from that inventory, looks for anything the fixed set misses, and proposes it as an extra category.
 
 2. **Read the reference and start the checks.** Read `${CLAUDE_PLUGIN_ROOT}/skills-claude/references/session-insight.md` NOW. Open phase 3, then run the facts pass — it computes every number the report can quote, in code, so nothing is left to arithmetic:
 
@@ -131,9 +131,15 @@ The seven categories are fixed, because a Claude Code session has a fixed record
    "${CLAUDE_PLUGIN_ROOT}/bin/clp" session measure --bundle /tmp/yscope-clp-bundles/<SESSION_ID>
    ```
 
-   Pass `--archive ARCHIVE` instead when there is no bundle, and add `--axes` when the user wants scores (see step 5). It takes a few seconds; on a large session run it in the background. Its stdout gives the headline `KEY=VALUE`s and one `ALERT=<category>:<slug> value=… threshold=…` line per category whose headline metric crosses a bad threshold. Those alerts order the focus options at step 4 and nothing else: they are not scores, and one does not enter the report without you saying what fired it.
+   In the same Bash call, read what the records are made of: every field path with its type and record count, the paths stored under more than one type, and each record `type` with its count. It takes a few seconds, and it neither reads nor writes the classification cache:
 
-3. **Spawn the extras subagent, and ask the context question.** The seven categories are fixed, but a session can hold something none of them covers. Spawn ONE subagent (Agent tool, model **opus**; `sonnet` if the Agent tool rejects `opus` as unavailable) with the facts file and the prompt in the reference: it looks for record kinds, error shapes and behaviours the fixed categories miss, and returns at most three proposed extra categories, each with a count and one example id. It returns nothing when the fixed set covers everything, which is the common case.
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/clp" bootstrap --fields-only --heartbeat 0 --out-dir /tmp/clp-session-bootstrap /tmp/yscope-clp-bundles/<SESSION_ID>/archives
+   ```
+
+   That inventory is for the extras subagent at step 3, not a source of figures: the report quotes the facts file. Pass `--archive ARCHIVE` to `clp session measure` instead when there is no bundle, and point the bootstrap at that archive, and add `--axes` when the user wants scores (see step 5). It takes a few seconds; on a large session run it in the background. Its stdout gives the headline `KEY=VALUE`s and one `ALERT=<category>:<slug> value=… threshold=…` line per category whose headline metric crosses a bad threshold. Those alerts order the focus options at step 4 and nothing else: they are not scores, and one does not enter the report without you saying what fired it.
+
+3. **Spawn the extras subagent, and ask the context question.** The seven categories are fixed, but a session can hold something none of them covers. Spawn ONE subagent (Agent tool, model **opus**; `sonnet` if the Agent tool rejects `opus` as unavailable) with the facts file, the inventory directory `/tmp/clp-session-bootstrap`, and the prompt in the reference: it looks for record kinds, error shapes and behaviours the fixed categories miss, and returns at most three proposed extra categories, each with a count and one example id. It returns nothing when the fixed set covers everything, which is the common case.
 
    **Right after spawning it, ask the context question** (AskUserQuestion; wording in the reference): is the user chasing a known problem, checking something specific, evaluating the session for scoring, or just exploring. In the same call, ask how well they know Claude Code sessions, which sets `READER`. The subagent keeps working while they answer. Keep the answers for the focus question, the scoring decision and the report writer. A headless run, or no AskUserQuestion → skip the questions, give the whole picture, and write for an expert.
 

@@ -57,6 +57,15 @@ Options:
                      (default: 20000, or $CLP_BOOTSTRAP_SAMPLE_CAP).
   --dump             Dump the dictionary even when the archive is stored, e.g.
                      to get LOG_SHAPES_FILE (the full template text).
+  --fields-only      Read only what the records are made of: stage 1, the type
+                     drift, the per-field counts and the record families. It
+                     skips the dictionary and the classification cache, neither
+                     reading nor writing it, and prints none of the keys that
+                     come from them (LOG_SHAPE_COUNT, FREQS, CACHE_MODE and the
+                     rest). For logs whose categories are known in advance, such
+                     as a Claude Code session bundle, where a template is free
+                     text from one session and classifying it buys nothing.
+                     Not with --dump or --field-rules.
   --heartbeat SECONDS
                      While a stage runs, print a progress line every SECONDS
                      (default: 30; 0 prints only stage starts and ends).
@@ -64,7 +73,7 @@ Options:
 
 Progress lines printed on stdout as the run goes:
   [bootstrap] archive <size>; expect <estimate>
-  [bootstrap] <n>/3 <stage>...            a stage starts
+  [bootstrap] <n>/3 <stage>...            a stage starts (<n>/1 with --fields-only)
   [bootstrap] <n>/3 <stage>: <s>s elapsed a stage is still running (heartbeat)
   [bootstrap] <n>/3 <stage>: done in <s>s
 
@@ -173,6 +182,7 @@ field_rules=""
 sample_cap="${CLP_BOOTSTRAP_SAMPLE_CAP:-20000}"
 heartbeat=30
 force_dump=0
+fields_only=0
 archives_dir=""
 
 while [[ $# -gt 0 ]]; do
@@ -193,6 +203,7 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "error: --sample-cap requires a value" >&2; exit 2; }
       sample_cap="$2"; shift 2 ;;
     --dump) force_dump=1; shift ;;
+    --fields-only) fields_only=1; shift ;;
     --heartbeat)
       [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || { echo "error: --heartbeat requires a whole number of seconds" >&2; exit 2; }
       heartbeat="$2"; shift 2 ;;
@@ -211,6 +222,10 @@ done
   || { echo "error: --sample-cap must be a positive integer" >&2; exit 2; }
 [[ "$max_chars" =~ ^[0-9]+$ && "$max_chars" -gt 0 ]] \
   || { echo "error: --max-chars must be a positive integer" >&2; exit 2; }
+if [[ "$fields_only" -eq 1 && ( "$force_dump" -eq 1 || -n "$field_rules" ) ]]; then
+  echo "error: --fields-only reads no dictionary and no cache, so --dump and --field-rules do not apply" >&2
+  exit 2
+fi
 mkdir -p "$out_dir"
 
 # The stages this one runs are subcommands of the one command, so each tool is an
@@ -259,7 +274,10 @@ default_field_rules_file="${out_dir}/log-shape-field-rules.json"
 # out to be, an entry classified under different ones is never reported
 # UPTODATE -- the digest is in the key, so at worst the app is classified again.
 rules_source="none"
-if [[ -n "$field_rules" ]]; then
+rules_digest=""
+if [[ "$fields_only" -eq 1 ]]; then
+  :  # no cache is probed, so no rules go into a fingerprint
+elif [[ -n "$field_rules" ]]; then
   [[ -f "$field_rules" ]] || { echo "error: --field-rules file not found: $field_rules" >&2; exit 2; }
   rules_source="flag"
 elif [[ -f "$default_field_rules_file" ]]; then
@@ -269,7 +287,9 @@ fi
 rules_args=()
 [[ -n "$field_rules" ]] && rules_args=(--field-rules "$field_rules")
 # Also validates the rules file, here rather than after minutes of dumping.
-rules_digest="$("${CACHE_BIN[@]}" rules-digest ${rules_args[@]+"${rules_args[@]}"})" || exit 2
+if [[ "$fields_only" -eq 0 ]]; then
+  rules_digest="$("${CACHE_BIN[@]}" rules-digest ${rules_args[@]+"${rules_args[@]}"})" || exit 2
+fi
 if [[ "$rules_source" == "found" ]]; then
   echo "[bootstrap] probing the classification cache with the field rules left in ${field_rules}; pass --field-rules to use another file, or delete it to probe with none"
 fi
@@ -291,7 +311,7 @@ else
 fi
 ids_csv="$(IFS=,; printf '%s' "${archive_ids[*]}")"
 stored=0
-if [[ "$force_dump" -eq 0 && -n "$ids_csv" ]] \
+if [[ "$force_dump" -eq 0 && "$fields_only" -eq 0 && -n "$ids_csv" ]] \
     && "${CACHE_BIN[@]}" stored ${cache_args[@]+"${cache_args[@]}"} --max-chars "$max_chars" \
          --archive-ids "$ids_csv" > "$count_file" 2>/dev/null; then
   stored=1
@@ -346,7 +366,7 @@ nominal_probes=2
 nominal_family_counts=16
 bootstrap_started="$(date +%s)"
 archive_bytes="$(directory_file_bytes "$archives_dir")"
-if [[ "$stored" -eq 1 ]]; then
+if [[ "$stored" -eq 1 || "$fields_only" -eq 1 ]]; then
   estimate_seconds=$(( archive_bytes * sample_ms_per_mib / 1000 / 1048576 ))
 else
   estimate_seconds=$(( archive_bytes * dump_ms_per_mib / 1000 / 1048576 ))
@@ -389,10 +409,12 @@ echo "ESTIMATE_SECONDS=$estimate_seconds"
 # start, a heartbeat every $heartbeat seconds while it runs, and its duration.
 # The duration is left in $stage_seconds.
 stage_seconds=0
+total_stages=3
+[[ "$fields_only" -eq 1 ]] && total_stages=1
 run_stage() {
   local n="$1" label="$2" fn="$3" started pid rc=0 waited
   started="$(date +%s)"
-  echo "[bootstrap] ${n}/3 ${label}..."
+  echo "[bootstrap] ${n}/${total_stages} ${label}..."
   "$fn" &
   pid=$!
   trap 'kill "$pid" 2>/dev/null || true' INT TERM
@@ -405,13 +427,13 @@ run_stage() {
         waited=$((waited + 1))
       done
       kill -0 "$pid" 2>/dev/null || break
-      echo "[bootstrap] ${n}/3 ${label}: $(( $(date +%s) - started ))s elapsed"
+      echo "[bootstrap] ${n}/${total_stages} ${label}: $(( $(date +%s) - started ))s elapsed"
     done
   fi
   wait "$pid" || rc=$?
   trap - INT TERM
   stage_seconds=$(( $(date +%s) - started ))
-  echo "[bootstrap] ${n}/3 ${label}: done in ${stage_seconds}s"
+  echo "[bootstrap] ${n}/${total_stages} ${label}: done in ${stage_seconds}s"
   return "$rc"
 }
 
@@ -504,7 +526,9 @@ dump_seconds=0
 cache_seconds=0
 shapes_source="dump"
 freqs="OK"
-if [[ "$stored" -eq 1 ]]; then
+if [[ "$fields_only" -eq 1 ]]; then
+  :  # stages 2 and 3 read the dictionary and the cache, which --fields-only leaves alone
+elif [[ "$stored" -eq 1 ]]; then
   run_stage 2 "reading the log shape counts stored for this archive" read_stored_freqs
   dump_seconds=$((dump_seconds + stage_seconds))
   log_shape_count="$(sed -n 's/^LOG_SHAPE_COUNT=//p' "$count_file")"
@@ -521,7 +545,7 @@ if [[ "$stored" -eq 1 ]]; then
     exit "$probe_rc"
   fi
 fi
-if [[ "$shapes_source" == "dump" ]]; then
+if [[ "$fields_only" -eq 0 && "$shapes_source" == "dump" ]]; then
   if ! run_stage 2 "dumping the full log shape dictionary and summing its counts" dump_log_shapes; then
     if [[ -s "$shapes_file" ]]; then
       cat "$ingest_err_file" >&2
@@ -546,19 +570,21 @@ if [[ "$shapes_source" == "dump" ]]; then
   run_stage 3 "checking the classification cache" probe_cache_file
   cache_seconds=$((cache_seconds + stage_seconds))
 fi
-header="$(head -1 "$diff_file")"
-mode="$(printf '%s' "$header" | cut -f1)"
-app_key="$(printf '%s' "$header" | cut -f2)"
-# The reason is the header's LAST field, whichever mode it is.
-reason="$(printf '%s' "$header" | awk -F'\t' '{print $NF}')"
-base_key=""
-[[ "$mode" == "GROWTH" ]] && base_key="$(printf '%s' "$header" | cut -f3)"
-if [[ "$reason" == "rules-changed" ]]; then
-  echo "[bootstrap] this app IS classified, but under different field rules, so it is classified again — not a first run"
+if [[ "$fields_only" -eq 0 ]]; then
+  header="$(head -1 "$diff_file")"
+  mode="$(printf '%s' "$header" | cut -f1)"
+  app_key="$(printf '%s' "$header" | cut -f2)"
+  # The reason is the header's LAST field, whichever mode it is.
+  reason="$(printf '%s' "$header" | awk -F'\t' '{print $NF}')"
+  base_key=""
+  [[ "$mode" == "GROWTH" ]] && base_key="$(printf '%s' "$header" | cut -f3)"
+  if [[ "$reason" == "rules-changed" ]]; then
+    echo "[bootstrap] this app IS classified, but under different field rules, so it is classified again — not a first run"
+  fi
+  # grep exits 1 when there is nothing to classify — the normal UPTODATE case.
+  grep '^{' "$diff_file" > "$to_classify_file" || true
+  to_classify="$(grep -c '^{' "$to_classify_file" || true)"
 fi
-# grep exits 1 when there is nothing to classify — the normal UPTODATE case.
-grep '^{' "$diff_file" > "$to_classify_file" || true
-to_classify="$(grep -c '^{' "$to_classify_file" || true)"
 
 # --- Structure: type drift and per-field counts ---------------------------------
 # Two more readings of the schema tree dump stage 1 already wrote, so neither
@@ -648,38 +674,43 @@ else
   echo "RECORD_FAMILY_COUNT=UNAVAILABLE"
   echo "RECORD_FAMILY_HINT=the counting queries that prove a partition could not run (see $record_families_out_file); the per-field counts in FIELD_COUNTS_FILE overlap and are not a partition"
 fi
-if [[ -s "$template_fields_file" ]]; then
-  echo "TEMPLATE_FIELDS_FILE=$template_fields_file"
+if [[ "$fields_only" -eq 1 ]]; then
+  # The keys below all come from the dictionary or the cache, which this run left alone.
+  echo "FIELDS_ONLY=1"
 else
-  echo "TEMPLATE_FIELDS=UNAVAILABLE"
-fi
-echo "LOG_SHAPE_COUNT=$log_shape_count"
-echo "SHAPES_SOURCE=$shapes_source"
-echo "FREQS=$freqs"
-if [[ "$freqs" == "OK" ]]; then
-  echo "FREQS_FILE=$freqs_file"
-else
-  echo "FREQS_HINT=the archive was compressed by a clp-s build that does not store per-log-shape counts; recompress it with the current plugin"
-fi
-echo "CACHE_MODE=$mode"
-echo "CACHE_REASON=$reason"
-echo "APP_KEY=$app_key"
-echo "BASE_KEY=$base_key"
-echo "TO_CLASSIFY=$to_classify"
-echo "MAX_CHARS=$max_chars"
-echo "RULES_SOURCE=$rules_source"
-[[ -n "$field_rules" ]] && echo "RULES_FILE=$field_rules"
-echo "RULES_DIGEST=$rules_digest"
-[[ "$shapes_source" == "dump" ]] && echo "LOG_SHAPES_FILE=$log_shapes_file"
-echo "TO_CLASSIFY_FILE=$to_classify_file"
+  if [[ -s "$template_fields_file" ]]; then
+    echo "TEMPLATE_FIELDS_FILE=$template_fields_file"
+  else
+    echo "TEMPLATE_FIELDS=UNAVAILABLE"
+  fi
+  echo "LOG_SHAPE_COUNT=$log_shape_count"
+  echo "SHAPES_SOURCE=$shapes_source"
+  echo "FREQS=$freqs"
+  if [[ "$freqs" == "OK" ]]; then
+    echo "FREQS_FILE=$freqs_file"
+  else
+    echo "FREQS_HINT=the archive was compressed by a clp-s build that does not store per-log-shape counts; recompress it with the current plugin"
+  fi
+  echo "CACHE_MODE=$mode"
+  echo "CACHE_REASON=$reason"
+  echo "APP_KEY=$app_key"
+  echo "BASE_KEY=$base_key"
+  echo "TO_CLASSIFY=$to_classify"
+  echo "MAX_CHARS=$max_chars"
+  echo "RULES_SOURCE=$rules_source"
+  [[ -n "$field_rules" ]] && echo "RULES_FILE=$field_rules"
+  echo "RULES_DIGEST=$rules_digest"
+  [[ "$shapes_source" == "dump" ]] && echo "LOG_SHAPES_FILE=$log_shapes_file"
+  echo "TO_CLASSIFY_FILE=$to_classify_file"
 
-# Fetch the cache entries the next steps need, so the caller doesn't have to.
-if [[ "$mode" == "UPTODATE" ]]; then
-  "${CACHE_BIN[@]}" get "${cache_args[@]}" "$app_key" > "${out_dir}/log-shape-classification.json"
-  echo "CLASSIFICATION_FILE=${out_dir}/log-shape-classification.json"
-elif [[ "$mode" == "GROWTH" && -n "$base_key" ]]; then
-  "${CACHE_BIN[@]}" get "${cache_args[@]}" "$base_key" > "${out_dir}/log-shape-base-classification.json"
-  echo "BASE_CLASSIFICATION_FILE=${out_dir}/log-shape-base-classification.json"
+  # Fetch the cache entries the next steps need, so the caller doesn't have to.
+  if [[ "$mode" == "UPTODATE" ]]; then
+    "${CACHE_BIN[@]}" get "${cache_args[@]}" "$app_key" > "${out_dir}/log-shape-classification.json"
+    echo "CLASSIFICATION_FILE=${out_dir}/log-shape-classification.json"
+  elif [[ "$mode" == "GROWTH" && -n "$base_key" ]]; then
+    "${CACHE_BIN[@]}" get "${cache_args[@]}" "$base_key" > "${out_dir}/log-shape-base-classification.json"
+    echo "BASE_CLASSIFICATION_FILE=${out_dir}/log-shape-base-classification.json"
+  fi
 fi
 
 echo "BOOTSTRAP_TIMINGS sample=${sample_seconds}s dump=${dump_seconds}s cache=${cache_seconds}s" \
