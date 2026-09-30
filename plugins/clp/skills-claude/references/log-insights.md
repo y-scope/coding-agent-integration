@@ -82,8 +82,8 @@ Ask in one AskUserQuestion, header "Focus", not multi-select (on UPTODATE, the c
 
 - question: "What should the report focus on?"
 - first option, marked "(Recommended)": the categories the user's context points at, when it points at any ("request-handling + service-discovery — matches 'requests dropping'"); otherwise "Everything".
-- one option per remaining high-priority category, largest first, its description the classifier's `why`, its record count, and how many deeper checks choosing it queues (the extract's `drill=` count; for 0, "I'll write one to three checks from its templates") — up to the four options AskUserQuestion allows;
-- "Everything", if the first option is not already it, described truthfully: "The standard checks already cover every category; no extra queries."
+- one option per remaining high-priority category, largest first, its description the classifier's `why`, its record count, and how many depth checks choosing it queues (the extract's `drill=` count; for 0, "I'll write one to three checks from its templates") — up to the four options AskUserQuestion allows;
+- "Everything", if the first option is not already it, described truthfully: "The breadth checks already cover every category; no extra queries."
 
 The automatic "Other" takes the user's own question. Then run `clp focus` ONCE — even for "Everything", since it is what closes the inbox:
 
@@ -98,7 +98,7 @@ The automatic "Other" takes the user's own question. Then run `clp focus` ONCE �
 - The user's **own question**, or **context** that names something specific (a component, a symptom, an error text), gets 1–3 entries you write to `/tmp/clp-insights-focus-entries.ndjson`, one JSON entry per line, in the same shape as a plan entry: `label`, `match` (the grammar in `log-shape-classify.md`), `method`, `project` for a projecting method, and `category` when one fits. Derive each from templates in `/tmp/log-shape-templates-by-category.txt` that exist, as the classifier does; for a concept rather than a phrase, use a `semantic` node inside an `all` beside a concrete filter. `clp focus` checks every entry and queues nothing if one is invalid (exit 1, inbox left open): fix it and run it again.
 - A **time** the user mentions ("around 10:12") cannot be a filter — `match` has no time range — so keep it for the writer: it is in the context, and the fetched records carry timestamps.
 
-`clp focus` prints each queued entry with its KQL, then `FOCUS=` and `FOCUS_ENTRIES=`; tell the user in one plain line what was queued ("Queued 2 deeper checks on slow SQL transactions; they run next"), or, for `FOCUS_ENTRIES=0`, that the standard checks already cover it. Then follow the pool.
+`clp focus` prints each queued entry with its KQL, then `FOCUS=` and `FOCUS_ENTRIES=`; tell the user in one plain line what was queued ("Queued 2 depth checks on slow SQL transactions; they run next"), or, for `FOCUS_ENTRIES=0`, that the breadth checks already cover it. Then follow the pool.
 
 ## Follow the pool (step 8)
 

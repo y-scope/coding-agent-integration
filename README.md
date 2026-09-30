@@ -10,7 +10,7 @@ This repo contains the **plugin payload only**. The compiled installer that ship
 | --- | --- |
 | `clp@yscope` | Analyze logs end to end: compress raw log files, folders, or Claude Code and Codex sessions; search local CLP archives with KQL (including `semantic("...")` similarity search); write an insights report; and decompress a local CLP archive directory. |
 
-The plugin exposes a curated subset of `clp-s` capabilities. It does not expose full-project compression, reducers, network/file output handlers, results-cache writes, indexing, conversion, remote decompression, metadata sinks, or arbitrary `clp-s` option passthrough. See [`plugins/clp/README.md`](plugins/clp/README.md) for the full API surface.
+The plugin exposes a curated subset of `clp-s` capabilities. It does not expose reducers, network/file output handlers, results-cache writes, indexing, conversion, remote decompression, metadata sinks, or arbitrary `clp-s` option passthrough. See [`plugins/clp/README.md`](plugins/clp/README.md) for the full API surface.
 
 ## Repository layout
 
