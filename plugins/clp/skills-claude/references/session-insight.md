@@ -6,7 +6,7 @@ Every figure quoted anywhere in this pass comes from the facts file that `clp se
 
 ## The seven categories
 
-Fixed, in this order. A Claude Code session has a fixed record structure, so these do not need discovering. Each one's headline figure is what goes in the category table.
+Pre-trained, and reported in this order. They ship with the plugin, so a session's categories are not discovered on each run the way the general route's are on its first. Each one's headline figure is what goes in the category table.
 
 | # | Category | What it answers | Headline figure |
 |---|---|---|---|
@@ -77,7 +77,7 @@ This is the most useful thing the skill does, and the easiest to get wrong in ei
 One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in `FACTS_FILE`, `INVENTORY_DIR` and `BUNDLE`.
 
 ```
-Read the session facts file at FACTS_FILE. It covers seven fixed categories: reliability, cost, time, outcomes, harness faults, human loop, rework.
+Read the session facts file at FACTS_FILE. It covers the seven pre-trained categories: reliability, cost, time, outcomes, harness faults, human loop, rework.
 
 Your job is to find what those seven miss in this particular session — and usually there is nothing, which is a fine answer.
 

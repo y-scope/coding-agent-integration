@@ -63,8 +63,8 @@ Options:
                      and the classification cache, neither reading nor
                      writing it, and prints none of the keys that
                      come from them (LOG_SHAPE_COUNT, FREQS, CACHE_MODE and the
-                     rest). For logs whose categories are known in advance, such
-                     as a Claude Code session bundle, where a template is free
+                     rest). For logs whose categories are pre-trained, such as
+                     a Claude Code session bundle, where a template is free
                      text from one session and classifying it buys nothing.
                      Not with --dump or --field-rules.
   --heartbeat SECONDS
@@ -633,7 +633,7 @@ if [[ -s "$tree_raw_file" ]]; then
   echo "[bootstrap] partitioning the records into families (counting queries)..."
   # A fields-only run also splits each family into kinds (clp schema --kinds): the
   # attachment family of a session into its attachment types, and so on. Its
-  # categories are known in advance, so the kinds are what is left to learn.
+  # categories are pre-trained, so the kinds are what is left to learn.
   kinds_flag=()
   [[ "$fields_only" -eq 1 ]] && kinds_flag=(--kinds)
   if "${TREE_BIN[@]}" --tree-file "$tree_raw_file" \
