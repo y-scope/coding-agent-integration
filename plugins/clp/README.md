@@ -1,6 +1,6 @@
 # YScope CLP Plugin
 
-Plugin for compressing, searching, and decompressing coding-agent session log archives with [CLP](https://github.com/y-scope/clp) (Compressed Log Processor).
+Plugin for analyzing logs with [CLP](https://github.com/y-scope/clp) (Compressed Log Processor): compress raw logs or Claude Code and Codex sessions, search them with KQL, and write an insights report.
 
 CLP is the open-source platform for log archive storage, search, and analytics. Pre-release builds may also include licensed YScope extensions.
 
@@ -9,13 +9,14 @@ CLP is the open-source platform for log archive storage, search, and analytics. 
 Everything runs through one command, `bin/clp`, and of `clp-s` it exposes only:
 
 - list recent Claude Code and Codex session JSONL files.
-- compress one selected session with `clp-s c --timestamp-key timestamp`.
+- compress one selected session with `clp-s c --timestamp-key timestamp`, or a session bundle: the session and every agent and workflow it launched.
 - compress log files from an arbitrary folder with `clp-s c --remove-path-prefix FOLDER -f FILE_LIST OUTPUT_DIR`.
 - search local CLP archives with KQL (including `semantic("query")`) and stdout results.
-- dump an archive's log shape dictionary with the `stats.log_shapes` query.
+- dump an archive's log shape dictionary with the `stats.log_shapes` query, and read its schema tree and archive statistics with `stats.schema_tree` and `stats.archives`.
+- count matching records and list a field's distinct values in the engine, with `--count` and `--unique`.
 - decompress a local CLP archive directory.
 
-It does not expose full-project compression, reducers, network/file output handlers, results-cache writes, indexing, conversion, remote decompression, metadata sinks, or arbitrary `clp-s` option passthrough.
+It does not expose reducers, network/file output handlers, results-cache writes, indexing, conversion, remote decompression, metadata sinks, or arbitrary `clp-s` option passthrough.
 
 ## Skills
 
