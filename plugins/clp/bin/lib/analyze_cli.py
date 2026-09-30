@@ -40,9 +40,11 @@ printed before any work starts, so no route is ever taken silently.
 
 What it does:
   detect      classify the target, print the application, the route and the evidence for both
-  prepare     compress what is not compressed, and for a Claude Code session run the launch count
-              that decides whether a bundle is needed and build one when it is. Idempotent: pointed
-              at something already prepared it reports that and does no work.
+  prepare     compress what is not compressed. A Claude Code session log is compressed once: when
+              agent or workflow logs sit beside it, in the session's own directory, a bundle
+              compresses it with them; otherwise it is one archive, and the launch count on it says
+              whether logs it launched are missing. Idempotent: pointed at something already
+              prepared it reports that and does no work.
   hand off    print the next command as NEXT=. The stages that need a model and a user (the
               category pass, the focus questions, the report) belong to the skill and are not
               attempted here.
@@ -91,7 +93,10 @@ is the narration and goes to stderr.
   RAN=               each command run, in order
   ARCHIVE= ARCHIVE_BYTES= ARCHIVE_SIZE=     the archive, when there is one
   BUNDLE= BUNDLE_BYTES= BUNDLE_SIZE=        the bundle, when there is one
-  LAUNCHES= BUNDLE_WHY=                     the launch count and what it decided
+  ADJACENT_LOGS=     for a session log, the agent and workflow logs beside it: not 0 means a bundle
+  LAUNCHES=          the records that launched an agent or a workflow, counted when there is no
+                     bundle to read them from
+  BUNDLE_WHY=        why there is or is not a bundle
   PREPARED=          the artefacts this run made
   ALREADY_PREPARED=  the artefacts that were already there and were reused. Both appear when both
                      apply; at least one always does
@@ -291,11 +296,43 @@ def prepare_archive(classified, args, runner, prep):
     return A.archive_dir_from_output(result)
 
 
-def prepare_bundle(classified, args, runner, prep, archive):
-    """The Claude Code optimisation's own acquire: the graph of launches, retries and lost results,
-    which lives in files the main log only points at.
+def prepare_session(classified, args, runner, prep):
+    """A Claude Code session log on the specialised route: one archive, or a bundle.
 
-    The decision is the launch count -- the query a user would otherwise have to know to run.
+    The files beside the session log decide, before anything is compressed: agent and workflow logs
+    in the session's own directory mean a bundle, which compresses the main log with them, so the
+    session is compressed once and never both as one archive and again as a bundle. Returns the
+    archive and the bundle.
+    """
+    adjacent = A.adjacent_logs(classified["main_log"], classified.get("claude_home"))
+    out("ADJACENT_LOGS", len(adjacent))
+    if adjacent:
+        cause = (f"{len(adjacent)} agent and workflow logs sit beside the session log, in its own "
+                 f"directory")
+        bundle = build_bundle(classified, args, runner, prep, cause)
+        archives = os.path.join(bundle, "archives")
+        out("ARCHIVE_WHY", "the bundle's own archives directory holds the session's records, one "
+                           "archive per kind of log, so the session log is not compressed apart")
+        return (archives if os.path.isdir(archives) else None), bundle
+
+    archive = prepare_archive(classified, args, runner, prep)
+    why = ("no agent or workflow log sits beside the session log, so its archive is the whole "
+           "session and no bundle is needed")
+    if archive is None:
+        out("BUNDLE_WHY", why)
+        return None, None
+    launches = A.count_launches(runner, archive)
+    out("LAUNCHES", launches)
+    if launches:
+        why += (f"; yet {launches} records launched an agent or a workflow, so their logs are "
+                f"missing from beside it, and what those agents did cannot be read")
+    out("BUNDLE_WHY", why)
+    return archive, None
+
+
+def prepare_bundle(classified, args, runner, prep, archive):
+    """The bundle for a target that is not a session log: a bundle itself, or an archive, where the
+    launch count on the archive is the only sign that the session had other files.
     """
     if classified["form"] == "bundle":
         main_log = classified.get("main_log")
@@ -317,26 +354,31 @@ def prepare_bundle(classified, args, runner, prep, archive):
             prep.reused.append("bundle")
         return classified["bundle"]
 
-    session_id = classified["session_id"]
-    bundle_dir = args.bundle_dir or os.path.join(A.bundles_root(args.bundles_root), session_id)
-
     if archive is None:
-        # --dry-run before the archive exists: the count cannot run, so what it would decide is
-        # stated as a condition rather than guessed at.
-        out("BUNDLE_WHY", "there is no archive yet, so the launch count that decides this has not "
-                          "run; on a real run it decides right after the compression above")
-        out("PLAN", A.quoted(A.command("search", "--count", "<ARCHIVE>", A.LAUNCH_KQL)))
-        out("PLAN", A.quoted(A.command("bundle", bundle_dir, "build", "--session-id", session_id))
-            + "   (only if that count is not zero)")
         return None
-
     launches = A.count_launches(runner, archive)
     out("LAUNCHES", launches)
     if launches == 0:
         out("BUNDLE_WHY", "no record launched an agent or a workflow, so the main archive is the "
                           "whole session and no bundle is needed")
         return None
+    main_log = classified.get("main_log")
+    if main_log is None or not os.path.isfile(main_log):
+        out("BUNDLE_WHY", f"{launches} records launched an agent or a workflow, so a bundle would "
+                          f"say what they did. The session log this archive was made from is not "
+                          f"reachable, so no bundle can be built, and the measure stage runs on the "
+                          f"archive alone.")
+        return None
+    return build_bundle(classified, args, runner, prep,
+                        f"{launches} records launched an agent or a workflow")
 
+
+def build_bundle(classified, args, runner, prep, cause):
+    """Reuse, repair or build the session's bundle: the graph of launches, retries and lost results,
+    which lives in files the main log only points at. CAUSE says why the session needs one. With
+    --dry-run it returns the directory the bundle would be built in."""
+    session_id = classified["session_id"]
+    bundle_dir = args.bundle_dir or os.path.join(A.bundles_root(args.bundles_root), session_id)
     main_log = classified.get("main_log")
     sha = A.sha256_file(main_log) if main_log and os.path.isfile(main_log) else None
     state = A.bundle_state(bundle_dir, main_log, sha)
@@ -344,12 +386,12 @@ def prepare_bundle(classified, args, runner, prep, archive):
 
     if usable and not args.force:
         prep.reused.append("bundle")
-        out("BUNDLE_WHY", f"{launches} records launched an agent or a workflow, so the session's "
-                          f"other files matter; a bundle for it is already there and " + state["why"])
+        out("BUNDLE_WHY", f"{cause}, so the session's other files matter; a bundle for it is "
+                          f"already there and " + state["why"])
         return bundle_dir
     if state["manifest"] and state["catalog_error"] and state["fresh"] is not False and not args.force:
-        out("BUNDLE_WHY", f"{launches} records launched an agent or a workflow; the bundle is there "
-                          f"but its catalog is not usable, so only the catalog is made again")
+        out("BUNDLE_WHY", f"{cause}; the bundle is there but its catalog is not usable, so only the "
+                          f"catalog is made again")
         if args.dry_run:
             out("PLAN", A.quoted(A.command("bundle", bundle_dir, "rebuild")))
             return bundle_dir
@@ -359,13 +401,6 @@ def prepare_bundle(classified, args, runner, prep, archive):
         prep.made.append("catalog")
         return bundle_dir
 
-    if main_log is None or not os.path.isfile(main_log):
-        out("BUNDLE_WHY", f"{launches} records launched an agent or a workflow, so a bundle would "
-                          f"say what they did. The session log this archive was made from is not "
-                          f"reachable, so no bundle can be built, and the measure stage runs on the "
-                          f"archive alone.")
-        return None
-
     argv = A.command("bundle", bundle_dir, "build", "--session-id", session_id)
     if classified.get("claude_home"):
         argv += ["--claude-home", classified["claude_home"]]
@@ -373,14 +408,14 @@ def prepare_bundle(classified, args, runner, prep, archive):
         argv += ["--clp-s", args.clp_s]
     if state["exists"]:
         argv += ["--force"]
-    reason = (f"{launches} records launched an agent or a workflow, so the main log records only "
-              f"the launches and the rest of the session is in files a bundle collects")
+    reason = (f"{cause}, so a bundle compresses the main log with them, one archive per kind of "
+              f"log, and builds the graph of how the files relate")
     if state["exists"] and not args.force:
         reason += f"; the bundle there is replaced because {state['why']}"
     out("BUNDLE_WHY", reason)
     if args.dry_run:
         out("PLAN", A.quoted(argv))
-        return None
+        return bundle_dir
     runner.check(argv, "building the session bundle")
     prep.made.append("bundle")
     return bundle_dir
@@ -402,10 +437,9 @@ def hand_off(route, archive, bundle, dry_run=False):
         out("NEXT", A.quoted(A.command("bootstrap", archive or placeholder)))
     else:
         out("NEXT", "")
-    if dry_run and not archive:
+    if dry_run and not archive and not bundle:
         out("NEXT_PENDING", "the archive path above is the one the planned compression will print "
-                            "as its 'Archives dir:'; on the specialised route the bundle replaces "
-                            "--archive when the launch count is not zero")
+                            "as its 'Archives dir:'")
     out("NEXT_SKILL", A.ANALYSIS_SKILL)
     out("NEXT_STAGES", "classify, focus and report need a model and a user, so they are the skill's "
                        "and are not attempted here")
@@ -488,12 +522,16 @@ def run(args):
         out("DRY_RUN", "1")
 
     prep = Prep()
-    archive = prepare_archive(classified, args, runner, prep)
+    specialised = route == A.SPECIALISED and classified["app"] is A.CLAUDE_CODE
     bundle = None
-    if route == A.SPECIALISED and classified["app"] is A.CLAUDE_CODE:
-        bundle = prepare_bundle(classified, args, runner, prep, archive)
-    elif classified["form"] == "bundle":
-        bundle = classified["bundle"]
+    if specialised and classified["form"] in ("log-file", "session-id") and classified.get("main_log"):
+        archive, bundle = prepare_session(classified, args, runner, prep)
+    else:
+        archive = prepare_archive(classified, args, runner, prep)
+        if specialised:
+            bundle = prepare_bundle(classified, args, runner, prep, archive)
+        elif classified["form"] == "bundle":
+            bundle = classified["bundle"]
 
     for argv in runner.ran:
         out("RAN", A.quoted(argv))

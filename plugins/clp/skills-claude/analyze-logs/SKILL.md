@@ -87,7 +87,7 @@ Run anything that can take over a minute (the bootstrap on a large archive, the 
 
 ### Step 1 — prepare and route (both routes)
 
-**Prepare, with one command.** Open phase 1. `clp` classifies the target, picks the compression settings from the detector's own evidence, compresses what is not compressed, decides whether a session bundle is needed and builds one, then names the next step:
+**Prepare, with one command.** Open phase 1. `clp` classifies the target, picks the compression settings from the detector's own evidence, compresses what is not compressed, then names the next step. A Claude Code session is compressed once: when agent or workflow logs sit beside it, a session bundle compresses it with them; otherwise it is one archive:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp" <PATH|SESSION_ID>
@@ -98,10 +98,11 @@ Run anything that can take over a minute (the bootstrap on a large archive, the 
 It asks one question — **which application produced these logs?** — and answers it from the records, not the path, reporting the answer with its evidence. Read these keys:
 
 - `APP=` and `ROUTE=` → **the route is the branch below.** `claude-code` with `ROUTE=specialised` takes the specialised route; anything else takes the general route. `APP=unrecognised` is an ordinary success, not a problem: logs from an application with no registered specialisation are exactly what the general route discovers and caches. `NEXT_SKILL=` names this skill on both routes, since one skill owns both; `ROUTE=` is the branch, and nothing else decides it.
-- `ARCHIVE=` and `BUNDLE=` → the artefacts to pass on. A session that launched nothing gets no bundle, and the specialised categories needing one report as not applicable.
+- `ARCHIVE=` and `BUNDLE=` → the artefacts to pass on. A session with no agent or workflow logs beside it gets no bundle, and the specialised categories needing one report as not applicable.
 - `PREPARED=` versus `ALREADY_PREPARED=` → whether work ran, or an existing archive and bundle were reused.
 - `WHY=` and `EVIDENCE=` → why it called the application what it did. Quote from these rather than restating them; they are what makes the classification checkable.
-- `LAUNCHES=` → how many records launched an agent or a workflow, which is why a bundle was or was not built.
+- `ADJACENT_LOGS=` → how many agent and workflow logs sit beside the session log, which is why a bundle was or was not built.
+- `LAUNCHES=` → only when there is no bundle: how many records launched an agent or a workflow. When it is not 0, `BUNDLE_WHY=` says those agents' logs are missing; tell the user, since what those agents did cannot be read.
 
 **Name what these logs are, even when no application is registered.** `APP=unrecognised` means no *optimised route* exists, not that the application is unknown to you. The `EVIDENCE=` lines carry the fingerprint — the root fields most records hold, the timestamp shape, the file name — and that is usually enough to recognise a system on sight: `redactable`, `channel_numeric` and `goroutine` are CockroachDB; `logger` and `worker` with vLLM's text shape are an inference server. Say what you think it is, in one line, with the evidence you read and the word that marks it an inference.
 
@@ -121,7 +122,7 @@ Two reasons this matters more than a label. It tells you **what to look for**: a
 
 Compress the log, bundle every agent and workflow that ran under it, check the same seven categories every time, ask what matters, and write a report.
 
-**Its five phases:** `[1/5] Compress`, `[2/5] Map the session`, `[3/5] Run the checks`, `[4/5] Focus`, `[5/5] Report`. Phases 1 and 2 are both done by step 1's one command — compressing the log is phase 1, and the bundle it builds *is* the map — so close them together there rather than announcing a phase that nothing further runs in. A session with no launches gets no bundle: say so in the phase 2 line.
+**Its five phases:** `[1/5] Compress`, `[2/5] Map the session`, `[3/5] Run the checks`, `[4/5] Focus`, `[5/5] Report`. Phases 1 and 2 are both done by step 1's one command — compressing the log is phase 1, and the bundle it builds *is* the map — so close them together there rather than announcing a phase that nothing further runs in. A session with no agent or workflow logs beside it gets no bundle: say so in the phase 2 line.
 
 The seven categories are fixed, because a Claude Code session has a fixed record structure: there is nothing to classify and nothing to cache, so there is no classification step and the run is fast. What the records are made of is still read, in a few seconds, because Claude Code adds record types and fields between releases. A subagent starts from that inventory, looks for anything the fixed set misses, and proposes it as an extra category.
 
