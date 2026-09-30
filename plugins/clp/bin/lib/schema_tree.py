@@ -41,6 +41,12 @@ counting queries the caller runs:
   its own falls into the residual) and hundreds of queries, but it needs
   nothing of the data but its shape.
 
+A family can be split once more, into kinds: `kind_field_candidates` names the
+fields only that family carries, and `shape_separation` tells a field whose
+values are kinds of record (`attachment.type`, whose values each carry their
+own fields) from one whose values are data (`promptId`, whose values all look
+alike), from one sample of the family's records the caller fetches.
+
 Stdlib only, like the other plugin helpers, except for the sibling module
 lib/kql_build, whose value escaping decides what is safe to put in a query.
 """
@@ -131,6 +137,24 @@ DEFAULT_MIN_PARTITION_COVERAGE = 0.99
 # kind of tool result, and stopping at 6 leaves 120 of its 4,525 records
 # uncovered and the whole subtree unnamed.
 DEFAULT_MAX_DISCRIMINATOR_LEAVES = 12
+
+# Records sampled from a family, once, to judge which of its fields name kinds
+# of record. One search whatever its size, and enough records that an
+# identifier shows many values with the same shape, which rejects it.
+FAMILY_SAMPLE_RECORDS = 500
+
+# Records fetched per value when the family sample shows a field with one value
+# only: enough to see the shapes a value takes, few enough that a field of 64
+# values costs 64 short searches.
+VALUE_SAMPLE_RECORDS = 20
+
+# Share of a field's values whose sampled records all have a shape no other
+# value's records have, at or above which the values are kinds of record rather
+# than data. Measured on three Claude session archives: `attachment.type`,
+# `subtype` and `operation` score 0.50 to 1.00, and every identifier that passes
+# the coverage test -- `apiBlockIndex`, `prNumber`, `agentName`,
+# `snapshotMessageId`, `promptId` -- scores 0.00.
+MIN_KIND_SEPARATION = 0.5
 
 
 def type_name(type_id):
@@ -788,3 +812,68 @@ def partition_by_value(field, values, root_records, count_records,
         "untested": len(values) - tested - len(discarded),
         "cap_hit": tested + len(discarded) < len(values),
     }
+
+
+def kind_field_candidates(trees, family_count, exclude=(), max_children=DEFAULT_MAX_CHILDREN,
+                          min_coverage=DEFAULT_MIN_PARTITION_COVERAGE):
+    """The fields that might split a family of `family_count` records into
+    kinds: the scalars a value partition would consider, carried by at least
+    `min_coverage` of the family and by no more records than it has. Shallowest
+    first, then by path.
+
+    The count window is what keeps a field shared by several families out: on
+    a session archive `isSidechain` is carried by user, assistant, attachment
+    and system records alike, so its count exceeds any one of them, while
+    `attachment.type` reads exactly the attachment family's 7,163. The window
+    is a necessary condition, not proof -- families of equal size admit each
+    other's fields -- so the caller counts the family and the field together
+    before it spends anything else on one.
+    """
+    rows = [
+        {"path": row["path"], "records": row["records"], "depth": row["display"].count(".")}
+        for row in summarize(trees, max_children).values()
+        if row["type"] in DIST_FIELD_TYPES
+        and "[]" not in row["display"]
+        and not row["collapsed_keys"]
+        and row["path"] not in exclude
+        and QUERYABLE_PATH.match(row["path"])
+        and min_coverage * family_count <= row["records"] <= family_count
+    ]
+    rows.sort(key=lambda r: (r["depth"], r["path"]))
+    return rows
+
+
+def key_paths(record, prefix=""):
+    """The set of leaf paths a record carries: its shape, with the values
+    dropped."""
+    paths = set()
+    for key, value in record.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict) and value:
+            paths |= key_paths(value, path)
+        else:
+            paths.add(path)
+    return paths
+
+
+def shape_separation(samples):
+    """The share of a field's values whose sampled records all have a shape no
+    other value's records have, from {value: [record, ...]}.
+
+    A field whose values are kinds of record changes which fields a record
+    carries: a `hook_success` attachment has hook fields a `skill_listing` one
+    does not. A field whose values are data does not: two prompts' records look
+    alike whatever the prompt id. So the share is near 1 for the first and near
+    0 for the second, and MIN_KIND_SEPARATION sits between them.
+    """
+    shapes = {value: {frozenset(key_paths(r)) for r in records}
+              for value, records in samples.items()}
+    owners = {}
+    for value, value_shapes in shapes.items():
+        for shape in value_shapes:
+            owners.setdefault(shape, set()).add(value)
+    if not shapes:
+        return 0.0
+    apart = sum(1 for value_shapes in shapes.values()
+                if value_shapes and all(len(owners[s]) == 1 for s in value_shapes))
+    return apart / len(shapes)

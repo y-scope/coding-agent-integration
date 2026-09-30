@@ -74,6 +74,14 @@ Options:
                         0 takes the first field that qualifies. A field with a
                         single distinct value never qualifies at any budget: it
                         puts every record in one family.
+  --kinds               Also split each record family into kinds (implies
+                        --record-families), by a field only that family
+                        carries whose values change which fields a record
+                        holds. A few more searches: about 50 to 70, 3 to 6 s,
+                        on a session bundle. On a large archive a family whose
+                        sample shows one value of a field costs a --unique,
+                        which can take minutes; the bootstrap asks for kinds
+                        only with --fields-only.
   --search-wrapper P    Search wrapper: one executable (default: `clp
                         search`).
 
@@ -236,6 +244,40 @@ with that reason. The test runs against families already accepted, and only in
 that direction -- read the other way it would discard `message.role` itself for
 containing the optional `effort` field that some message records carry.
 
+With --kinds, after the families:
+  RECORD_KIND_COUNT=N          kinds in all: one per value of each splitting
+                               field, and one per family nothing splits
+  RECORD_KIND_QUERIES=N        searches the split spent, within the same
+                               --max-family-queries
+  RECORD_KIND_SPLIT field=F kinds=N residual=N separation=S family=P
+  RECORD_KIND_WHOLE count=N family=P
+                               one per family, split or left whole. The family
+                               goes last, since a value can hold a space; why a
+                               family stayed whole, and every field refused on
+                               the way, is in the NDJSON's kind_split and
+                               kind_whole rows
+  RECORD_KIND count=N share=X% name=P
+                               one per kind, most records first; P selects it
+  RECORD_KIND_RESIDUAL count=N share=X%
+                               the families' residual plus what each split
+                               missed within its family; with the kinds, every
+                               record once, checked before anything is printed
+
+Why: a family is often several kinds of record under one value.
+`type:"attachment"` is a third of a session archive and holds some twenty kinds
+-- hook results, skill listings, token reminders, queued commands -- each with
+fields of its own, and a question about one of them is one the family cannot
+answer.
+
+A kind is a value of a field that only the family carries, and whose values
+change which fields a record holds. The second condition is what separates
+`attachment.type` from `promptId`: both are carried by nearly every record of
+their family, but an attachment's type decides its fields and a prompt id
+decides nothing. It is judged on a sample of the family's records, where the
+share of a field's values whose records all have a shape no other value's
+records have is 1.00 for `attachment.type` and 0.00 for every identifier tried.
+The split's counts are the archive's own, one per value, except in a family the
+sample holds whole, where they are read off the sample exactly.
 
 Why (the field rows): the log-insights bootstrap used to guess the schema from
 the top-level keys of a sample's first record. The tree is exact and
@@ -249,6 +291,7 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
@@ -261,15 +304,21 @@ from schema_tree import (  # noqa: E402
     DEFAULT_MAX_PARTITION_VALUES,
     DEFAULT_MIN_PARTITION_COVERAGE,
     DEFAULT_PARTITION_PROBE_BUDGET,
+    FAMILY_SAMPLE_RECORDS,
+    VALUE_SAMPLE_RECORDS,
+    MIN_KIND_SEPARATION,
     family_candidates,
     field_counts,
+    kind_field_candidates,
     load_trees,
     node_fields,
     partition_by_value,
     partition_families,
+    shape_separation,
     summarize,
     type_drift,
     value_partition_fields,
+    value_predicate,
 )
 
 
@@ -410,11 +459,12 @@ def record_counter(wrapper, archives_dir):
     return count_records
 
 
-def field_values(wrapper, archives_dir, field):
-    """A field's distinct values, in the archive's own types, deduplicated
-    across archives. None when the query fails."""
+def field_values(wrapper, archives_dir, field, kql="*"):
+    """A field's distinct values over the records matching kql, in the
+    archive's own types, deduplicated across archives. None when the query
+    fails."""
     proc = subprocess.run(
-        [*wrapper, "--unique", field, archives_dir, "*"],
+        [*wrapper, "--unique", field, archives_dir, kql],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     if proc.returncode != 0:
@@ -436,6 +486,179 @@ def field_values(wrapper, archives_dir, field):
         seen.add(key)
         values.append(value)
     return values
+
+
+def record_sample(wrapper, archives_dir, kql, limit):
+    """Up to `limit` records matching kql, as dicts. Empty when the query
+    fails, which the shape test then counts against the field."""
+    proc = subprocess.run(
+        [*wrapper, "--limit", str(limit), archives_dir, kql],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    records = []
+    for line in proc.stdout.splitlines() if proc.returncode == 0 else []:
+        if not line.startswith("{"):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            record.pop("archive_id", None)
+            records.append(record)
+    return records
+
+
+def grouped(predicate):
+    """A family predicate safe to AND with another term: an existence family's
+    disjunction needs the parentheses, a value family's single term does not."""
+    return f"({predicate})" if " OR " in predicate else predicate
+
+
+def split_into_kinds(family, candidates, sample, wrapper, archives_dir, count_records, args,
+                     max_queries):
+    """One family split into kinds by a field only it carries, or the reason
+    it stays whole.
+
+    `candidates` are the family's kind_field_candidates, and `sample` is up to
+    FAMILY_SAMPLE_RECORDS of its records, which the caller fetched. The field is
+    the first candidate that passes three tests. A count of the family and the
+    field together proves the field is the family's own. Then the shapes of its
+    records have to tell the field's values apart (shape_separation). That test
+    is the one that matters: an id, a number or a name passes the count as
+    readily as a kind does -- on a session archive most fields that pass it are
+    data. Last, the field has to have between 2 and --max-partition-values
+    values within the family.
+
+    The sample carries most of the cost. It refuses a field more of its records
+    lack than the whole family may, which is how families of equal size turn
+    away each other's fields. It judges the shapes, so an identifier is refused
+    without a query of its own; only a field it shows a single value of costs a
+    --unique and a few records per value. And when it holds the whole family,
+    as it does for every family no larger than it, the count, the values and
+    the kinds' counts are all read off it, exactly, with no query at all.
+
+    Otherwise the kinds are counted the way partition_by_value counts families,
+    one query per value, within the family; what they miss is the family's own
+    residual. Every query counts against `max_queries`, and a family the budget
+    cannot finish stays whole with that reason, never half split.
+    """
+    fc = family["count"]
+    within = grouped(family["predicate"])
+    whole = len(sample) == fc
+    result = {"family": family["predicate"], "count": fc, "field": None, "kinds": [],
+              "residual": 0, "queries": 0, "rejected": [], "reason": None}
+
+    def spend(n=1):
+        if result["queries"] + n > max_queries:
+            raise _OutOfQueries()
+        result["queries"] += n
+
+    def reject(path, reason):
+        result["rejected"].append({"field": path, "reason": reason})
+
+    may_miss = fc - args.min_partition_coverage * fc
+    try:
+        for candidate in candidates:
+            path = candidate["path"]
+            missing = sum(1 for record in sample if value_at(record, path) is None)
+            if missing > may_miss:
+                reject(path, f"{missing} of the {len(sample)} sampled records lack it")
+                continue
+            if not whole:
+                spend()
+                together = count_records(f"{within} AND {path}:*")
+                if together < args.min_partition_coverage * fc:
+                    reject(path, f"only {together} of the family's {fc} records carry it")
+                    continue
+            by_value, typed = {}, {}
+            for record in sample:
+                value = value_at(record, path)
+                if value is not None and not isinstance(value, (dict, list)):
+                    by_value.setdefault(repr(value), []).append(record)
+                    typed.setdefault(repr(value), value)
+            values = list(typed.values()) if whole else None
+            if len(by_value) < 2 and not whole:
+                # A sample from the start of a log can hold one kind only (the first
+                # 500 attachments of a session are all hook results), so the values
+                # are listed and each is sampled on its own.
+                spend()
+                values = field_values(wrapper, archives_dir, path, within)
+                if values is None or not 2 <= len(values) <= args.max_partition_values:
+                    reject(path, out_of_range(values, args.max_partition_values))
+                    continue
+                predicates = {repr(v): value_predicate(path, v) for v in values}
+                spend(sum(1 for pred in predicates.values() if pred))
+                by_value = dict(zip(predicates, parallel(
+                    lambda pred: record_sample(wrapper, archives_dir, f"{within} AND {pred}",
+                                               VALUE_SAMPLE_RECORDS) if pred else [],
+                    predicates.values())))
+            if values is not None and not 2 <= len(values) <= args.max_partition_values:
+                reject(path, out_of_range(values, args.max_partition_values))
+                continue
+            separation = shape_separation(by_value)
+            if separation < MIN_KIND_SEPARATION:
+                reject(path, f"its values do not change which fields a record carries"
+                             f" (separation {separation:.2f}, below {MIN_KIND_SEPARATION})")
+                continue
+            if values is None:
+                spend()
+                values = field_values(wrapper, archives_dir, path, within)
+                if values is None or not 2 <= len(values) <= args.max_partition_values:
+                    reject(path, out_of_range(values, args.max_partition_values))
+                    continue
+            if whole:
+                counted = {f"{within} AND {value_predicate(path, v)}": len(by_value[repr(v)])
+                           for v in values if value_predicate(path, v)}
+            else:
+                terms = [f"{within} AND {pred}" for pred in
+                         (value_predicate(path, v) for v in values) if pred]
+                spend(len(terms))
+                counted = dict(zip(terms, parallel(count_records, terms)))
+            split = partition_by_value(path, values, fc,
+                                       lambda kql: counted[f"{within} AND {kql}"])
+            for kind in split["families"]:
+                kind["family"] = family["predicate"]
+                kind["field"] = path
+                kind["predicate"] = f"{within} AND {kind['predicate']}"
+                kind["path"] = kind["predicate"]
+            result.update(field=path, separation=round(separation, 2),
+                          kinds=split["families"], residual=split["residual"]["count"])
+            return result
+    except _OutOfQueries:
+        result["reason"] = f"the query cap ({args.max_family_queries}) was reached first"
+        return result
+    result["reason"] = "no field it alone carries has values that are kinds of record"
+    return result
+
+
+# Searches run at once while splitting a family: its per-value samples and
+# counts are independent, and one at a time they are most of the run's time.
+KIND_WORKERS = 8
+
+
+def parallel(fn, items):
+    """fn over items on KIND_WORKERS threads, results in the items' order."""
+    with ThreadPoolExecutor(KIND_WORKERS) as pool:
+        return list(pool.map(fn, items))
+
+
+def out_of_range(values, max_values):
+    n = "no" if values is None else len(values)
+    return f"{n} distinct values within the family, not 2 to {max_values}"
+
+
+def value_at(record, path):
+    """The value at a dotted path of a record, or None."""
+    for key in path.split("."):
+        if not isinstance(record, dict) or key not in record:
+            return None
+        record = record[key]
+    return record
+
+
+class _OutOfQueries(Exception):
+    pass
 
 
 def choose_partition_field(trees, wrapper, archives_dir, max_values, max_children,
@@ -645,13 +868,101 @@ def print_record_families(trees, wrapper, archives_dir, families_file, args):
         print(f"RECORD_FAMILY_UNDISCRIMINATED path={row['path']}"
               f" records={row['records']} reason={row['reason']}")
 
+    kind_rows = []
+    if args.kinds:
+        kind_rows = print_record_kinds(
+            families, residual, root_records, trees, wrapper, archives_dir, count_records,
+            {chosen["path"]} if method == "value" else set(), args,
+            args.max_family_queries - result["queries"])
+        if kind_rows is None:
+            return 1
+
     if families_file:
         rows = [dict(row="family", **f) for f in families]
         rows.append(dict(row="residual", **residual))
         rows += [dict(row="discarded", **r) for r in result["discarded"]]
         rows += [dict(row="undiscriminated", **r) for r in result["undiscriminated"]]
+        rows += kind_rows
         write_ndjson(families_file, rows)
     return 0
+
+
+def print_record_kinds(families, residual, root_records, trees, wrapper, archives_dir,
+                       count_records, exclude, args, max_queries):
+    """Split each family into kinds where a field of its own allows it, print
+    the result, and return its NDJSON rows -- or None when the kinds fail to
+    account for every record, which is reported rather than printed.
+
+    A family no field splits is one kind, itself, so the kinds are still a
+    partition of the records: the kinds of the families that split, the
+    families that did not, and one residual holding what the families missed
+    plus what each split missed within its family.
+    """
+    kinds, splits = [], []
+    candidates = [kind_field_candidates(trees, f["count"], exclude, args.max_children,
+                                        args.min_partition_coverage) for f in families]
+    # One sample per family with a candidate, fetched together: each is one
+    # search, and most families need nothing more.
+    sampled = [f for f, c in zip(families, candidates) if c][:max(0, max_queries)]
+    spent = len(sampled)
+    samples = dict(zip((f["predicate"] for f in sampled), parallel(
+        lambda f: record_sample(wrapper, archives_dir, grouped(f["predicate"]),
+                                FAMILY_SAMPLE_RECORDS), sampled)))
+    for family, family_candidates in zip(families, candidates):
+        if family["predicate"] not in samples:
+            reason = ("no field is carried by this family alone" if not family_candidates
+                      else f"the query cap ({args.max_family_queries}) was reached first")
+            split = {"family": family["predicate"], "count": family["count"], "field": None,
+                     "kinds": [], "residual": 0, "queries": 0, "rejected": [],
+                     "reason": reason}
+        else:
+            split = split_into_kinds(family, family_candidates, samples[family["predicate"]],
+                                     wrapper, archives_dir, count_records, args,
+                                     max(0, max_queries - spent))
+            spent += split["queries"]
+            split["queries"] += 1  # its sample
+        splits.append(split)
+        if split["field"]:
+            kinds += split["kinds"]
+        else:
+            kinds.append(dict(family, family=family["predicate"], field=None, value=None))
+    kind_residual = residual["count"] + sum(s["residual"] for s in splits)
+    covered = sum(k["count"] for k in kinds) + kind_residual
+    if covered != root_records:
+        print(f"error: the kinds and the residual cover {covered} records, not the"
+              f" root's {root_records}: this is not a partition", file=sys.stderr)
+        return None
+    kinds.sort(key=lambda k: (-k["count"], k["predicate"]))
+    shares = display_shares([k["count"] for k in kinds] + [kind_residual], root_records)
+
+    print(f"RECORD_KIND_COUNT={len(kinds)}")
+    print(f"RECORD_KIND_QUERIES={spent}")
+    # The family goes last on these lines, as a value family's name does above:
+    # its value can hold a space.
+    for split in splits:
+        if split["field"]:
+            print(f"RECORD_KIND_SPLIT field={split['field']} kinds={len(split['kinds'])}"
+                  f" residual={split['residual']} separation={split['separation']:.2f}"
+                  f" family={split['family']}")
+        else:
+            print(f"RECORD_KIND_WHOLE count={split['count']} family={split['family']}")
+    for kind, share in zip(kinds, shares):
+        print(f"RECORD_KIND count={kind['count']} share={share:.1f}% name={kind['predicate']}")
+    print(f"RECORD_KIND_RESIDUAL count={kind_residual} share={shares[-1]:.1f}%")
+
+    rows = [dict(row="kind", family=k["family"], field=k["field"], value=k.get("value"),
+                 predicate=k["predicate"], count=k["count"],
+                 share=round(k["count"] / root_records, 6) if root_records else 0.0)
+            for k in kinds]
+    rows.append(dict(row="kind_residual", count=kind_residual,
+                     share=round(kind_residual / root_records, 6) if root_records else 0.0))
+    for split in splits:
+        rows.append(dict(
+            row="kind_split" if split["field"] else "kind_whole", family=split["family"],
+            count=split["count"], field=split["field"], kinds=len(split["kinds"]),
+            residual=split["residual"], separation=split.get("separation"),
+            reason=split["reason"], rejected=split["rejected"], queries=split["queries"]))
+    return rows
 
 
 def main():
@@ -684,13 +995,14 @@ def main():
     parser.add_argument("--partition-probe-budget", type=float,
                         default=DEFAULT_PARTITION_PROBE_BUDGET)
     parser.add_argument("--search-wrapper")
+    parser.add_argument("--kinds", action="store_true")
     args = parser.parse_args()
     # One path, not an argv: a caller replacing the search with its own program gives one
     # executable. The default is this plugin's own `clp search`, which is two words.
     args.search_wrapper = [args.search_wrapper] if args.search_wrapper else C.search_argv()
     drift = args.drift or bool(args.drift_file)
     counts_mode = args.field_counts or bool(args.field_counts_file)
-    families = args.record_families or bool(args.record_families_file)
+    families = args.record_families or bool(args.record_families_file) or args.kinds
     if families and args.max_family_queries < 1:
         print("error: --max-family-queries must be at least 1", file=sys.stderr)
         return 2
