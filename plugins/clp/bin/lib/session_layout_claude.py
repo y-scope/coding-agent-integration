@@ -22,6 +22,7 @@ import bundle as B
 SESSION_RULES = [
     ("agent", "archive", r"^subagents/agent-[^/]+\.jsonl$"),
     ("agent-meta", "files", r"^subagents/agent-[^/]+\.meta\.json$"),
+    ("agent-forked-skill", "files", r"^subagents/agent-[^/]+\.forked-skill(\.marker)?\.json$"),
     ("workflow-agent", "archive", r"^subagents/workflows/wf_[^/]+/agent-[^/]+\.jsonl$"),
     ("workflow-agent-meta", "files", r"^subagents/workflows/wf_[^/]+/agent-[^/]+\.meta\.json$"),
     ("workflow-journal", "archive", r"^subagents/workflows/wf_[^/]+/journal\.jsonl$"),
@@ -31,6 +32,8 @@ SESSION_RULES = [
     ("session-title", "files", r"^custom-title\.json$"),
     ("classifier-error", "files", r"^auto-mode-classifier-error\.txt$"),
 ]
+# the kind of a file no rule names: kept under files/ as it is, since only a log would be lost by that
+UNCLASSIFIED_KIND = "unclassified"
 # the kinds that are logs (one archive each), and those whose records the catalog lists as events
 ARCHIVED_KINDS = ["main", "agent", "workflow-agent", "workflow-journal", "workflow-run"]
 EVENT_KINDS = ("main", "agent", "workflow-agent")
@@ -110,8 +113,12 @@ def inventory(main_path, claude_home):
                         found.append(source(inner, full, kind, where))
                         break
                 else:
-                    raise B.BundleError(f"unclassified file: {os.path.relpath(full, source_root)} "
-                                        "(add a rule to session_layout_claude.SESSION_RULES or remove it)")
+                    # A file Claude Code started writing after these rules were: kept, not refused. A log
+                    # is the exception, since under files/ its records would be missing from the analysis.
+                    if n.endswith(".jsonl"):
+                        raise B.BundleError(f"unclassified log: {os.path.relpath(full, source_root)} "
+                                            "(add a rule to session_layout_claude.SESSION_RULES or remove it)")
+                    found.append(source(inner, full, UNCLASSIFIED_KIND, "files"))
     if claude_home:
         for kind in ("tasks", "file-history"):
             base = os.path.join(claude_home, kind, sid)

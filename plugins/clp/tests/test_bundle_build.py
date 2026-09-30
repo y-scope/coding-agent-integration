@@ -24,7 +24,7 @@ SID = "5e550000-0000-0000-0000-000000000001"
 
 STUB = textwrap.dedent(r"""
     #!/usr/bin/env python3
-    # A stand-in for clp-s: `c --files-from LIST DIR` keeps each file's records in the order listed and fails
+    # A stand-in for clp-s: `c --files-from LIST DIR` (or `-f LIST`, as clp compress passes it) keeps each file's records in the order listed and fails
     # like clp-s on a line that is not a JSON object; `s --count DIR *` counts per archive; `s ARCHIVE * file
     # --path OUT` writes each record with its position as msgpack, in reverse order (the builder must sort).
     import json, os, struct, sys, uuid
@@ -32,7 +32,7 @@ STUB = textwrap.dedent(r"""
     def records(d):
         return [l for l in open(f"{d}/records.jsonl") if l.strip()]
     if a[0] == "c":
-        files_from = a[a.index("--files-from") + 1]
+        files_from = a[a.index("--files-from" if "--files-from" in a else "-f") + 1]
         out = a[-1]
         aid = str(uuid.uuid4())
         os.makedirs(f"{out}/{aid}")
@@ -364,14 +364,78 @@ class Full(BuildTest):
         self.assertTrue(os.path.exists(os.path.join(plain, "keep.txt")))   # not a bundle: never deleted
 
 
-class Failures(BuildTest):
-    def test_an_unclassified_file_stops_the_build_and_leaves_nothing(self):
+class TheSessionIsCompressedOnce(BuildTest):
+    """clp <session log> reads the files beside the log before compressing anything: agent and workflow
+    logs there mean one bundle, and none mean one archive, never the one and then the other."""
+
+    def analyse(self, *extra):
+        e = {**os.environ, "CLP_S_BIN": self.stub}
+        p = subprocess.run([os.path.join(BIN, "clp"), f"{self.home}/projects/p/{SID}.jsonl", "--claude-home", self.home,
+                            "--archives-root", os.path.join(self.tmp.name, "archives"), "--bundle-dir", self.out,
+                            "--app", "claude-code", *extra],          # the fixture is too sparse to be recognised
+                           capture_output=True, text=True, env=e)
+        keys = {}
+        for row in p.stdout.splitlines():
+            k, _, v = row.partition("=")
+            keys.setdefault(k, []).append(v)
+        return p.returncode, keys, p.stderr
+
+    def test_logs_beside_the_session_make_a_bundle_and_no_separate_archive(self):
         make_session(self.home)
-        put(f"{self.home}/projects/p/{SID}/subagents/notes.txt", "?")
+        code, keys, err = self.analyse()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(keys["ADJACENT_LOGS"], ["7"])      # 2 agents, 3 workflow agents, a journal, a run
+        self.assertEqual(keys["PREPARED"], ["bundle"])
+        self.assertFalse(any("compress session" in r for r in keys["RAN"]), keys["RAN"])
+        self.assertEqual(keys["ARCHIVE"], [os.path.join(self.out, "archives")])
+        self.assertNotIn("LAUNCHES", keys)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "archives")))
+
+        code, keys, err = self.analyse()                    # again: the bundle is reused, nothing is compressed
+        self.assertEqual(code, 0, err)
+        self.assertEqual(keys["ALREADY_PREPARED"], ["bundle"])
+        self.assertEqual(len(keys["RAN"]), 1, keys["RAN"])  # clp detect, which classifies the target
+
+    def test_a_dry_run_plans_the_bundle_alone(self):
+        make_session(self.home)
+        code, keys, err = self.analyse("--dry-run")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(keys["PLAN"]), 1)
+        self.assertIn(f"bundle {self.out} build --session-id {SID}", keys["PLAN"][0])
+        self.assertIn("--bundle " + self.out, keys["NEXT"][0])
+
+    def test_no_logs_beside_the_session_make_one_archive_and_no_bundle(self):
+        make_session(self.home, with_agents=False)
+        code, keys, err = self.analyse()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(keys["ADJACENT_LOGS"], ["0"])
+        self.assertEqual(keys["PREPARED"], ["archive"])
+        self.assertNotIn("BUNDLE", keys)
+        self.assertFalse(os.path.exists(self.out))
+        # the main log launched agents whose logs are not there, which the reason says
+        self.assertNotEqual(keys["LAUNCHES"], ["0"])
+        self.assertIn("missing", keys["BUNDLE_WHY"][0])
+
+
+class Failures(BuildTest):
+    def test_an_unclassified_log_stops_the_build_and_leaves_nothing(self):
+        make_session(self.home)
+        put(f"{self.home}/projects/p/{SID}/subagents/notes.jsonl", "{}\n")
         code, _, err = self.build()
         self.assertEqual(code, 1)
-        self.assertIn("unclassified file", err)
+        self.assertIn("unclassified log", err)
         self.assertFalse(os.path.exists(self.out))
+
+    def test_an_unclassified_file_that_is_not_a_log_is_kept_under_files(self):
+        make_session(self.home)
+        put(f"{self.home}/projects/p/{SID}/subagents/notes.txt", "?")
+        put(f"{self.home}/projects/p/{SID}/subagents/agent-a1.forked-skill.marker.json", "{}")
+        code, _, err = self.build()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.isfile(f"{self.out}/files/subagents/notes.txt"))
+        kinds = dict(self.db().execute("SELECT path, kind FROM sources WHERE path LIKE '%subagents/%' "
+                                       "AND path NOT LIKE '%.jsonl' AND path NOT LIKE '%.meta.json'").fetchall())
+        self.assertEqual(sorted(kinds.values()), ["agent-forked-skill", "unclassified"])
 
     def test_an_archive_that_disagrees_with_the_manifest_fails_the_build_and_cleans_up(self):
         make_session(self.home)

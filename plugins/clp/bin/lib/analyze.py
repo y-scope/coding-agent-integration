@@ -747,6 +747,14 @@ def bundle_state(bundle_dir, main_log=None, sha=None):
 # --- preparation --------------------------------------------------------------------------------
 
 
+def adjacent_logs(main_log, claude_home=None):
+    """The agent and workflow logs in the session's own directory beside its main log: what a bundle
+    would compress besides the main log. Read from the file layout before anything is compressed, so
+    the session is compressed once, as a bundle or as one archive, and never both."""
+    _, _, sources = L.inventory(main_log, claude_home)
+    return [s for s in sources if s["where"] == "archive" and s["kind"] != "main"]
+
+
 def count_launches(runner, archives_dir):
     """How many records of the session's main log launched an agent or a workflow. This is the
     count a user would otherwise have to know to run: a non-zero answer means the main log records
