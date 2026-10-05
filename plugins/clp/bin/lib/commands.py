@@ -72,7 +72,7 @@ SUBCOMMANDS = {
     "decompress": ("decompress.sh",
                    "decompress an archive directory into an output directory"),
     "schema": ("schema_tree_cli.py",
-               "every field of an archive, its type drift, its record families"),
+               "every field of an archive, its type drift, its per-field counts"),
     "kql": ("kql_build_cli.py",
             "render a JSON filter as KQL, or check a query or a plan"),
     "session": (Group(
