@@ -132,7 +132,7 @@ The table in `bin/lib/commands.py` gives each subcommand a name and a one-line b
 | Tier | What it does | Subcommands |
 |---|---|---|
 | **Passthrough** | restricted calls into the `clp-s` binary, adding validation and nothing else | `clp search`, `clp compress session`, `clp compress folder`, `clp decompress`, `clp list-sessions`, `clp detect`, `clp compress status` |
-| **Derived reading** | computes something the records do not state, from one archive | `clp schema` (fields, type drift, record families), `clp session turns` (turn boundaries and the time split) |
+| **Derived reading** | computes something the records do not state, from one archive | `clp schema` (fields, type drift, per-field counts), `clp session turns` (turn boundaries and the time split) |
 | **Session model** | reconstructs a whole session from its many files, as archives plus a catalog of how they connect | `clp bundle`, `clp bundle-review` |
 | **Measurement** | computes every figure a report may quote, so no model does arithmetic | `clp session measure`, `clp facts` |
 | **Policy and orchestration** | applies thresholds, or drives a pipeline | `clp session score` + `scoring-scale.json`, `clp bootstrap`, `clp baseline-plan`, `clp focus`, `clp run`, `clp extract`, `clp report`, `clp kql`, `clp shape-cache`, `clp shape-cluster` |

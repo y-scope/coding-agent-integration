@@ -58,8 +58,7 @@ Options:
   --dump             Dump the dictionary even when the archive is stored, e.g.
                      to get LOG_SHAPES_FILE (the full template text).
   --fields-only      Read only what the records are made of: stage 1, the type
-                     drift, the per-field counts, the record families and
-                     their kinds (RECORD_KIND_COUNT). It skips the dictionary
+                     drift and the per-field counts. It skips the dictionary
                      and the classification cache, neither reading nor
                      writing it, and prints none of the keys that
                      come from them (LOG_SHAPE_COUNT, FREQS, CACHE_MODE and the
@@ -145,35 +144,6 @@ Summary keys printed on stdout (grep-able):
                             the shares overlap and must never be summed
   FIELD_COUNTS_FILE=        {"count","share","fields":[...],"subtree_nodes"}
                             NDJSON, most records first
-  RECORD_FAMILY_COUNT=      families in a verified partition of the records
-                            (clp schema --record-families), every pair
-                            proved disjoint by counting queries, so these shares
-                            do partition the records. UNAVAILABLE with
-                            RECORD_FAMILY_HINT= when the queries could not run
-  RECORD_FAMILY_METHOD=     value field=F values=N -- the values of one field
-                            every record carries, which is exact and costs
-                            about 15 queries -- or existence reason=... , which
-                            partitions by the subtree a record populates when no
-                            such field exists: coarser (a kind of record with no
-                            field of its own lands in the residual) and a few
-                            hundred queries
-  RECORD_FAMILY_RESIDUAL=   records no family matches; the families plus this
-                            residual are the whole archive. 0 under the value
-                            method. An upper bound if the run hit its query cap,
-                            which RECORD_FAMILY_CAP_NOTE in the file says
-  RECORD_FAMILY_QUERIES=    counting queries it spent (this step queries; the
-                            field counts above do not)
-  RECORD_FAMILIES_FILE=     one NDJSON row per family, then the residual, the
-                            discarded candidates with the relation that ruled
-                            each out, and the subtrees no query can select;
-                            under --fields-only also the kind rows below
-  RECORD_KIND_COUNT=        --fields-only: kinds of record, each family split
-                            by a field only it carries whose values change
-                            which fields a record holds (attachment.type in a
-                            session), a family no such field splits counting as
-                            one. Also a partition: the "kind" rows in
-                            RECORD_FAMILIES_FILE plus its "kind_residual" row
-                            are every record once
   CLASSIFICATION_FILE=      cached plan, fetched for you (UPTODATE only)
   BASE_CLASSIFICATION_FILE= base entry, fetched for you (GROWTH only)
   BOOTSTRAP_TIMINGS sample=Ns dump=Ns cache=Ns total=Ns
@@ -266,9 +236,7 @@ archive_stats_file="${out_dir}/clp-insights-archive-stats.ndjson"
 archive_stats_err_file="${out_dir}/clp-insights-archive-stats.err"
 type_drift_file="${out_dir}/clp-insights-type-drift.ndjson"
 field_counts_file="${out_dir}/clp-insights-field-counts.ndjson"
-record_families_file="${out_dir}/clp-insights-record-families.ndjson"
 structure_file="${out_dir}/clp-insights-structure.txt"
-record_families_out_file="${out_dir}/clp-insights-record-families.txt"
 # Where `clp shape-cluster fields --propose-rules` leaves the rules of a run, and
 # so where a later run of the same archive finds them.
 default_field_rules_file="${out_dir}/log-shape-field-rules.json"
@@ -358,21 +326,6 @@ fi
 sample_ms_per_mib=45
 dump_ms_per_mib=180
 dump_us_per_log_shape=100
-# The record families are the only stage that queries, and they were missing
-# from this estimate entirely -- which is how a 2.4 GB HDFS archive was told to
-# expect 8 min and spent 28. The stage costs a --unique probe per candidate
-# field it has to rank (the dearest query the engine runs) and then one count
-# per value of the field it picks. Measured on that archive (2,475 MiB, 216M
-# records, searching its 4 archives concurrently): a --unique over the whole
-# capture is ~67 ms/MiB, a count ~3.5 ms/MiB. Two probes is the usual number
-# once single-valued fields are refused, and 16 counts stands in for a field
-# whose values are worth partitioning on -- 21 on that archive, fewer on most.
-# Both are nominal: a field with many values costs more, and the probe budget
-# caps only the probes.
-unique_ms_per_mib=67
-count_ms_per_mib=4
-nominal_probes=2
-nominal_family_counts=16
 bootstrap_started="$(date +%s)"
 archive_bytes="$(directory_file_bytes "$archives_dir")"
 if [[ "$stored" -eq 1 || "$fields_only" -eq 1 ]]; then
@@ -384,9 +337,6 @@ else
       + archive_log_shapes * dump_us_per_log_shape / 1000000 ))
   fi
 fi
-estimate_seconds=$(( estimate_seconds
-  + archive_bytes * (nominal_probes * unique_ms_per_mib
-                     + nominal_family_counts * count_ms_per_mib) / 1000 / 1048576 ))
 [[ "$estimate_seconds" -ge 2 ]] || estimate_seconds=2
 if [[ "$estimate_seconds" -lt 60 ]]; then
   estimate_text="under a minute"
@@ -615,48 +565,6 @@ if [[ -s "$tree_raw_file" ]] \
   field_count_note="$(sed -n 's/^FIELD_COUNT_NOTE=//p' "$structure_file")"
 fi
 
-# --- Record families (the only step here that queries) --------------------------
-# The partition the counts above cannot give: one discriminator per child subtree
-# of the record root, every pair proved disjoint with a counting query, and the
-# records left over reported as the residual. It reuses the same tree dump, so it
-# spends no scan -- but it does spend a few hundred counting queries, half a
-# minute on a session archive, which is why it says so as it goes. It is
-# reported as unavailable rather than failing the run.
-record_family_count="UNAVAILABLE"
-record_family_residual=""
-record_family_queries=""
-record_family_method=""
-record_kind_count=""
-record_kind_queries=""
-if [[ -s "$tree_raw_file" ]]; then
-  families_started="$(date +%s)"
-  echo "[bootstrap] partitioning the records into families (counting queries)..."
-  # A fields-only run also splits each family into kinds (clp schema --kinds): the
-  # attachment family of a session into its attachment types, and so on. Its
-  # categories are pre-trained, so the kinds are what is left to learn.
-  kinds_flag=()
-  [[ "$fields_only" -eq 1 ]] && kinds_flag=(--kinds)
-  if "${TREE_BIN[@]}" --tree-file "$tree_raw_file" \
-       --record-families --record-families-file "$record_families_file" \
-       "${kinds_flag[@]}" "$archives_dir" > "$record_families_out_file" 2>/dev/null; then
-    record_family_count="$(sed -n 's/^RECORD_FAMILY_COUNT=//p' "$record_families_out_file")"
-    record_family_queries="$(sed -n 's/^RECORD_FAMILY_QUERIES=//p' "$record_families_out_file")"
-    record_family_residual="$(sed -n 's/^RECORD_FAMILY_RESIDUAL count=\([0-9]*\).*/\1/p' \
-      "$record_families_out_file")"
-    record_family_method="$(sed -n 's/^RECORD_FAMILY_METHOD=//p' "$record_families_out_file")"
-    record_kind_count="$(sed -n 's/^RECORD_KIND_COUNT=//p' "$record_families_out_file")"
-    record_kind_queries="$(sed -n 's/^RECORD_KIND_QUERIES=//p' "$record_families_out_file")"
-  fi
-  if [[ "$record_family_count" =~ ^[0-9]+$ ]]; then
-    echo "[bootstrap] record families: ${record_family_count} families," \
-         "${record_kind_count:+${record_kind_count} kinds, }${record_family_residual} records in the residual," \
-         "$(( record_family_queries + ${record_kind_queries:-0} )) queries in $(( $(date +%s) - families_started ))s"
-  else
-    echo "[bootstrap] record families: unavailable after" \
-         "$(( $(date +%s) - families_started ))s"
-  fi
-fi
-
 if [[ -s "$tree_summary_file" ]]; then
   grep -E '^TREE_' "$tree_summary_file"
   # The fields most records carry, then every text field (the templated ones).
@@ -679,19 +587,6 @@ if [[ "$field_count_groups" =~ ^[0-9]+$ ]]; then
   echo "FIELD_COUNTS_FILE=$field_counts_file"
 else
   echo "FIELD_COUNT_GROUPS=UNAVAILABLE"
-fi
-# A partition, unlike the per-field counts above: its shares and the residual
-# cover the archive exactly once.
-if [[ "$record_family_count" =~ ^[0-9]+$ ]]; then
-  echo "RECORD_FAMILY_COUNT=$record_family_count"
-  echo "RECORD_FAMILY_METHOD=$record_family_method"
-  echo "RECORD_FAMILY_RESIDUAL=$record_family_residual"
-  echo "RECORD_FAMILY_QUERIES=$record_family_queries"
-  echo "RECORD_FAMILIES_FILE=$record_families_file"
-  [[ -n "$record_kind_count" ]] && echo "RECORD_KIND_COUNT=$record_kind_count"
-else
-  echo "RECORD_FAMILY_COUNT=UNAVAILABLE"
-  echo "RECORD_FAMILY_HINT=the counting queries that prove a partition could not run (see $record_families_out_file); the per-field counts in FIELD_COUNTS_FILE overlap and are not a partition"
 fi
 if [[ "$fields_only" -eq 1 ]]; then
   # The keys below all come from the dictionary or the cache, which this run left alone.
