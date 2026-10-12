@@ -82,8 +82,8 @@ Ask in one AskUserQuestion, header "Focus", not multi-select (on UPTODATE, the c
 
 - question: "What should the report focus on?"
 - first option, marked "(Recommended)": the categories the user's context points at, when it points at any ("request-handling + service-discovery — matches 'requests dropping'"); otherwise "Everything".
-- one option per remaining high-priority category, largest first, its description the classifier's `why`, its record count, and how many depth checks choosing it queues (the extract's `drill=` count; for 0, "I'll write one to three checks from its templates") — up to the four options AskUserQuestion allows;
-- "Everything", if the first option is not already it, described truthfully: "The breadth checks already cover every category; no extra queries."
+- one option per remaining high-priority category, largest first, its description the classifier's `why`, its record count, and how many focus queries choosing it queues (the extract's `drill=` count; for 0, "I'll write one to three queries from its templates") — up to the four options AskUserQuestion allows;
+- "Everything", if the first option is not already it, described truthfully: "The category queries already cover every category; no extra queries."
 
 The automatic "Other" takes the user's own question. Then run `clp focus` ONCE — even for "Everything", since it is what closes the inbox:
 
@@ -98,13 +98,13 @@ The automatic "Other" takes the user's own question. Then run `clp focus` ONCE �
 - The user's **own question**, or **context** that names something specific (a component, a symptom, an error text), gets 1–3 entries you write to `/tmp/clp-insights-focus-entries.ndjson`, one JSON entry per line, in the same shape as a plan entry: `label`, `match` (the grammar in `log-shape-classify.md`), `method`, `project` for a projecting method, and `category` when one fits. Derive each from templates in `/tmp/log-shape-templates-by-category.txt` that exist, as the classifier does; for a concept rather than a phrase, use a `semantic` node inside an `all` beside a concrete filter. `clp focus` checks every entry and queues nothing if one is invalid (exit 1, inbox left open): fix it and run it again.
 - A **time** the user mentions ("around 10:12") cannot be a filter — `match` has no time range — so keep it for the writer: it is in the context, and the fetched records carry timestamps.
 
-`clp focus` prints each queued entry with its KQL, then `FOCUS=` and `FOCUS_ENTRIES=`; tell the user in one plain line what was queued ("Queued 2 depth checks on slow SQL transactions; they run next"), or, for `FOCUS_ENTRIES=0`, that the breadth checks already cover it. Then follow the pool.
+`clp focus` prints each queued entry with its KQL, then `FOCUS=` and `FOCUS_ENTRIES=`; tell the user in one plain line what was queued ("Queued 2 focus queries on slow SQL transactions; they run next"), or, for `FOCUS_ENTRIES=0`, that the category queries already cover it. Then follow the pool.
 
 ## Follow the pool (step 8)
 
 The runner decides how many searches run at once. A search holds its whole segment in memory (about 9 GiB for a 10 GB log), so it runs one search alone, measures its peak memory, and starts another only while free memory can take one more; it keeps sampling and pauses a search if memory runs short. Do not pin `--jobs` unless the user asks. It counts the archive's records first (`TOTAL_RECORDS=`) so each result carries a percentage. Recorded results for the same archive and plan are kept across calls, so re-running one entry (`--entries 3`) replaces only that entry. Results print as entries finish, in completion order. An entry's `then` rule can add a follow-up to the pool once its result is in (the baseline uses this to fetch the records behind a rare severity); those results carry `origin: "follow-up of N"`. `PEAK_CONCURRENCY=` and `PLAN_STATUS` close the run.
 
-Do not post a line per entry. While the pool runs, post one status line each time a minute passes without news (`12 of 20 checks done`); Bash output is not reliably shown to the user, so this line is how they know the run is alive. Each entry ends in one of these statuses:
+Do not post a line per entry. While the pool runs, post one status line each time a minute passes without news (`12 of 20 queries done`); Bash output is not reliably shown to the user, so this line is how they know the run is alive. Each entry ends in one of these statuses:
 
 - `ok` — ran and matched records.
 - `zero` — ran and matched nothing. Every entry is derived from a template that exists, so a zero usually means the KQL does not express the template it came from.
@@ -121,7 +121,7 @@ The focus entries (`origin: "focus"`, marked "(focus)" in the table) are numbere
 "${CLAUDE_PLUGIN_ROOT}/bin/clp" run --print-table | tee /tmp/clp-insights-plan-table.md
 ```
 
-Then close phase 4 in one or two lines: how many checks ran, and each `error`, `timeout` or `zero` entry with what it costs the report. Mention a `non_selective` entry only when a value that dominates the log does not explain it. Do not fix and re-run them yourself: `--retry-failed` already retried each `error` or `timeout` entry once (marked `retried`), and the subagent may run one corrected query for a loose entry and log it.
+Then close phase 4 in one or two lines: how many queries ran, and each `error`, `timeout` or `zero` entry with what it costs the report. Mention a `non_selective` entry only when a value that dominates the log does not explain it. Do not fix and re-run them yourself: `--retry-failed` already retried each `error` or `timeout` entry once (marked `retried`), and the subagent may run one corrected query for a loose entry and log it.
 
 ## Compute the facts, and post the early numbers (step 9)
 

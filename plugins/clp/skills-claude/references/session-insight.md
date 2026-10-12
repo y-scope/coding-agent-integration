@@ -31,10 +31,10 @@ Right after spawning the extras subagent (step 3). One AskUserQuestion, header `
 
 > **What do you already know about this session?**
 >
-> - **Chasing a known problem** — something went wrong and you know roughly what. Queues depth checks for the categories your description points at, and the report leads with them.
-> - **Checking something specific** — a turn, a tool, an agent, a file, a commit. Queues checks for that thing.
-> - **Evaluating it for scoring** — you want the 0–10 scorecard to compare against other sessions. Runs the scoring pass as well as the checks.
-> - **Just exploring** — no particular suspicion. Queues nothing extra; you pick a focus once the checks come back.
+> - **Chasing a known problem** — something went wrong and you know roughly what. Queues focus queries for the categories your description points at, and the report leads with them.
+> - **Checking something specific** — a turn, a tool, an agent, a file, a commit. Queues focus queries for that thing.
+> - **Evaluating it for scoring** — you want the 0–10 scorecard to compare against other sessions. Runs the scoring pass as well as the queries.
+> - **Just exploring** — no particular suspicion. Queues nothing extra; you pick a focus once the evidence is in.
 
 Ask a second question in the same call, header `Reader`:
 
@@ -55,10 +55,10 @@ After the summary (step 4). One AskUserQuestion, header `Focus`. Build the optio
 
 - Each alerting category, most severe first, marked "(Recommended)", with its headline figure in the description and what choosing it queues.
 - Any extra category the subagent proposed, described as proposed and with its count.
-- **Everything** — queues nothing extra; the breadth checks already cover every category.
+- **Everything** — queues nothing extra; the category queries already cover every category.
 - **Score it** — runs the scorecard pass.
 
-The automatic "Other" takes the user's own question. Every description must be literally true about what it queues; when a category has no depth checks beyond what already ran, say so rather than implying more work.
+The automatic "Other" takes the user's own question. Every description must be literally true about what it queues; when a category has no focus queries beyond what already ran, say so rather than implying more work.
 
 ## The focus-shift rule
 
@@ -107,7 +107,7 @@ One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill i
 Write the analysis report for a Claude Code session to /tmp/clp-session-report.md
 
 Facts file (every number you may quote): FACTS_FILE
-Depth check results: RESULTS
+Focus query results: RESULTS
 The user's context, in their words: "CONTEXT"
 Their chosen focus: FOCUS
 Extra categories found: EXTRAS
