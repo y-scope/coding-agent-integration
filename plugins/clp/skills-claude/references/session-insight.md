@@ -55,7 +55,7 @@ After the summary (step 4). One AskUserQuestion, header `Focus`. Build the optio
 
 - Each alerting category, most severe first, marked "(Recommended)", with its headline figure in the description and what choosing it queues.
 - Any extra category the subagent proposed, described as proposed and with its count.
-- **Everything** — queues nothing extra; the category queries already cover every category.
+- **Everything** — queues nothing extra; the overview queries already cover every category.
 - **Score it** — runs the scorecard pass.
 
 The automatic "Other" takes the user's own question. Every description must be literally true about what it queues; when a category has no focus queries beyond what already ran, say so rather than implying more work.
