@@ -1,16 +1,17 @@
 """analyze - which application produced these logs, and what preparing them takes.
 
-There is one pipeline -- acquire, structure, categorise, measure, report -- and it runs on logs.
+There is one pipeline -- relate and compress, load the structure and shapes, categorize, gather
+evidence, compute the facts, report -- and it runs on logs.
 A Claude Code session is not a different kind of thing from a vLLM worker log; it is logs from a
 particular application. So the only question this module asks is:
 
     which application produced these logs?
 
 and then: does that application have a registered optimisation? Claude Code does, because its file
-layout and its record graph are known in advance and its categories are pre-trained -- the plugin
-ships their classification -- so the categorise stage classifies nothing at run time and the acquire
+layout and its record graph are known in advance and its seven areas are pre-trained -- the plugin
+ships them -- so the categorize stage classifies nothing at run time and the relate-and-compress
 stage has a graph to build. Every other application takes the
-general route, which discovers structure and categories and caches the classification per
+general route, which discovers structure and topics and caches the classification per
 application -- which is what an optimisation is an optimisation *of*. A second application can earn
 its own route later by being registered here; it does not need a new mode.
 
@@ -123,8 +124,8 @@ CLAUDE_CODE = Application(
              "isSidechain", "userType", "version", "entrypoint", "message", "toolUseResult",
              "requestId"),
     min_markers=6,
-    skips=("the categorise stage, because its seven categories are pre-trained: the plugin ships "
-           "their classification, so nothing is classified at run time. Acquire also builds the graph of launches, retries and "
+    skips=("the categorize stage, because its seven areas are pre-trained: the plugin ships "
+           "them, so nothing is classified at run time. Relating the files also builds the graph of launches, retries and "
            "lost results, which plain logs do not have"),
 )
 

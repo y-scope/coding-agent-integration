@@ -86,12 +86,12 @@ TARGET is a log file, a folder of log files, a CLP archive directory, a session 
 | `bundle` | one session bundle: its catalog, and the records behind it |
 | `bundle-review` | a directory of bundles: what went wrong, where, how often |
 | `report <check\|save>` | check a finished report against its inputs, and save it |
-| `bootstrap` | sample an archive's fields, shape frequencies and cache |
+| `bootstrap` | load an archive's structure and log shapes, and look up the cache |
 | `baseline-plan` | write a run's app-agnostic baseline queries to a plan file |
-| `extract` | build the report writer's prompt pieces from a classification |
+| `extract` | write the overview queries and the report writer's inputs |
 | `run` | execute a query plan, reporting each entry as it completes |
-| `focus` | turn the user's chosen focus into queries for the plan pool |
-| `facts` | compute every number of a log-shape-baseline report in code |
+| `focus` | queue the focus queries for what the user picked |
+| `facts` | compute the facts a report may quote from the evidence |
 | `shape-cache` | the log shape classification cache: hit, growth, new shapes |
 | `shape-cluster` | merge semantically similar log shapes before classifying |
 

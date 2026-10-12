@@ -18,19 +18,20 @@ holding a '/', a '.' or a '~', naming something that exists, or shaped like a se
 TARGET, and anything else is a mistyped subcommand and is named as one. No subcommand holds any of
 those characters, so `clp searhc` says what it did not understand while `clp ./searhc` is a target.
 
-There is one pipeline (acquire, structure, categorise, measure, report), and it runs on logs. A
+There is one pipeline (relate and compress, load the structure and shapes, categorize, gather
+evidence, compute the facts, report), and it runs on logs. A
 Claude Code session is logs from one particular application, just as a vLLM worker log is. So the
 only question asked is which application produced these logs, and then whether that application
 has a registered optimisation:
 
   claude-code   the specialised route. Its file layout and its record graph are known in advance,
-                so acquire also builds the graph of launches, retries and lost results; its seven
-                categories are pre-trained, shipped with the plugin, so categorise classifies nothing
+                so relating the files also builds the graph of launches, retries and lost results; its
+                seven areas are pre-trained, shipped with the plugin, so categorize classifies nothing
                 at run time.
   codex, vllm   recognised, and on the general route. Recognition gets them the right acquire: a
                 Codex rollout is compressed as a session so its payload arrays become columns, and a
                 vLLM text log is structurized. The analysis after that is the general one.
-  anything else the general route on its own terms: discover the structure and the categories from
+  anything else the general route on its own terms: discover the structure and the topics from
                 the logs, and cache the classification per application. An application gets a
                 specialised route by being registered here.
 
