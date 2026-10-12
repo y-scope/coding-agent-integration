@@ -69,21 +69,21 @@ Run it once over the core plan, as a background Bash call (`run_in_background: t
 
 With `--inbox` the pool also takes entries from the inbox while it runs: each goes ahead of every core entry not yet started, so the user's focus runs next even on an archive where each search takes minutes. The pool does not exit until the inbox is closed — `clp focus` closes it — and after its core plan it prints `INBOX waiting ...` until then. With no close line it gives up after `--inbox-timeout` seconds (default 900; `INBOX=timed-out`), so a question left unanswered does not hold it forever.
 
-Then post the **summary**, while the pool runs. Keep it to about ten lines, every figure from the bootstrap, the baseline results and the extract's `CATEGORY` lines. It is the one place the total record count and the category table appear; later messages refer back to them:
+Then post the **summary**, while the pool runs. Keep it to about ten lines, every figure from the bootstrap, the baseline results and the extract's `CATEGORY` lines. It is the one place the total record count and the topic table appear; later messages refer back to them:
 
 - total records and the severity split (the baseline's counts);
-- the categories as a small table — records, templates, priority — largest first, with the low-priority ones folded into one line;
-- the classifier's `why` for each high-priority category, one line each;
-- when the user gave context, which categories it points at and why, in one line.
+- the topics as a small table — records, templates, priority — largest first, with the low-priority ones folded into one line;
+- the classifier's `why` for each high-priority topic, one line each;
+- when the user gave context, which topics it points at and why, in one line.
 
 ## Ask for the focus, and queue it (step 8)
 
 Ask in one AskUserQuestion, header "Focus", not multi-select (on UPTODATE, the context and reader questions above go in the same call, ahead of it):
 
 - question: "What should the report focus on?"
-- first option, marked "(Recommended)": the categories the user's context points at, when it points at any ("request-handling + service-discovery — matches 'requests dropping'"); otherwise "Everything".
-- one option per remaining high-priority category, largest first, its description the classifier's `why`, its record count, and how many focus queries choosing it queues (the extract's `drill=` count; for 0, "I'll write one to three queries from its templates") — up to the four options AskUserQuestion allows;
-- "Everything", if the first option is not already it, described truthfully: "The overview queries already cover every category; no extra queries."
+- first option, marked "(Recommended)": the topics the user's context points at, when it points at any ("request-handling + service-discovery — matches 'requests dropping'"); otherwise "Everything".
+- one option per remaining high-priority topic, largest first, its description the classifier's `why`, its record count, and how many focus queries choosing it queues (the extract's `drill=` count; for 0, "I'll write one to three queries from its templates") — up to the four options AskUserQuestion allows;
+- "Everything", if the first option is not already it, described truthfully: "The overview queries already cover every topic; no extra queries."
 
 The automatic "Other" takes the user's own question. Then run `clp focus` ONCE — even for "Everything", since it is what closes the inbox:
 
@@ -243,6 +243,7 @@ Before you save the file, run the sound pass over your draft: read `writing-guid
 9. Describe only what the files show. No characterisation of the environment (for example "production-grade") that no line supports.
 10. Lead with the focus. The user's context is their account, not a finding: say whether the files support it, contradict it, or say nothing about it, and quote the lines that decide it. Never restate it as a fact.
 11. Write the short form unless DEPTH says thorough. Read references/report-style.md and follow every rule in it: lead each section with the finding, plain words and short sentences, one line per point, a table for three or more of anything. Shortening never drops an argument's marker or a caveat that changes how a figure reads, and never say a thing twice.
+11b. The facts file, the taxonomy and the templates file say "category"; the report says "topic" instead, every time, including in headings and table headers. The first time the report uses the word, say what a topic is, with examples from this run: a group of log messages about one subject, such as errors, replication or request handling.
 11a. Write for READER, as "Who the reader is" in references/report-style.md describes. An expert gets the system's terms named and not explained. A newcomer gets one or two sentences on a term the first time a finding uses it, and one sentence on why each finding matters, labelled "domain knowledge" under rule 3b's limits. Anything else in READER is the user's own description of what they know: name what it covers, and explain what it doesn't. Where APPLICATION is uncertain, rule 3c limits the background the same way. Either way, explain only what a finding uses.
 12. Keep the tooling out of the body. No query text, no field names, no command lines in the sections a reader reads for the findings, and no term they would have to know this tool to understand: assume they have never written a KQL query, and say what was looked for in plain words instead of how. The reference section is where the how goes, and it is the only section that may carry a query.
 13. Do not wrap lines by hand. One line per paragraph, list item, table row and reference entry, however long it runs; the renderers reflow text themselves. The section list above is wrapped only because it is an instruction to you.
@@ -252,14 +253,14 @@ Write ONLY the Markdown Log Insights Report to
 
 If DEPTH is short (the default), the report has these sections and no others -- no Query log, which belongs to the thorough form: a writer who adds one has turned a short report into a long one. The reference section is the last of them and the only place a query, a field name or a command line may appear. Open with three or four short sentences, strongest finding first and one finding per sentence.
 1. Summary -- what these logs appear to be, with the evidence that identified them ("unidentified" where it could not be named), then total records, the severity counts, the archive span and the top logger/component.
-2. Focus -- the user's question answered first: the focus categories with their records and templates, the focus queries' results, and whether the records support, contradict or are silent on what the user said they knew. For a focus of "everything", the high-priority categories.
-3. Log shape baseline -- the distinct template count, the top templates with their counts, and the category table (priority, templates and records per category) with the records no template accounts for.
+2. Focus -- the user's question answered first: the focus topics with their records and templates, the focus queries' results, and whether the records support, contradict or are silent on what the user said they knew. For a focus of "everything", the high-priority topics.
+3. Log shape baseline -- the distinct template count, the top templates with their counts, and the topic table (priority, templates and records per topic) with the records no template accounts for.
 4. Issues and warnings -- error and warning counts, the top warning and error templates from the grouped records, and the actionable problems, labelled inference where they are one. Semantic findings only where they add something to the templates.
 5. What it means for the system -- only where APPLICATION named one and it adds something. Every claim here is labelled "domain knowledge", carries no number that is not already above, and gives way to the records wherever the two disagree.
 6. Next questions -- 2 or 3 questions a reader might ask next, in plain words. No query syntax here: someone reading this may never have written a query. The thorough form gives the queries behind them.
 7. Reference -- the section headed `## Reference`, with one entry per claim in the body, headed `### R3 Workflow instance spans`, opening with its tier and carrying the figure and the one command that reproduces it. Link every claim into its entry by wrapping the figure the claim rests on, `stayed open [357.4 hours](#r1-wall-clock-span)`, so a reader chasing a number reaches for the number; never trail the sentence with a bracketed label. Wrap the entries in a `<details>` block whose `<summary>` says what opening it is for, with both tags on lines of their own, so the entries stay collapsed until a reader opens them or follows a claim's link in. Entry headings use letters, digits and single spaces only, because GitHub and the plugin's HTML saver strip punctuation differently and a dash or a colon breaks the link in one of them.
 
-If DEPTH is thorough, use the full section list in "Report format" below instead, which adds Notable categories, Performance signals, Configuration and startup and Semantic search coverage, and a Query log.
+If DEPTH is thorough, use the full section list in "Report format" below instead, which adds Notable topics, Performance signals, Configuration and startup and Semantic search coverage, and a Query log.
 ```
 
 ## Report format
@@ -271,10 +272,10 @@ Two forms. Write the short one unless DEPTH says the user asked for a thorough r
 Every figure argued in full, in this order:
 
 1. **Summary** — total records, severity counts, archive span, top logger/component. Open with what these logs are, one clause, from APPLICATION: naming the system tells a reader what the rest of the report is about. Say "appears to be" where the identification is an inference, and "unidentified" where it could not be named.
-2. **Focus** — what the user asked for, answered first: the focus categories and queries, and whether the records bear out the user's context.
-3. **Log shape baseline** — distinct template count, top templates by frequency with counts, the discovered category breakdown. The spine of the report. Flag a category whose true count dwarfs the templates shown for it as a likely large-near-duplicate-blob artifact, not genuine behavioral diversity.
+2. **Focus** — what the user asked for, answered first: the focus topics and queries, and whether the records bear out the user's context.
+3. **Log shape baseline** — distinct template count, top templates by frequency with counts, the discovered topic breakdown. The spine of the report. Flag a topic whose true count dwarfs the templates shown for it as a likely large-near-duplicate-blob artifact, not genuine behavioral diversity.
 4. **Issues and warnings** — errors, warnings, top 3 warning *templates* (grounded, not guessed), actionable problems; semantic-only findings if any.
-5. **Notable categories** — per discovered category of interest, counts + representative templates and what they indicate.
+5. **Notable topics** — per discovered topic of interest, counts + representative templates and what they indicate.
 6. **Performance signals** — timing/throughput/slow-operation templates and counts (if the app produces any); semantic-only findings if any.
 7. **Configuration and startup** — config/init templates grounded in the baseline (if any).
 8. **Semantic search coverage** — mandatory (the semantic pass always runs), but report only meaningful findings — matches that template-classification missed or confirmed, with their queries; drop empty/no-hit queries. If nothing meaningful surfaced, one line saying so.
