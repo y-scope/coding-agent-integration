@@ -26,7 +26,7 @@ has a registered optimisation:
 
   claude-code   the specialised route. Its file layout and its record graph are known in advance,
                 so relating the files also builds the graph of launches, retries and lost results; its
-                seven areas are pre-trained, shipped with the plugin, so categorize classifies nothing
+                seven areas are lightly pre-trained, shipped with the plugin, so categorize classifies nothing
                 at run time.
   codex, vllm   recognised, and on the general route. Recognition gets them the right acquire: a
                 Codex rollout is compressed as a session so its payload arrays become columns, and a
@@ -152,7 +152,7 @@ def choose_route(classified, args):
     """The route, and the sentence that says why it is that one."""
     app = classified["app"]
     if app is None:
-        return A.GENERAL, ("the general route: it discovers the structure and the topics and "
+        return A.GENERAL, ("the general route: it trains on the spot, discovering the structure and the topics, and "
                            "caches the classification, which is what logs from an unregistered "
                            "application need")
     if app.route == A.SPECIALISED and args.general:

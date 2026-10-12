@@ -6,7 +6,7 @@ Every figure quoted anywhere in this pass comes from the facts file that `clp se
 
 ## The seven areas
 
-Pre-trained, and reported in this order. They ship with the plugin, so a session's areas are not discovered on each run the way the general route's are on its first. Each one's headline figure is what goes in the area table.
+Lightly pre-trained, and reported in this order. They ship with the plugin, so a session's areas are not discovered on each run the way the general route's are on its first. Each one's headline figure is what goes in the area table.
 
 | # | Area | What it answers | Headline figure |
 |---|---|---|---|
