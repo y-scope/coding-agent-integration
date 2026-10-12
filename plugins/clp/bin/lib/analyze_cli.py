@@ -152,7 +152,7 @@ def choose_route(classified, args):
     """The route, and the sentence that says why it is that one."""
     app = classified["app"]
     if app is None:
-        return A.GENERAL, ("the general route: it discovers the structure and the categories and "
+        return A.GENERAL, ("the general route: it discovers the structure and the topics and "
                            "caches the classification, which is what logs from an unregistered "
                            "application need")
     if app.route == A.SPECIALISED and args.general:
@@ -163,7 +163,7 @@ def choose_route(classified, args):
         return A.SPECIALISED, (f"{app.name}'s specialised route: it is registered, so the pipeline "
                                f"skips {app.skips}")
     return A.GENERAL, (f"the general route: {app.name} is recognised but has no specialised route "
-                       f"registered, so its structure and categories are discovered like any "
+                       f"registered, so its structure and topics are discovered like any "
                        f"other application's")
 
 
