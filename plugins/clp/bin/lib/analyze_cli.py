@@ -18,19 +18,20 @@ holding a '/', a '.' or a '~', naming something that exists, or shaped like a se
 TARGET, and anything else is a mistyped subcommand and is named as one. No subcommand holds any of
 those characters, so `clp searhc` says what it did not understand while `clp ./searhc` is a target.
 
-There is one pipeline (acquire, structure, categorise, measure, report), and it runs on logs. A
+There is one pipeline (relate and compress, load the structure and shapes, categorize, gather
+evidence, compute the facts, report), and it runs on logs. A
 Claude Code session is logs from one particular application, just as a vLLM worker log is. So the
 only question asked is which application produced these logs, and then whether that application
 has a registered optimisation:
 
   claude-code   the specialised route. Its file layout and its record graph are known in advance,
-                so acquire also builds the graph of launches, retries and lost results; its seven
-                categories are pre-trained, shipped with the plugin, so categorise classifies nothing
+                so relating the files also builds the graph of launches, retries and lost results; its
+                seven areas are lightly pre-trained, shipped with the plugin, so categorize classifies nothing
                 at run time.
   codex, vllm   recognised, and on the general route. Recognition gets them the right acquire: a
                 Codex rollout is compressed as a session so its payload arrays become columns, and a
                 vLLM text log is structurized. The analysis after that is the general one.
-  anything else the general route on its own terms: discover the structure and the categories from
+  anything else the general route on its own terms: discover the structure and the topics from
                 the logs, and cache the classification per application. An application gets a
                 specialised route by being registered here.
 
@@ -151,7 +152,7 @@ def choose_route(classified, args):
     """The route, and the sentence that says why it is that one."""
     app = classified["app"]
     if app is None:
-        return A.GENERAL, ("the general route: it discovers the structure and the categories and "
+        return A.GENERAL, ("the general route: it trains on the spot, discovering the structure and the topics, and "
                            "caches the classification, which is what logs from an unregistered "
                            "application need")
     if app.route == A.SPECIALISED and args.general:
@@ -162,7 +163,7 @@ def choose_route(classified, args):
         return A.SPECIALISED, (f"{app.name}'s specialised route: it is registered, so the pipeline "
                                f"skips {app.skips}")
     return A.GENERAL, (f"the general route: {app.name} is recognised but has no specialised route "
-                       f"registered, so its structure and categories are discovered like any "
+                       f"registered, so its structure and topics are discovered like any "
                        f"other application's")
 
 

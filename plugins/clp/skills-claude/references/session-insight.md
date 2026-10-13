@@ -1,14 +1,14 @@
-# Session insight — categories, questions, prompts, report
+# Session insight — areas, questions, prompts, report
 
-Read this at step 2 of the `analyze-logs` skill's specialised route. It holds the seven categories, the wording of the questions to the user, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
+Read this at step 2 of the `analyze-logs` skill's specialised route. It holds the seven areas, the wording of the questions to the user, the two subagent prompts, the focus-shift rule, the scorecard, and the report format.
 
 Every figure quoted anywhere in this pass comes from the facts file that `clp session measure` writes. Nothing here recomputes a number.
 
-## The seven categories
+## The seven areas
 
-Pre-trained, and reported in this order. They ship with the plugin, so a session's categories are not discovered on each run the way the general route's are on its first. Each one's headline figure is what goes in the category table.
+Lightly pre-trained, and reported in this order. They ship with the plugin, so a session's areas are not discovered on each run the way the general route's are on its first. Each one's headline figure is what goes in the area table.
 
-| # | Category | What it answers | Headline figure |
+| # | Area | What it answers | Headline figure |
 |---|---|---|---|
 | 1 | Reliability | Did the work that was started finish? | share of attempts and agents reaching a good terminal state |
 | 2 | Cost | What did it consume, and how much bought nothing? | total input tokens, cache hit rate, waste share |
@@ -18,7 +18,7 @@ Pre-trained, and reported in this order. They ship with the plugin, so a session
 | 6 | Human loop | How often did a person have to step in? | human interrupts, denials, blocking-question minutes |
 | 7 | Rework | How much work was done more than once? | logical units retried, stalled attempts |
 
-Four distinctions the categories depend on, all of which the facts file makes explicit — carry them into the report:
+Four distinctions the areas depend on, all of which the facts file makes explicit — carry them into the report:
 
 - **Runtime interrupts are not human interrupts.** Interrupts on the main thread are the person; interrupts in workflow-agent logs are the runtime's no-progress kill. A session with 654 interrupts may have had exactly 2 from the human.
 - **Agent minutes are not wall-clock minutes.** Attempts run in parallel and workflows are pipelined, so summed attempt time routinely exceeds the session's span. Never present it as elapsed.
@@ -31,10 +31,10 @@ Right after spawning the extras subagent (step 3). One AskUserQuestion, header `
 
 > **What do you already know about this session?**
 >
-> - **Chasing a known problem** — something went wrong and you know roughly what. Queues depth checks for the categories your description points at, and the report leads with them.
-> - **Checking something specific** — a turn, a tool, an agent, a file, a commit. Queues checks for that thing.
-> - **Evaluating it for scoring** — you want the 0–10 scorecard to compare against other sessions. Runs the scoring pass as well as the checks.
-> - **Just exploring** — no particular suspicion. Queues nothing extra; you pick a focus once the checks come back.
+> - **Chasing a known problem** — something went wrong and you know roughly what. Queues focus queries for the areas your description points at, and the report leads with them.
+> - **Checking something specific** — a turn, a tool, an agent, a file, a commit. Queues focus queries for that thing.
+> - **Evaluating it for scoring** — you want the 0–10 scorecard to compare against other sessions. Runs the scoring pass as well as the queries.
+> - **Just exploring** — no particular suspicion. Queues nothing extra; you pick a focus once the evidence is in.
 
 Ask a second question in the same call, header `Reader`:
 
@@ -43,7 +43,7 @@ Ask a second question in the same call, header `Reader`:
 > - **I know them well** — the report uses terms like <three or four terms from this session> without explaining them. If those read as familiar, this is you.
 > - **Explain as I go** — the report adds a sentence or two of background wherever a finding needs it, so it runs longer.
 
-Fill in the example terms from this session's facts file, which step 2 already wrote. Take the ones its findings are likely to use: the categories that raised an alert first, then the largest figures. Use the words Claude Code itself uses, such as "cache reads", "forked agents", "stalled attempts" or "runtime interrupts", and never this plugin's own vocabulary. The terms let the user judge themselves against the report they will actually get.
+Fill in the example terms from this session's facts file, which step 2 already wrote. Take the ones its findings are likely to use: the areas that raised an alert first, then the largest figures. Use the words Claude Code itself uses, such as "cache reads", "forked agents", "stalled attempts" or "runtime interrupts", and never this plugin's own vocabulary. The terms let the user judge themselves against the report they will actually get.
 
 The first option sets `READER` to `expert` and the second to `newcomer`. An answer typed into "Other" is the third choice: pass it to the writer verbatim as `READER`, since the user's description of what they know says more than either label. `references/report-style.md`, "Who the reader is", says what each one changes. When no one can answer, `READER` is `expert`.
 
@@ -53,12 +53,12 @@ Keep the context answer for the summary, the focus question and the report write
 
 After the summary (step 4). One AskUserQuestion, header `Focus`. Build the options from the `ALERT=` lines the facts pass printed:
 
-- Each alerting category, most severe first, marked "(Recommended)", with its headline figure in the description and what choosing it queues.
-- Any extra category the subagent proposed, described as proposed and with its count.
-- **Everything** — queues nothing extra; the breadth checks already cover every category.
+- Each alerting area, most severe first, marked "(Recommended)", with its headline figure in the description and what choosing it queues.
+- Any extra area the subagent proposed, described as proposed and with its count.
+- **Everything** — queues nothing extra; the overview queries already cover every area.
 - **Score it** — runs the scorecard pass.
 
-The automatic "Other" takes the user's own question. Every description must be literally true about what it queues; when a category has no depth checks beyond what already ran, say so rather than implying more work.
+The automatic "Other" takes the user's own question. Every description must be literally true about what it queues; when an area has no focus queries beyond what already ran, say so rather than implying more work.
 
 ## The focus-shift rule
 
@@ -77,7 +77,7 @@ This is the most useful thing the skill does, and the easiest to get wrong in ei
 One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill in `FACTS_FILE`, `INVENTORY_DIR` and `BUNDLE`.
 
 ```
-Read the session facts file at FACTS_FILE. It covers the seven pre-trained categories: reliability, cost, time, outcomes, harness faults, human loop, rework.
+Read the session facts file at FACTS_FILE. It covers the seven pre-trained areas: reliability, cost, time, outcomes, harness faults, human loop, rework.
 
 Your job is to find what those seven miss in this particular session — and usually there is nothing, which is a fine answer.
 
@@ -87,14 +87,14 @@ Start from the inventory in INVENTORY_DIR, which `clp bootstrap --fields-only` r
   clp-insights-type-drift.ndjson        the paths stored under more than one type
 A field or a drifting path the facts file never mentions is where to look first. A field that names what a record is (`type`, `subtype`, `attachment.type`, ...) is worth listing the values of, and checking each value against the facts file.
 
-Look for: record kinds the facts file does not account for; error or interrupt shapes that do not fit the categories above; tool or harness behaviours that recur but are not counted; anything in the catalog's launch_error or attrs fields that has no home in the seven.
+Look for: record kinds the facts file does not account for; error or interrupt shapes that do not fit the areas above; tool or harness behaviours that recur but are not counted; anything in the catalog's launch_error or attrs fields that has no home in the seven.
 
 Useful commands (write every path in full, `clp`'s own included, since this agent does not inherit the plugin root):
   clp bundle BUNDLE sql "SELECT ..."   (schema is in session-forensics.md)
   clp search --unique FIELD ARCHIVE '*'   (the values a field takes)
   clp search --limit 5 ARCHIVE 'FIELD:"VALUE"'   (a few records with one value)
 
-Return at most THREE proposed extra categories. For each: a name, one sentence on what it covers, the count of records or nodes behind it, and one example id or uuid someone can open. Propose nothing that is already a headline figure of one of the seven. Return "none" if the seven cover this session.
+Return at most THREE proposed extra areas. For each: a name, one sentence on what it covers, the count of records or nodes behind it, and one example id or uuid someone can open. Propose nothing that is already a headline figure of one of the seven. Return "none" if the seven cover this session.
 
 Return only the proposals. No preamble, no raw JSON, no method notes.
 ```
@@ -107,10 +107,10 @@ One subagent, model **opus** (`sonnet` if the Agent tool rejects `opus`). Fill i
 Write the analysis report for a Claude Code session to /tmp/clp-session-report.md
 
 Facts file (every number you may quote): FACTS_FILE
-Depth check results: RESULTS
+Focus query results: RESULTS
 The user's context, in their words: "CONTEXT"
 Their chosen focus: FOCUS
-Extra categories found: EXTRAS
+Extra areas found: EXTRAS
 Report depth: DEPTH
 Reader: READER
 
@@ -122,7 +122,7 @@ Rules:
 - Close the report with `## Reference`: one entry per claim in the body, `### R3 Workflow instance spans`, opening with its tier and carrying the figure and the one command that reproduces it — a derived figure names its inputs and formula instead. Link every claim in the body into its entry by wrapping the figure the claim rests on, `stayed open [357.4 hours](#r1-wall-clock-span)`, so a reader chasing a number reaches for the number; never trail the sentence with a bracketed label. One link per claim, not one per number. Wrap the entries in a `<details>` block whose `<summary>` says what opening it is for, with both tags on lines of their own, so the section is collapsed until a reader opens it or follows a claim's link into it. Entry headings use letters, digits and single spaces only, because GitHub and the plugin's HTML saver strip punctuation differently and a dash or a colon breaks the link in one of them.
 - Never quote a currency figure, even if asked what the session cost. Cost is in tokens: the log's totalCostUSD comes from an assumed unit price, not from what was billed, and is not always refreshed. Say that converting needs the reader's own rates.
 - Never add up the per-kind token column. One API response can be recorded in several logs, because a fork inherits its parent's transcript, so the bundle total counts each response once and is smaller than those rows summed. Quote the bundle total for the session and a per-kind row for one agent. The facts file states the difference and why; if a reader adds the column up and gets more, that gap is the duplication and not an error.
-- Lead with the focus. The other categories follow in the fixed order: reliability, cost, time, outcomes, harness faults, human loop, rework.
+- Lead with the focus. The other areas follow in the fixed order: reliability, cost, time, outcomes, harness faults, human loop, rework.
 - Treat the user's context as a claim to check against the records, not as fact. If the records contradict it, say so plainly with both figures.
 - Label every inference as an inference. The logs record activity, not value: they cannot tell you whether the work was good, only what happened.
 - For each finding say whether it is a harness, provider, model, task or environment problem — or that the logs cannot tell them apart.
@@ -150,12 +150,12 @@ Exactly these sections, in this order. The reference section is the last of them
 
 <Three or four short sentences, strongest finding first, one finding per sentence. Do not stack what the session did, how long it ran and what it cost into one sentence. The link wraps the figure: `stayed open [357.4 hours](#r1-wall-clock-span)`.>
 
-## <Focus category, named as the finding rather than the category>
+## <Focus area, named as the finding rather than the area>
 <Leads. The user's focus or the shift you proposed: the figure first, then what it means, then the one example id worth opening. A short paragraph or a short list.>
 
-## The seven categories
+## The seven areas
 
-| Category | Headline |
+| Area | Headline |
 |---|---|
 | Reliability | <headline with its denominator, the figure carrying the link> |
 | Cost | |
@@ -165,9 +165,9 @@ Exactly these sections, in this order. The reference section is the last of them
 | Human loop | |
 | Rework | |
 
-<One row each, the figure in each row linking to its reference entry. A category with nothing notable says so in its row. Bold the one row that matters most, so the table ranks itself instead of a paragraph underneath naming the row. Anything needing more than a row — per-tool error rates, a bucket split, the largest offenders — goes directly under the table, and only where it changes what the reader would do.>
+<One row each, the figure in each row linking to its reference entry. An area with nothing notable says so in its row. Bold the one row that matters most, so the table ranks itself instead of a paragraph underneath naming the row. Anything needing more than a row — per-tool error rates, a bucket split, the largest offenders — goes directly under the table, and only where it changes what the reader would do.>
 
-## Extra categories
+## Extra areas
 <Only when the extras subagent proposed some: one bullet each, with the count and one example id. Say they come from the extras pass, not the facts file, and never merge their counts into a headline figure.>
 
 ## What the logs cannot tell you
@@ -191,7 +191,7 @@ Exactly these sections, in this order. The reference section is the last of them
 
 ### Thorough form — only when asked
 
-The same report with every figure argued in full: the seven categories as their own sections in the fixed order (`## Reliability` … `## Rework`, each with the headline figure, its denominator, what it means and one example id), then
+The same report with every figure argued in full: the seven areas as their own sections in the fixed order (`## Reliability` … `## Rework`, each with the headline figure, its denominator, what it means and one example id), then
 
 ```markdown
 ## Reference
@@ -240,7 +240,7 @@ Some axes are only meaningful under one intent, and the scale gates them on a co
 
 **Ask for it when you score.** Scoring is already opt-in, so one more question on that path is cheap, and guessing the intent from the log is not reliable. If the user's earlier context already makes it clear, use that instead of asking again. If they decline or cannot say, leave it undeclared: an unscored axis with a stated reason is right, and inventing a mode to fill the gap is not.
 
-The raw value is measured and reported either way — `clp session measure` never applies the gate — so the human-and-idle share stays visible in the Time category even when the axis is not scored. Note also what the gate does **not** do: it accounts for intent, not for quality. The logs cannot tell you whether unattended work was any good, only whether it was delivered.
+The raw value is measured and reported either way — `clp session measure` never applies the gate — so the human-and-idle share stays visible in the Time area even when the axis is not scored. Note also what the gate does **not** do: it accounts for intent, not for quality. The logs cannot tell you whether unattended work was any good, only whether it was delivered.
 
 | Group | Axes | Owner |
 |---|---|---|
