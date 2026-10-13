@@ -918,14 +918,22 @@ def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_
                                          "WHERE turn IS NOT NULL"))
 
     # -- models
-    rows = cat.rows("""
-        SELECT COALESCE(a.model, '(not recorded in the catalog)') AS model,
-               COUNT(*), SUM(e.tokens_input), SUM(e.tokens_output)
-          FROM events e LEFT JOIN agents a ON a.agent_id = e.agent_id
-         WHERE e.tokens_input IS NOT NULL
+    # A response names its own model (events.model); an agent's metadata file may name one too. A
+    # catalog built before events.model existed has only the second, which leaves most responses unnamed.
+    event_model = "model" in [c[1] for c in cat.rows("PRAGMA table_info(events)")]
+    # One row per response, as the bundle total counts them: a fork copies its parent's responses
+    # into its own log, and counting each copy would make the per-model rows add up to more.
+    rows = cat.rows(f"""
+        SELECT model, COUNT(*), SUM(tin), SUM(tout) FROM (
+            SELECT MAX(COALESCE({'e.model, ' if event_model else ''}a.model,
+                                '(not recorded in the catalog)')) AS model,
+                   MAX(e.tokens_input) AS tin, MAX(e.tokens_output) AS tout
+              FROM events e LEFT JOIN agents a ON a.agent_id = e.agent_id
+             WHERE e.tokens_input IS NOT NULL
+             GROUP BY {DEDUP_SQL})
          GROUP BY 1 ORDER BY 2 DESC""")
     named = [r for r in rows if not r[0].startswith("(")]
-    logged_rows = sum(r[1] for r in rows)
+    logged_rows = cat.one("SELECT COUNT(*) FROM events WHERE tokens_input IS NOT NULL", default=0)
     # Bundle-wide, so each response counts once however many logs recorded it.
     total_responses = (totals or {}).get("responses", logged_rows)
     F["responses"] = total_responses
@@ -950,8 +958,10 @@ def section_session(cat, turns, turns_note, archive_kinds, archive_dir, archive_
               "(the catalog records a model only where the harness logged one, and the rest are "
               "left out)")
     else:
-        w("  - Per-model breakdown: unavailable. The catalog records no model for any response, "
-          "so there is no model mix to show.")
+        w("  - Per-model breakdown: unavailable. "
+          + ("No response record names its model, so there is no model mix to show." if event_model else
+             "This catalog was built before it recorded each response's model; "
+             f"`clp bundle {F['bundle']} rebuild` adds it."))
 
     # -- archives and their files
     w(f"- {MEASURED} Archives in the bundle (records compressed, and source files behind them):")
@@ -1243,8 +1253,13 @@ def section_cost(cat, w, F, keys, alerts, top, multi, single_note, totals):
     w(f"- {DERIVED} Cache hit rate (cache_read / (input + cache_read + cache_write)): "
       f"{num(total_cr)} / {num(prompt)} = "
       + (f"{hit:.4%}" if hit is not None else "n/a")
-      + (". Nothing was ever served from cache, so every token of every context was billed as fresh "
-         "input." if hit == 0 else ""))
+      + ("" if hit != 0 else
+         f". No response recorded a cache read, and {num(total_cw or 0)} tokens were recorded as cache writes."
+         if total_cw else
+         f". Every response recorded 0 cache reads and 0 cache writes. {DOMAIN} A source that does not "
+         "measure the prompt cache writes 0 into both fields (Ollama does, even for cloud models), so this "
+         "value may be a placeholder and not a measurement. Report it as a caveat, not a finding, and ask "
+         "the user whether this source measures the cache before drawing anything from it."))
     if hit is not None:
         add_check(F, "Cache hit rate", DERIVED, f"{hit:.4%}", dedup_sql,
                   derivation=f"cache_read {num(total_cr)} over the whole prompt {num(prompt)}, which is "
@@ -2399,9 +2414,9 @@ def section_axes(w, F):
         "no response records input tokens, so there is nothing to divide by",
         denominator=F.get("prompt_tokens") or None, because=cache_because, check=cache_check)
 
-    put("D4", None, "no model is recorded against any response",
-        "the catalog records no model for the responses, so neither the token share by model nor "
-        "the stall rate to weight it by can be computed")
+    put("D4", None, "not computed",
+        "this version does not yet weigh each model's share of the tokens against that model's stall "
+        "rate, so the axis has no value to score")
 
     # Either half may be missing - the turn share needs clp session turns and
     # the run share needs workflow runs - so each is described on its own and the

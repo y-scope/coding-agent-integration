@@ -69,10 +69,13 @@ CREATE INDEX nodes_agent ON nodes(agent_id);
 -- message_id groups the records of one model response. tokens_* is that response's final usage, set on one
 -- of its records only (the one that carries it), so summing a column counts each response once; input is
 -- the context sent with that call, so it shows the context growing and a compaction resetting it.
+-- model is the model the response record itself names (message.model), on assistant records only; a
+-- catalog built before this column existed lacks it, and clp bundle BUNDLE rebuild adds it.
 CREATE TABLE events(id INTEGER PRIMARY KEY, uuid TEXT NOT NULL, kind TEXT, pos INTEGER, agent_id TEXT, ts TEXT,
                     type TEXT, turn INTEGER, human INTEGER, interrupt INTEGER, is_error INTEGER,
                     ref_agent_id TEXT, ref_task_id TEXT, message_id TEXT, tokens_input INTEGER,
-                    tokens_output INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER);
+                    tokens_output INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER,
+                    model TEXT);
 -- The tool calls and results inside an event: a tool_use block (role 'use', with the tool's name) or a
 -- tool_result block (role 'result', with its error flag). Join the two on tool_use_id to pair them.
 -- For a tool call (role 'use'), hashes of its input, never the input: input_hash of the whole input

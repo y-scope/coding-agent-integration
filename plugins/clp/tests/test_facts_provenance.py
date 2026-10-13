@@ -339,6 +339,40 @@ class SessionFactsProvenance(unittest.TestCase):
         self.assertEqual(a3["denominator"], 10500)
         self.assertIn("9,000 / 10,500 = 85.7143%", text)
 
+    def test_zero_cache_fields_everywhere_are_a_possible_placeholder(self):
+        """A source that does not measure the cache writes 0 into both fields. That is not a finding."""
+        self.assertIn("Every response recorded 0 cache reads and 0 cache writes.", self.text)
+        self.assertIn("may be a placeholder and not a measurement", self.text)
+        self.assertNotIn("billed as fresh", self.text)
+
+    def test_zero_cache_reads_with_cache_writes_are_stated_as_recorded(self):
+        db = sqlite3.connect(os.path.join(self.dir, "catalog.sqlite"))
+        db.execute("UPDATE events SET tokens_cache_write = 300 WHERE uuid = 'u5'")
+        db.commit()
+        db.close()
+        text, _ = self.run_facts()
+        self.assertIn("No response recorded a cache read, and 300 tokens were recorded as cache writes.", text)
+        self.assertNotIn("may be a placeholder", text)
+
+    def test_each_response_is_counted_under_the_model_it_names(self):
+        db = sqlite3.connect(os.path.join(self.dir, "catalog.sqlite"))
+        db.execute("UPDATE events SET model = 'glm-5.2:cloud' WHERE uuid IN ('u2', 'u4', 'u5')")
+        db.commit()
+        db.close()
+        text, _ = self.run_facts()
+        # m1 is in the main log and in a1's transcript: one response, counted once
+        self.assertIn("`glm-5.2:cloud`: 2 of 2 responses", text)
+        self.assertNotIn("Per-model breakdown: unavailable", text)
+
+    def test_a_catalog_built_before_response_models_says_to_rebuild(self):
+        db = sqlite3.connect(os.path.join(self.dir, "catalog.sqlite"))
+        db.execute("ALTER TABLE events DROP COLUMN model")
+        db.commit()
+        db.close()
+        text, _ = self.run_facts()
+        self.assertIn("This catalog was built before it recorded each response's model", text)
+        self.assertIn("rebuild", text)
+
     def outcomes_against(self, commits):
         """Section 5 when the repository confirms `commits`; the fixture's output claims one."""
         cat = session_measure.Catalog(os.path.join(self.dir, "catalog.sqlite"))
