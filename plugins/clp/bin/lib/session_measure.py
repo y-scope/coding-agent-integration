@@ -709,6 +709,7 @@ def main(argv=None) -> int:
     turns, turns_note = load_turns(args, archive_dir, env)
     outcomes, outcomes_note = load_outcomes(bundle, env)
     repo, repo_note = load_repo(bundle, env)
+    compactions, compactions_note = load_compactions(bundle, archive_kinds, env)
 
     totals = bundle_totals(cat)
     has_agents = bool(cat.one("SELECT COUNT(*) FROM nodes WHERE kind = 'agent'", default=0))
@@ -750,7 +751,7 @@ def main(argv=None) -> int:
     section_cost(cat, w, F, keys, alerts, args.top, multi, single_note, totals)
     section_time(cat, turns, turns_note, w, F, keys, alerts, args.top)
     section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, alerts, args.top)
-    section_harness(cat, multi, single_note, w, F, keys, alerts, args.top)
+    section_harness(cat, multi, single_note, w, F, keys, alerts, args.top, compactions, compactions_note)
     section_human(cat, turns, turns_note, w, F, keys, alerts)
     section_rework(cat, multi, single_note, w, F, keys, alerts)
 
@@ -841,6 +842,39 @@ def load_turns(args, archive_dir, env):
     if text is None:
         return None, reason
     return parse_turns(text), f"clp session turns --top 0 --waits {args.waits} {archive_dir}"
+
+
+COMPACT_KQL = "subtype:compact_boundary"
+COMPACT_PROJECTION = "timestamp,compactMetadata.trigger,compactMetadata.preTokens"
+
+
+def load_compactions(bundle, archive_kinds, env):
+    """Every context compaction, by the kind of log it happened in. Each one is a `system` record
+    with subtype compact_boundary, which carries the trigger and the context size before it, so a
+    search of each archive finds them all. Returns ({kind: [(trigger, pre_tokens)]}, None) or
+    (None, reason)."""
+    found, searched = {}, 0
+    for kind, (aid, _) in sorted(archive_kinds.items()):
+        archive = Path(bundle) / "archives" / aid
+        if not archive.is_dir():
+            return None, f"the catalog names archive {aid} ({kind}), but {archive} is not a directory"
+        searched += 1
+        text, reason = run_tool([str(BIN_DIR / "clp"), "search", "--projection", COMPACT_PROJECTION,
+                                 str(archive), COMPACT_KQL], env)
+        if text is None:
+            return None, reason
+        for line in text.splitlines():
+            if not line.startswith("{"):
+                continue
+            try:
+                meta = json.loads(line).get("compactMetadata") or {}
+            except ValueError:
+                continue
+            pre = meta.get("preTokens")
+            found.setdefault(kind, []).append((meta.get("trigger"), pre if isinstance(pre, int) else None))
+    if not searched:
+        return None, "the catalog lists no archives to search"
+    return found, None
 
 
 def load_outcomes(bundle, env):
@@ -1769,7 +1803,8 @@ def section_outcomes(cat, outcomes, outcomes_note, repo, repo_note, w, F, keys, 
 # 6. Harness faults
 # ---------------------------------------------------------------------------
 
-def section_harness(cat, multi, single_note, w, F, keys, alerts, top):
+def section_harness(cat, multi, single_note, w, F, keys, alerts, top, compactions=None,
+                    compactions_note=""):
     w("## 6. Harness faults")
 
     api = cat.rows("""SELECT kind, status, cause, COUNT(*) FROM nodes
@@ -1856,12 +1891,35 @@ def section_harness(cat, multi, single_note, w, F, keys, alerts, top):
         for wid, label, status, src in resumed:
             w(f"  - `{label or wid}` resumed from `{src}`, second instance ended `{status}`")
 
-    # -- what the catalog cannot see
-    w("- Context compactions, truncated reads and permission denials: not derivable from this catalog. "
-      "The catalog keeps each record's structure and none of its text, and a compaction summary, a "
-      "truncation notice and a permission refusal are all plain `user` records with no flag of their "
-      "own. Finding them needs a text search of the archive, which this script does not run. Do not "
-      "report them as zero.")
+    # -- context compactions, found in the archives themselves
+    if compactions is None:
+        w(f"- Context compactions: UNAVAILABLE ({compactions_note}). Do not report them as zero.")
+    else:
+        total = sum(len(v) for v in compactions.values())
+        F["compactions"] = total
+        keys["COMPACTIONS"] = total
+        w(f"- {MEASURED} Context compactions: " + (f"{num(total)}." if total else
+                                                     "none, in any of the bundle's logs."))
+        for kind, rows in sorted(compactions.items(), key=lambda kv: -len(kv[1])):
+            triggers = {}
+            for trigger, _ in rows:
+                triggers[trigger or "(not recorded)"] = triggers.get(trigger or "(not recorded)", 0) + 1
+            sizes = [pre for _, pre in rows if pre is not None]
+            span = ("" if not sizes else
+                    f"; context before it: {num(sizes[0])} tokens" if len(sizes) == 1 else
+                    f"; context before each: {num(min(sizes))} to {num(max(sizes))} tokens")
+            w(f"  - `{kind}`: {num(len(rows))} ("
+              + ", ".join(f"{num(n)} {t}" for t, n in sorted(triggers.items(), key=lambda kv: -kv[1]))
+              + f"){span}")
+        if total:
+            w(f"  - {DOMAIN} A compaction replaces what the agent had read with a summary, so detail "
+              "from before it is no longer in the agent's context.")
+        add_check(F, "Context compactions", MEASURED, num(total),
+                  f"for a in {F['bundle']}/archives/*/; do clp search --count \"$a\" '{COMPACT_KQL}'; done",
+                  note="one count per archive, one archive per kind of log; the figure is their sum")
+    w("- Truncated reads and permission denials: not derivable from this catalog. Each is a plain "
+      "`user` record with no flag of its own, so finding them needs a text search of the archive, "
+      "which this script does not run. Do not report them as zero.")
 
     # -- error rate per tool
     rows = cat.rows("""SELECT u.name, COUNT(*) AS calls, COALESCE(SUM(r.is_error), 0) AS errors

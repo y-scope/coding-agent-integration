@@ -373,6 +373,34 @@ class SessionFactsProvenance(unittest.TestCase):
         self.assertIn("This catalog was built before it recorded each response's model", text)
         self.assertIn("rebuild", text)
 
+    def harness_with(self, compactions, note=""):
+        cat = session_measure.Catalog(os.path.join(self.dir, "catalog.sqlite"))
+        out, F = [], {"bundle": self.dir, "archive": os.path.join(self.dir, "archives", "arch-main"),
+                      "checks": []}
+        session_measure.section_harness(cat, True, "", out.append, F, {}, [], 10, compactions, note)
+        return "\n".join(out), F
+
+    def test_compactions_are_counted_per_kind_of_log(self):
+        text, F = self.harness_with({"main": [("auto", 150000), ("manual", 340000)],
+                                     "agent": [("auto", 160000)]})
+        self.assertIn("Context compactions: 3.", text)
+        self.assertIn("`main`: 2 (1 auto, 1 manual); context before each: 150,000 to 340,000 tokens", text)
+        self.assertIn("`agent`: 1 (1 auto); context before it: 160,000 tokens", text)
+        check = next(c for c in F["checks"] if c["name"] == "Context compactions")
+        self.assertIn("subtype:compact_boundary", check["command"])
+        self.assertIn("/archives/*/", check["command"])    # every kind of log, not just the main one
+
+    def test_no_compactions_and_unknown_compactions_read_differently(self):
+        self.assertIn("Context compactions: none", self.harness_with({})[0])
+        text = self.harness_with(None, "the catalog lists no archives to search")[0]
+        self.assertIn("Context compactions: UNAVAILABLE", text)
+        self.assertIn("Do not report them as zero", text)
+
+    def test_a_missing_archive_makes_compactions_unavailable(self):
+        found, reason = session_measure.load_compactions(self.dir, {"main": ("arch-main", 3)}, {})
+        self.assertIsNone(found)
+        self.assertIn("arch-main", reason)
+
     def outcomes_against(self, commits):
         """Section 5 when the repository confirms `commits`; the fixture's output claims one."""
         cat = session_measure.Catalog(os.path.join(self.dir, "catalog.sqlite"))
