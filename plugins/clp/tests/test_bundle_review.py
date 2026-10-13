@@ -2,6 +2,7 @@
 synthetic session with a stub clp-s (see test_bundle_build)."""
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -149,6 +150,30 @@ class Command(BuildTest):
                                 "--claude-home", self.home], capture_output=True, text=True, env=env)
         self.assertIn("BUILD kept=1", again.stdout)                 # unchanged session: not built again
 
+
+    def test_a_session_bundled_from_outside_a_claude_home_is_reviewed(self):
+        """A bundle built with --session-file records only the log's file name; its project is the
+        directory the log sat in, and the review must not depend on a projects/<name>/ path."""
+        make_session(self.home)
+        env = {**os.environ, "CLP_S_BIN": self.stub}
+        clp = os.path.join(os.path.dirname(__file__), "..", "bin", "clp")
+        moved = os.path.join(self.tmp.name, "elsewhere", "my-project")
+        shutil.copytree(f"{self.home}/projects/p", moved)
+        bundles = os.path.join(self.tmp.name, "bundles")
+        built = subprocess.run([clp, "bundle", os.path.join(bundles, SID), "build",
+                                "--session-file", os.path.join(moved, f"{SID}.jsonl")],
+                               capture_output=True, text=True, env=env)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        p = subprocess.run([clp, "bundle-review", bundles], capture_output=True, text=True, env=env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REVIEW sessions=1 projects=1", p.stdout)
+        # one project: nothing can recur, so the error groups listed are the largest
+        self.assertIn("recurring=0 shown=largest", p.stdout)
+        db = B.open_catalog(os.path.join(bundles, SID))
+        try:
+            self.assertEqual(R.project_of(os.path.join(bundles, SID), db), "my-project")
+        finally:
+            db.close()
 
 if __name__ == "__main__":
     unittest.main()
