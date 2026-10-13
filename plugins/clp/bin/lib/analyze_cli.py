@@ -402,7 +402,19 @@ def build_bundle(classified, args, runner, prep, cause):
         prep.made.append("catalog")
         return bundle_dir
 
-    argv = A.command("bundle", bundle_dir, "build", "--session-id", session_id)
+    if state["exists"] and state["manifest"] is None:
+        # `clp bundle build --force` replaces only a directory that is already a bundle, so a
+        # directory without a manifest (an interrupted build, or something else entirely) is the
+        # user's to remove, not this command's.
+        raise A.AnalyzeError(
+            f"{bundle_dir} exists and is not a bundle: {state['why']}. Nothing in it was touched. "
+            f"Remove it yourself if it is a bundle that never finished building, or pass "
+            f"--bundles-root DIR to build the bundle somewhere else")
+
+    # The main log is passed by path: an id would be looked up under the Claude home, and a
+    # session copied anywhere else would not be found.
+    argv = A.command("bundle", bundle_dir, "build",
+                     *(["--session-file", main_log] if main_log else ["--session-id", session_id]))
     if classified.get("claude_home"):
         argv += ["--claude-home", classified["claude_home"]]
     if args.clp_s:

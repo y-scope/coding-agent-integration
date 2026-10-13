@@ -282,7 +282,9 @@ def _event(kind, pos, r):
     usage = None
     if r.get("type") == "assistant" and isinstance(message.get("id"), str) and message.get("model") != "<synthetic>":
         usage = usage_of(message)
+    model = message.get("model") if r.get("type") == "assistant" else None
     row = dict(message_id=message.get("id") if r.get("type") == "assistant" else None, usage=usage,
+               model=model if isinstance(model, str) and model != "<synthetic>" else None,
                uuid=uuid, kind=kind, pos=pos, agent_id=r.get("agentId"), ts=ts[:23] if isinstance(ts, str) else None,
                type=r.get("type"), turn=None,
                human=int(kind == "main" and r.get("type") == "user" and any(is_human_prompt(r, t) for t in texts)),
@@ -394,7 +396,8 @@ def _write_events(db, positioned):
         for r, _ in rows:
             r["turn"] = bisect.bisect_right(prompts, r["ts"]) if r["ts"] and prompts else None
         cols = ["uuid", "kind", "pos", "agent_id", "ts", "type", "turn", "human", "interrupt", "is_error", "ref_agent_id",
-                "ref_task_id", "message_id", "tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_write"]
+                "ref_task_id", "message_id", "tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_write",
+                "model"]
         for r, tools in rows:
             cur = db.execute(f"INSERT INTO events({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [r[c] for c in cols])
             db.executemany("INSERT INTO event_tools VALUES(?,?,?,?,?,?,?,?)", [(cur.lastrowid, *t) for t in tools])

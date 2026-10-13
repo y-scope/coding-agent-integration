@@ -92,6 +92,7 @@ def T(h, m, s=0):
 def use(u, ts, tid, name, inp=None, tokens=None, **extra):
     message = {"role": "assistant", "id": "m" + u, "content": [{"type": "tool_use", "id": tid, "name": name, "input": inp or {}}]}
     if tokens:
+        message["model"] = "glm-5.2:cloud"
         message["usage"] = {"input_tokens": tokens[0], "output_tokens": tokens[1], "cache_read_input_tokens": 0,
                             "cache_creation_input_tokens": 0}
     return line(uuid=u, type="assistant", timestamp=ts, message=message, **extra)
@@ -347,6 +348,14 @@ class Full(BuildTest):
         turns = dict(self.db().execute("SELECT uuid, turn FROM events WHERE kind='main'").fetchall())
         self.assertEqual((turns["u01"], turns["u08"], turns["u12"]), (1, 1, 2))
 
+    def test_each_response_keeps_the_model_it_names(self):
+        """The model comes from the response record itself, so the main thread and workflow agents,
+        which have no metadata file, are named too."""
+        named = dict(self.db().execute("SELECT kind, model FROM events WHERE model IS NOT NULL GROUP BY 1, 2"))
+        self.assertEqual(named.get("main"), "glm-5.2:cloud")
+        self.assertTrue(any(k != "main" for k in named), named)    # an agent with no metadata model
+        self.assertEqual(set(named.values()), {"glm-5.2:cloud"})
+
     def test_the_graph_facts_are_reported(self):
         self.assertIn('GRAPH resumed_instances=1', self.stdout)
         self.assertNotIn("WARNING", self.stdout)
@@ -401,8 +410,30 @@ class TheSessionIsCompressedOnce(BuildTest):
         code, keys, err = self.analyse("--dry-run")
         self.assertEqual(code, 0, err)
         self.assertEqual(len(keys["PLAN"]), 1)
-        self.assertIn(f"bundle {self.out} build --session-id {SID}", keys["PLAN"][0])
+        self.assertIn(f"bundle {self.out} build --session-file {self.home}/projects/p/{SID}.jsonl", keys["PLAN"][0])
         self.assertIn("--bundle " + self.out, keys["NEXT"][0])
+
+    def test_a_session_copied_out_of_its_claude_home_still_bundles(self):
+        """The build is told the log's path, so a session moved out of ~/.claude is still found."""
+        make_session(self.home)
+        moved = os.path.join(self.tmp.name, "elsewhere")
+        shutil.copytree(f"{self.home}/projects/p", moved)
+        e = {**os.environ, "CLP_S_BIN": self.stub}
+        p = subprocess.run([os.path.join(BIN, "clp"), os.path.join(moved, f"{SID}.jsonl"),
+                            "--archives-root", os.path.join(self.tmp.name, "archives"), "--bundle-dir", self.out,
+                            "--app", "claude-code"], capture_output=True, text=True, env=e)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("PREPARED=bundle", p.stdout)
+
+    def test_a_directory_that_is_not_a_bundle_is_left_alone_and_named(self):
+        make_session(self.home)
+        os.makedirs(os.path.join(self.out, "archives"))
+        put(os.path.join(self.out, "archives", "keep.txt"), "")
+        code, keys, err = self.analyse()
+        self.assertEqual(code, 1)
+        self.assertIn("is not a bundle", err)
+        self.assertIn("--bundles-root", err)
+        self.assertTrue(os.path.exists(os.path.join(self.out, "archives", "keep.txt")))
 
     def test_no_logs_beside_the_session_make_one_archive_and_no_bundle(self):
         make_session(self.home, with_agents=False)
