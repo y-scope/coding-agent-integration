@@ -4,6 +4,7 @@
   "owner": {
     "name": "YScope"
   },
+  "allowCrossMarketplaceDependenciesOn": ["claude-plugins-official"],
   "plugins": [
     {
       "name": "clp",
