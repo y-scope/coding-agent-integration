@@ -21,7 +21,7 @@ Output, one line each:
   ZERO <signal> sessions=N total=N [<session>:<count>:<example id> ...]
   RATE <signal> rated=N median=… p90=… [above: <session> <value> ...]
   FLAGGED <session> <project> <n>: <signal>; ...
-  ERRORS templates=N groups=N recurring=N endpoint=URL
+  ERRORS templates=N groups=N recurring=N shown=recurring|largest endpoint=URL
   ERROR projects=N sessions=N n=N templates=N method=… example=<session> <uuid> text="…"
   TREND <signal> <period> value=… [low-high] n=N sessions=N [too-little] [up|down]   (with --trend)
 
@@ -133,8 +133,12 @@ def main():
               f"p90={fmt.format(r['p90'])}" + (f" above: {above}" if above else ""))
     for f in ranking["flagged"][:args.top]:
         print(f"FLAGGED {f['session'][:8]} {f['project']} {len(f['signals'])}: {'; '.join(f['signals'])}")
-    print(f"ERRORS templates={len(templates)} groups={len(groups)} recurring={len(recurring)} endpoint={endpoint}")
-    for g in recurring[:args.top]:
+    # Recurring groups are the fleet's view. With one project nothing can recur, so the largest groups
+    # are listed instead, and the line says which list follows.
+    shown, listing = (recurring, "recurring") if recurring else (sorted(groups, key=lambda g: -g["n"]), "largest")
+    print(f"ERRORS templates={len(templates)} groups={len(groups)} recurring={len(recurring)} shown={listing} "
+          f"endpoint={endpoint}")
+    for g in shown[:args.top]:
         print(f"ERROR projects={len(g['projects'])} sessions={len(g['sessions'])} n={g['n']} templates={g['templates']} "
               f"method={g['method']} example={g['examples'][0] if g['examples'] else '-'} "
               f"text={json.dumps(g['leader'][:140], ensure_ascii=False)}")

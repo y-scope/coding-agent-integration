@@ -254,12 +254,27 @@ def _catalog_layout(out):
 
 # ---- signals
 
+def project_of(bundle_dir, db):
+    """The project a bundle's session belongs to: the directory that holds its main log. Under a
+    Claude home the source path is projects/<project>/<id>.jsonl; a session bundled from a file
+    elsewhere records only the file name, and the directory it sat in is the manifest's source_root."""
+    path = db.execute("SELECT path FROM sources WHERE kind = 'main'").fetchone()[0]
+    parent = os.path.basename(os.path.dirname(path))
+    if parent:
+        return parent
+    try:
+        with open(os.path.join(bundle_dir, "manifest.json"), encoding="utf-8") as fh:
+            root = json.load(fh).get("source_root") or ""
+    except (OSError, ValueError):
+        root = ""
+    return os.path.basename(os.path.normpath(root)) if root else "(unknown project)"
+
 def signals(bundle_dir, wrapper):
     """The signal vector of one bundle."""
     db = B.open_catalog(bundle_dir)
     try:
         s = {"session": os.path.basename(os.path.normpath(bundle_dir)), "bundle": bundle_dir, "examples": {}}
-        s["project"] = db.execute("SELECT path FROM sources WHERE kind = 'main'").fetchone()[0].split("/")[-2]
+        s["project"] = project_of(bundle_dir, db)
         for name, (value_sql, example_sql) in SQL.items():
             s[name] = db.execute(value_sql).fetchone()[0]
             if example_sql and s[name]:
@@ -322,7 +337,7 @@ def error_templates(bundles, wrapper):
     for bundle_dir in bundles:
         db = B.open_catalog(bundle_dir)
         try:
-            project = db.execute("SELECT path FROM sources WHERE kind = 'main'").fetchone()[0].split("/")[-2]
+            project = project_of(bundle_dir, db)
             archives = db.execute("SELECT archive_id FROM archives WHERE kind IN ('main', 'agent', 'workflow-agent')").fetchall()
         finally:
             db.close()
