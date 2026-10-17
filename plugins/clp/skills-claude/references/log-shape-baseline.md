@@ -5,7 +5,7 @@ Read this only when needed: the bootstrap misbehaves (empty dump, missing freque
 ## stats.log_shapes details
 
 - `stats.log_shapes` dumps the log shape dictionary: one raw JSON object per line, `{"archive_id":"...","count":N,"id":N,"shape":"..."}`. `count` is how many values in that archive carried the template, stored by clp-s at compression time; it is `null` only for archives compressed before clp-s stored these counts. `id` numbers the templates within one archive, so aggregate across archives by template, never by `id`. Shapes mark variables as `%int%`/`%str%`/`%float%` on regular archives and `%rule.name%` on clpp/`--experimental` archives (older clp-s builds emitted raw placeholder bytes instead). `clp shape-cache normalize` detects the encoding per line and renders all of them to the canonical `{"log_shape":"...<*>..."}` NDJSON used by this skill and the cache, and `clp shape-cache freqs` sums the counts per template. Works on structurized text archives and native-JSON archives alike (log shapes come from the message field).
-- The search wrapper adds the required `--experimental` flag automatically and rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently return nothing for it).
+- The search wrapper rejects the legacy `stats.logtypes` spelling (shapes-API binaries silently return nothing for it).
 - You **cannot** filter a stats query by substring (`stats.log_shapes:foo` is not valid); it always dumps the whole dictionary. Filter downstream:
   ```bash
   python3 - failed /tmp/log-shape-freqs.ndjson <<'PY'

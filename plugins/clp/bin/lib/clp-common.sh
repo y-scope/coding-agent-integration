@@ -624,7 +624,7 @@ diagnose_clp_s_failure() {
   } >&2
 }
 
-# explain_zero_match BINARY ARCHIVE_DIR KQL
+# explain_zero_match BINARY ARCHIVE_DIR KQL [--experimental]
 # On a zero result, ask the archive whether its own structure explains it: a filter
 # written at an Object or array path can never match, and a path that is not in the
 # tree at all is a typo. Only ever called after a zero, so a query that matched
@@ -632,10 +632,11 @@ diagnose_clp_s_failure() {
 # zero is a fact about the data and not a mistake.
 explain_zero_match() {
   local bin="$1" dir="$2" kql="$3" helper
+  shift 3   # what remains is --experimental for a clpp archive, or nothing
   helper="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/explain_zero.py"
   [[ -f "$helper" ]] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
-  "$bin" s --experimental "$dir" stats.schema_tree 2>/dev/null \
+  "$bin" s "$@" "$dir" stats.schema_tree 2>/dev/null \
     | python3 "$helper" "$kql" >&2 || true
 }
 

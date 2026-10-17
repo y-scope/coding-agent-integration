@@ -7,7 +7,7 @@ matches. An object is not a leaf, so projecting it (`message`) also returns
 nothing. Either way the search runs, matches, and prints `{}` for each record,
 which reads as records without the field.
 
-Given the archive's schema tree (`clp-s s --experimental ARCHIVE
+Given the archive's schema tree (`clp-s s ARCHIVE
 stats.schema_tree`, one JSON line per archive) on stdin and the requested
 columns as arguments, this prints one column per line to project instead:
 
@@ -21,7 +21,7 @@ Each rewrite is explained on stderr as a line starting "projection: ". When the
 schema tree cannot be read, every column is kept as given.
 
 Usage:
-  clp-s s --experimental ARCHIVE stats.schema_tree | python3 lib/projection.py COLUMN...
+  clp-s s ARCHIVE stats.schema_tree | python3 lib/projection.py COLUMN...
 
 Stdlib only, like the other plugin helpers.
 """

@@ -71,7 +71,8 @@ Allowed search controls:
   --semantic-threshold T   Minimum similarity floor 0.0-1.0 (default 0.3).
   --embedding-batch-size N  Batch size for vector processing (default auto).
   --experimental          Enable clp-s experimental (clpp) features. Required
-                           for shape()/decompose() KQL functions.
+                           to open a clpp (clp+) archive; regular archives need
+                           it for nothing, shape() and decompose() included.
   --clp-s-bin PATH        Use this clp-s binary for this invocation only.
                            Overrides the CLP_S_BIN env var and the installed
                            plugin binary; useful for pointing at a local build.
@@ -82,15 +83,14 @@ Examples:
   clp search /tmp/archive 'semantic("slow database queries")'
   clp search --projection timestamp,type,sessionId /tmp/archive 'message.content.name:Bash'
   clp search /tmp/archive 'stats.log_shapes'
-  clp search --experimental /tmp/archive 'shape(message): "*error*"'
-  clp search --experimental --projection 'shape(message)' /tmp/archive '*'
-  clp search --experimental --projection 'decompose(message)' /tmp/archive '*'
+  clp search /tmp/archive 'shape(message): "*error*"'
+  clp search --projection 'shape(message)' /tmp/archive '*'
+  clp search --projection 'decompose(message)' /tmp/archive '*'
 
 Stats queries (dictionary dumps, not KQL): 'stats.log_shapes' emits the
 archive's log shape dictionary as NDJSON ({"archive_id","count","id","shape"});
 'stats.schema_tree' and 'stats.archives' emit schema and archive metadata.
-These require the shapes API (clp-core >= 0.13); the wrapper adds
---experimental so clpp archives open too. `count` is how many values carried
+These require the shapes API (clp-core >= 0.13). `count` is how many values carried
 the shape, stored at compression time (null for archives compressed before
 clp-s stored it). Shapes mark variables as %int%/%str%/%float% on regular
 archives and %rule.name% on clpp archives (older builds emit raw placeholder
@@ -284,8 +284,7 @@ if [[ ( "$count_mode" -eq 1 || -n "$unique_field" ) && ${#projections[@]} -gt 0 
   exit 2
 fi
 
-# Stats queries (clp-core >= 0.13 shapes API). The binary requires
-# --experimental for these, so add it on the caller's behalf; and the legacy
+# Stats queries (clp-core >= 0.13 shapes API). The legacy
 # stats.logtypes spelling silently matches nothing on shapes-API binaries, so
 # reject it with the rename instead of returning a confusingly empty result.
 # The binary matches stats directives exactly (unlike KQL, it does not trim
@@ -295,7 +294,6 @@ trimmed_query="${kql_query#"${kql_query%%[![:space:]]*}"}"
 trimmed_query="${trimmed_query%"${trimmed_query##*[![:space:]]}"}"
 case "$trimmed_query" in
   stats.log_shapes|stats.schema_tree|stats.archives)
-    experimental=1
     kql_query="$trimmed_query"
     ;;
   stats.logtypes)
@@ -373,7 +371,12 @@ fi
 
 search_options=()
 
+# A clpp archive opens only with --experimental, and the wrapper's own reads of
+# the archive (its schema tree, for projections and for explaining a zero) need
+# it too; a regular archive needs it for nothing.
+experimental_flag=()
 if [[ "$experimental" -eq 1 ]]; then
+  experimental_flag=(--experimental)
   search_options+=(--experimental)
 fi
 if [[ -n "$tge" ]]; then
@@ -426,7 +429,7 @@ search_archive() {
   # milliseconds even on a large archive (lib/projection.py). Without a schema
   # tree the columns stay as given.
   if [[ ${#dir_projections[@]} -gt 0 ]]; then
-    if schema_tree="$("$clp_s_bin" s --experimental "$dir" stats.schema_tree 2>/dev/null)" \
+    if schema_tree="$("$clp_s_bin" s "${experimental_flag[@]+"${experimental_flag[@]}"}" "$dir" stats.schema_tree 2>/dev/null)" \
         && resolved_projections="$(python3 "${CLP_PLUGIN_LIB_DIR}/projection.py" "${dir_projections[@]}" \
              <<<"$schema_tree")" \
         && [[ -n "$resolved_projections" ]]; then
@@ -467,7 +470,7 @@ search_archive() {
     # the same shape, so a caller never has to read "no output" as a number.
     if ! grep -q '^{' "$count_out"; then
       printf '{"archive_id":"%s","count":0}\n' "$(basename -- "$dir")"
-      explain_zero_match "$clp_s_bin" "$dir" "$kql_query"
+      explain_zero_match "$clp_s_bin" "$dir" "$kql_query" "${experimental_flag[@]+"${experimental_flag[@]}"}"
     fi
     rm -f "$count_out"
     return 0

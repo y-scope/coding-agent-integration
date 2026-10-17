@@ -344,7 +344,7 @@ def error_templates(bundles, wrapper):
         session = os.path.basename(os.path.normpath(bundle_dir))
         for (archive_id,) in archives:
             # an archive where toolUseResult is never a plain string has no column for shape() to apply to
-            rows = _search(wrapper, bundle_dir, archive_id, ["--experimental", "--projection", "uuid,shape(toolUseResult)",
+            rows = _search(wrapper, bundle_dir, archive_id, ["--projection", "uuid,shape(toolUseResult)",
                                                               "message.content.is_error:true"],
                            missing_ok='no such nodes match column "toolUseResult"')
             for r in rows:

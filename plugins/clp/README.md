@@ -321,8 +321,7 @@ Other semantic flags: `--semantic-top-k K` (default 5), `--semantic-threshold T`
 
 ```bash
 # stats.log_shapes (shapes API, clp-core >= 0.13) dumps the dictionary as raw
-# {"archive_id","count","id","shape"} lines; `clp search` adds the required
-# --experimental automatically. Shape strings encode variables in an
+# {"archive_id","count","id","shape"} lines. Shape strings encode variables in an
 # archive-dependent form (raw placeholder bytes on regular archives,
 # %rule.name% TextShape placeholders on clpp archives) — `clp shape-cache
 # normalize` detects the encoding per line and renders both to the canonical

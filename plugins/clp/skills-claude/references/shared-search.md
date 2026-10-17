@@ -1,6 +1,6 @@
 # Shared search reference
 
-Shared by the `search` (stable clp-s) and `clpp-search` (clpp / `--experimental`) skills. Read this for the KQL syntax and search tips; read `clpp-shared.md` for the clpp-only `shape()`/`decompose()` functions and decomposed-query projections.
+Shared by the `search` (stable clp-s) and `clpp-search` (clpp / `--experimental`) skills. Read this for the KQL syntax and search tips; read `clpp-shared.md` for the `shape()`/`decompose()` functions, decomposed-query projections and clpp archives.
 
 Use only the plugin's `clp` command. Do not call bare `clp-s`.
 

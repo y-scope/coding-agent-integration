@@ -145,7 +145,7 @@ KQL over one kind of log: `clp search --archive-id ID BUNDLE/archives 'KQL'`. Tu
 Every failed tool call carries its error as the top-level string `toolUseResult`; `shape()` cannot reach the text inside `message.content`.
 
 ```bash
-clp search --experimental --projection 'uuid,shape(toolUseResult)' ARCHIVE 'message.content.is_error:true'
+clp search --projection 'uuid,shape(toolUseResult)' ARCHIVE 'message.content.is_error:true'
 ```
 
 Then open one template's records: keep each record's `uuid` from that projection (exact), or filter with the template's literal text and `*` for each variable — `shape(toolUseResult): "Error: Exit code*"` (a superset; a typed `%int%` matches nothing). Then `clp bundle BUNDLE context UUID`.

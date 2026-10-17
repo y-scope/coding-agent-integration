@@ -6,7 +6,7 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/bin/clp:*)"]
 
 # clpp search
 
-Search a CLP archive with the **experimental** (clpp / clp+) KQL layer active — `--experimental` — which unlocks the `shape()` and `decompose()` functions and decomposed-query projections. Stable KQL runs unchanged under the flag.
+Search a CLP archive with the **experimental** (clpp / clp+) layer active — `--experimental` — which a clpp archive needs to open. The `shape()` and `decompose()` functions and decomposed-query projections work on any archive. Stable KQL runs unchanged under the flag.
 
 Use only the plugin wrapper. Do not call bare `clp-s`.
 
@@ -19,7 +19,7 @@ Use only the plugin wrapper. Do not call bare `clp-s`.
 
 ## Search
 
-Pass `--experimental` to activate the clpp KQL layer. Without it, `shape()` and `decompose()` are treated as plain text rather than functions.
+Pass `--experimental` for a clpp archive, which opens only with it. On a regular archive the flag changes nothing, and `shape()` and `decompose()` work without it.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp" search --experimental \
