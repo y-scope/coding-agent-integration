@@ -1,6 +1,6 @@
 # clpp (clp+ / `--experimental`) shared reference
 
-clpp is CLP's **experimental** layer — decomposed queries, log-shape dictionaries, parent-rule shapes, and the `shape()`/`decompose()` KQL functions. It is gated behind the `--experimental` flag on the same `clp` subcommands used by the stable `compress`/`search` skills. The clpp KQL layer is only active when that flag is passed.
+clpp is CLP's **experimental** layer — decomposed queries, log-shape dictionaries, parent-rule shapes, and the `shape()`/`decompose()` KQL functions. It runs behind the `--experimental` flag on the same `clp` subcommands used by the stable `compress`/`search` skills: compressing with a parsing specification needs the flag, and so does opening the clpp archive that compression makes. On a regular archive, `shape()`, `decompose()` and the `stats.*` dumps work without it.
 
 This file holds the clpp-specific additions shared by `clpp-compress` and `clpp-search`. The common compress workflow and KQL syntax live in `shared-compress.md` and `shared-search.md` — read those too.
 
@@ -33,7 +33,7 @@ After compression, report the same stats as the stable `compress` skill (raw inp
 
 ## Search (clpp)
 
-Pass `--experimental` to activate the clpp KQL layer. Without it, `shape()` and `decompose()` are treated as plain text rather than functions. Stable KQL runs unchanged when the flag is added, so it is safe to leave `--experimental` on for a clpp archive.
+Pass `--experimental` to search a clpp archive, which opens only with it. A regular archive needs no flag, `shape()` and `decompose()` included. Stable KQL runs unchanged when the flag is added, so it is safe to leave `--experimental` on.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/clp" search --experimental \

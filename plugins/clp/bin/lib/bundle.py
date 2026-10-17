@@ -663,7 +663,7 @@ def _file_output_rows(fh, chunk=1 << 22):
 
 def archive_record_counts(clp_s, archives_dir):
     """{archive id: records} for every archive in archives_dir."""
-    proc = subprocess.run([clp_s, "s", "--count", "--experimental", archives_dir, "*"],
+    proc = subprocess.run([clp_s, "s", "--count", archives_dir, "*"],
                           capture_output=True, text=True, encoding="utf-8")
     if proc.returncode != 0:
         raise BundleError(f"clp-s could not count the archives: {proc.stderr.strip()[-300:]}"
