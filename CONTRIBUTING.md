@@ -110,6 +110,7 @@ Codex does not have an in-session reload for installed plugins. To see your chan
 #### Asymmetry to be aware of
 
 - Claude skills reach the command as `${CLAUDE_PLUGIN_ROOT}/bin/clp <subcommand>` (resolved at agent startup). Codex skills hard-code the marketplace install path (`~/.codex/marketplaces/yscope/plugins/clp/bin/clp`). When you add a new subcommand, both skill trees need the matching reference.
+- OpenCode loads `skills-opencode/clp/SKILL.md` through a native skill directory. It resolves the plugin root from the physical skill location and reuses the shared guides with explicit tool/model/path adaptations. Review those adaptations when a shared workflow changes. See [README.md](README.md#local-install-for-development) for local registration and [LOCAL_TESTING.md](LOCAL_TESTING.md#opencode-discovery) for native discovery checks.
 - Claude has in-session reload (`claude plugin update` or `/plugin` UI); Codex currently needs a new session and (for manifest changes) a `version` bump in the Codex manifest.
 - The `version` field must match between `plugins/clp/.claude-plugin/plugin.json` and `plugins/clp/.codex-plugin/plugin.json`. `scripts/validate-codex-plugin.sh` enforces this locally and the release workflow runs it as part of CI, so a tag with version drift will fail the release build.
 

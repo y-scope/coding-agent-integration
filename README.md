@@ -1,6 +1,6 @@
 # YScope CLP Coding-Agent Plugins
 
-Open-source Claude Code and Codex plugins for analyzing logs with [CLP](https://github.com/y-scope/clp) (Compressed Log Processor): compress raw logs or coding-agent sessions, search them with KQL, and write an insights report.
+Open-source integrations for Claude Code, Codex, and OpenCode to analyze logs with [CLP](https://github.com/y-scope/clp) (Compressed Log Processor): compress raw logs or coding-agent sessions, search them with KQL, and write an insights report.
 
 This repo contains the **plugin payload only**. The compiled installer that ships the `clp-s` binary and the deploy tooling live in a separate private repository.
 
@@ -43,6 +43,8 @@ plugins/clp/skills-claude/
 plugins/clp/skills-codex/
     Codex skills: compress, compress-folder, search, log-insights,
     decompress, codex-trajectory.
+plugins/clp/skills-opencode/clp/
+    OpenCode entry point, using the same commands and analysis guides.
 
 scripts/validate-codex-plugin.sh
     Validates the Codex plugin manifest and SKILL.md frontmatter.
@@ -58,7 +60,11 @@ The repository root is the marketplace root for both products. Claude Code reads
 
 ## Install
 
-End users install via the compiled installer at `https://installer.yscope.ai/coding-agent-plugin.sh`. The installer and deploy tooling live in the private repository [`y-scope/coding-agent-integration-installer`](https://github.com/y-scope/coding-agent-integration-installer); see its `DEPLOY.md` for build and deploy instructions.
+End users install via the compiled installer at `https://installer.yscope.ai/coding-agent-integration/main/install.sh`. The installer and deploy tooling live in the private repository [`y-scope/coding-agent-integration-installer`](https://github.com/y-scope/coding-agent-integration-installer); see its `DEPLOY.md` for build and deploy instructions. OpenCode support requires an installer build and plugin ref that both include the OpenCode target.
+
+OpenCode loads a native `clp` skill backed by the shared `bin/clp` tools. The installer registers that entry under `${XDG_CONFIG_HOME:-~/.config}/opencode/skills/clp` and installs the payload under `opencode/marketplaces/yscope`. It does not require a Claude Code or Codex installation, or edit `opencode.json`. Restart OpenCode and ask: “Use CLP to analyze the logs in `/path/to/logs`.”
+
+The host agent and log source are independent: all three integrations can work with system/application logs and supported Claude Code or Codex JSONL histories. Automatic session discovery does not import OpenCode's session database. The specialised session measurements and cross-agent execution graph currently apply to Claude Code records.
 
 ### Local install for development
 
@@ -83,6 +89,15 @@ claude --plugin-dir ./plugins/clp
 ```
 
 See [LOCAL_TESTING.md](LOCAL_TESTING.md) for more on local testing.
+
+For OpenCode development, register only its entry point (the destination must not already exist):
+
+```bash
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills"
+ln -s "$PWD/plugins/clp/skills-opencode/clp" "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills/clp"
+```
+
+Supply `clp-s` using one of the resolution paths below, then restart OpenCode. The skill resolves its command and shared guides from the checkout even through the symlink. Do not register the whole plugin tree as a skill source: OpenCode 1 would also discover the Claude and Codex skills nested inside it.
 
 ## The `clp` command
 
