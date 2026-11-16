@@ -8,6 +8,22 @@ Everything below runs `./plugins/clp/bin/clp` straight out of the checkout. That
 
 Command smoke tests: run `bin/clp` directly from the checkout against a real `clp-s` binary.
 
+## OpenCode discovery
+
+Register `plugins/clp/skills-opencode/clp` as described in [README.md](README.md#local-install-for-development). Verify with the installed OpenCode version, without making a model call:
+
+```bash
+# OpenCode 1
+opencode debug skill
+
+# OpenCode 2, using a running server
+opencode api GET /api/skill
+```
+
+The result should contain one `clp` entry whose source is the registered `skills/clp/SKILL.md`, and no entries from this plugin's `skills-claude` or `skills-codex` trees. OpenCode 2 loads skills asynchronously: if the first request starts the server and returns only built-in skills, repeat it once loading finishes. A fresh `--standalone` process for each request can exit before discovery completes.
+
+Resolve the registered skill directory physically, go up two directories, and run the command-level smoke tests below with that plugin's `bin/clp`. Use a temporary `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, and `XDG_STATE_HOME` to test an isolated installation; supply the same values to the installer and OpenCode. Include an install path containing spaces to check command quoting.
+
 This file does not cover installer testing. The installer and deploy tooling live in the private repository [`y-scope/coding-agent-integration-installer`](https://github.com/y-scope/coding-agent-integration-installer); see its `LOCAL_TESTING.md` for `bun run dev`, `bun run build:binary`, bootstrap invocation, and deploy dry-runs.
 
 ## Prerequisites

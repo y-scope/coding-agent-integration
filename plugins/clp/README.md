@@ -2,6 +2,8 @@
 
 Plugin for analyzing logs with [CLP](https://github.com/y-scope/clp) (Compressed Log Processor): compress raw logs or Claude Code and Codex sessions, search them with KQL, and write an insights report.
 
+Runs in Claude Code, Codex, and OpenCode. OpenCode uses `skills-opencode/clp/SKILL.md` as its native entry point, backed by the same `bin/clp` command and shared analysis guides. See the repository [installation instructions](../../README.md#install). OpenCode is a supported host; importing its own session database is not implemented.
+
 CLP is the open-source platform for log archive storage, search, and analytics. Pre-release builds may also include licensed YScope extensions.
 
 ## API Surface
@@ -28,8 +30,9 @@ It does not expose reducers, network/file output handlers, results-cache writes,
 | `analyze-logs` | The one entry point for log analysis. `clp TARGET` identifies which application wrote the logs and reports the route; the skill follows it. Specialised route (a Claude Code session): end-to-end session analysis over the bundle, checking seven lightly pre-trained areas, with optional 0–10 scoring. General route (anything else): trained on the spot, driven by the archive's log shape dictionary — dump the templates, classify them (cached), then run targeted queries derived from templates that are known to exist. |
 | `decompress` | Decompress a CLP archive directory for raw inspection. |
 | `codex-trajectory` | Same workflow for Codex session logs, plus Codex-specific query starters. |
+| `clp` (OpenCode) | Log and session analysis, compression, search, and decompression using the shared commands and guides with OpenCode tool and model conventions. |
 
-Future use-cases will add their own skill directories under `skills-claude/` (or `skills-codex/` if the use-case is agent-specific).
+Shared analysis changes belong in the existing guides; review the OpenCode adapter when changing host-specific tools, models, paths, or publishing behavior.
 
 ## Writing guide
 
@@ -42,7 +45,7 @@ Only the report's shape lives in `skills-claude/references/report-style.md`: the
 Hosted installer:
 
 ```bash
-curl -fsSL https://installer.yscope.ai/coding-agent-plugin.sh | bash
+curl -fsSL https://installer.yscope.ai/coding-agent-integration/main/install.sh | bash
 ```
 
 Local marketplace:
